@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CordBeat — A Local-First Autonomous AI Agent</title>
+    <meta name="description" content="CordBeat is an open-source autonomous AI agent that thinks, acts, and stays by your side — powered by your own hardware.">
+    <meta property="og:title" content="CordBeat">
+    <meta property="og:description" content="A local-first autonomous AI agent that thinks, acts, and stays by your side.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://cordbeat.com">
+    <style>
+        :root {
+            --bg: #0d0d0d;
+            --text: #e8e8e8;
+            --accent: #ff6b8a;
+            --accent-dim: #ff6b8a40;
+            --muted: #888;
+            --card-bg: #1a1a1a;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        /* Hero */
+        .hero {
+            padding: 6rem 0 4rem;
+            text-align: center;
+        }
+
+        .heartbeat {
+            font-size: 4rem;
+            animation: pulse 1.5s ease-in-out infinite;
+            display: inline-block;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            15% { transform: scale(1.15); }
+            30% { transform: scale(1); }
+            45% { transform: scale(1.1); }
+        }
+
+        h1 {
+            font-size: 3rem;
+            font-weight: 700;
+            margin: 1rem 0 0.5rem;
+            letter-spacing: -0.02em;
+        }
+
+        .tagline {
+            font-size: 1.2rem;
+            color: var(--muted);
+            max-width: 500px;
+            margin: 0 auto 2rem;
+        }
+
+        .badges {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-bottom: 2rem;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.3rem 0.8rem;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            border: 1px solid #333;
+            color: var(--muted);
+        }
+
+        .badge.accent {
+            border-color: var(--accent-dim);
+            color: var(--accent);
+        }
+
+        .cta-group {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.8rem 1.8rem;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 1rem;
+            transition: all 0.2s;
+        }
+
+        .cta-primary {
+            background: var(--accent);
+            color: #fff;
+        }
+
+        .cta-primary:hover {
+            background: #ff5577;
+            transform: translateY(-1px);
+        }
+
+        .cta-secondary {
+            background: transparent;
+            color: var(--text);
+            border: 1px solid #333;
+        }
+
+        .cta-secondary:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        /* Pillars */
+        .pillars {
+            padding: 3rem 0;
+        }
+
+        .pillars h2 {
+            text-align: center;
+            font-size: 1.5rem;
+            margin-bottom: 2rem;
+            color: var(--muted);
+            font-weight: 400;
+        }
+
+        .pillar-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.2rem;
+        }
+
+        .pillar {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid #222;
+            transition: border-color 0.2s;
+        }
+
+        .pillar:hover {
+            border-color: #444;
+        }
+
+        .pillar-icon {
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .pillar h3 {
+            font-size: 1.1rem;
+            margin-bottom: 0.3rem;
+        }
+
+        .pillar p {
+            font-size: 0.9rem;
+            color: var(--muted);
+        }
+
+        /* Compare */
+        .compare {
+            padding: 3rem 0;
+        }
+
+        .compare h2 {
+            text-align: center;
+            font-size: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        th, td {
+            padding: 0.8rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid #222;
+        }
+
+        th {
+            color: var(--muted);
+            font-weight: 400;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        td:last-child {
+            color: var(--accent);
+            font-weight: 500;
+        }
+
+        /* Architecture */
+        .architecture {
+            padding: 3rem 0;
+        }
+
+        .architecture h2 {
+            text-align: center;
+            font-size: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .arch-diagram {
+            background: var(--card-bg);
+            border: 1px solid #222;
+            border-radius: 12px;
+            padding: 2rem;
+            overflow-x: auto;
+        }
+
+        .arch-diagram svg {
+            width: 100%;
+            max-width: 600px;
+            height: auto;
+            display: block;
+            margin: 0 auto;
+        }
+
+        /* Status */
+        .status {
+            padding: 3rem 0;
+            text-align: center;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 0.5rem 1.2rem;
+            border-radius: 999px;
+            font-size: 0.9rem;
+            border: 1px solid var(--accent-dim);
+            color: var(--accent);
+            margin-bottom: 1rem;
+        }
+
+        .status p {
+            color: var(--muted);
+            max-width: 500px;
+            margin: 0 auto;
+        }
+
+        /* Footer */
+        footer {
+            padding: 3rem 0;
+            text-align: center;
+            color: var(--muted);
+            font-size: 0.85rem;
+            border-top: 1px solid #1a1a1a;
+        }
+
+        footer a {
+            color: var(--text);
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            color: var(--accent);
+        }
+
+        @media (max-width: 600px) {
+            h1 { font-size: 2rem; }
+            .pillar-grid { grid-template-columns: 1fr; }
+            .hero { padding: 4rem 0 3rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <section class="hero">
+            <div class="heartbeat">💗</div>
+            <h1>CordBeat</h1>
+            <p class="tagline">A local-first autonomous AI agent that thinks, acts, and stays by your side — powered by your own hardware.</p>
+            <div class="badges">
+                <span class="badge accent">Early Design</span>
+                <span class="badge">Python 3.11+</span>
+                <span class="badge">Local AI First</span>
+                <span class="badge">MIT License</span>
+            </div>
+            <div class="cta-group">
+                <a href="https://github.com/YunagiHisa/cordbeat" class="cta cta-primary">
+                    View on GitHub
+                </a>
+                <a href="https://github.com/YunagiHisa/cordbeat/tree/main/docs" class="cta cta-secondary">
+                    Read the Docs
+                </a>
+            </div>
+        </section>
+
+        <section class="pillars">
+            <h2>Built on five pillars</h2>
+            <div class="pillar-grid">
+                <div class="pillar">
+                    <div class="pillar-icon">🫀</div>
+                    <h3>HEARTBEAT</h3>
+                    <p>True autonomous loop. The AI evaluates, decides, and acts on its own — no triggers needed.</p>
+                </div>
+                <div class="pillar">
+                    <div class="pillar-icon">🧠</div>
+                    <h3>SOUL</h3>
+                    <p>Identity and persona. Consistent character across all platforms, with emotions that shape behavior.</p>
+                </div>
+                <div class="pillar">
+                    <div class="pillar-icon">💾</div>
+                    <h3>MEMORY</h3>
+                    <p>Per-user isolated context. 4-layer memory with forgetting curves, just like human memory.</p>
+                </div>
+                <div class="pillar">
+                    <div class="pillar-icon">🛠</div>
+                    <h3>SKILL</h3>
+                    <p>Pluggable actions. Drop-in skills with safety levels — from safe to requires-confirmation.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="compare">
+            <h2>How CordBeat is different</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th>Other Agents</th>
+                        <th>CordBeat</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>AI Backend</td>
+                        <td>Cloud-first</td>
+                        <td>Local-first (llama.cpp / Ollama)</td>
+                    </tr>
+                    <tr>
+                        <td>Autonomy</td>
+                        <td>Checklist-driven</td>
+                        <td>AI self-evaluates & decides</td>
+                    </tr>
+                    <tr>
+                        <td>Memory</td>
+                        <td>Shared / flat</td>
+                        <td>Per-user isolation</td>
+                    </tr>
+                    <tr>
+                        <td>Platforms</td>
+                        <td>Single or coupled</td>
+                        <td>Pluggable adapter layer</td>
+                    </tr>
+                    <tr>
+                        <td>Character</td>
+                        <td>None / minimal</td>
+                        <td>SOUL system built-in</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section class="architecture">
+            <h2>Architecture</h2>
+            <div class="arch-diagram">
+                <svg viewBox="0 0 520 440" xmlns="http://www.w3.org/2000/svg" fill="none">
+                    <!-- CordBeat Core box -->
+                    <rect x="40" y="10" width="440" height="180" rx="8" stroke="#444" stroke-width="1.5"/>
+                    <text x="260" y="36" text-anchor="middle" fill="#8a8a8a" font-size="13" font-family="monospace">CordBeat Core</text>
+
+                    <!-- SOUL / MEMORY / SKILL boxes -->
+                    <rect x="70" y="52" width="110" height="40" rx="6" stroke="#6ee7b7" stroke-width="1.2"/>
+                    <text x="125" y="77" text-anchor="middle" fill="#e0e0e0" font-size="12" font-family="monospace">SOUL</text>
+
+                    <rect x="205" y="52" width="110" height="40" rx="6" stroke="#6ee7b7" stroke-width="1.2"/>
+                    <text x="260" y="77" text-anchor="middle" fill="#e0e0e0" font-size="12" font-family="monospace">MEMORY</text>
+
+                    <rect x="340" y="52" width="110" height="40" rx="6" stroke="#6ee7b7" stroke-width="1.2"/>
+                    <text x="395" y="77" text-anchor="middle" fill="#e0e0e0" font-size="12" font-family="monospace">SKILL</text>
+
+                    <!-- HEARTBEAT loop box -->
+                    <rect x="70" y="110" width="380" height="60" rx="6" stroke="#6ee7b7" stroke-width="1.2"/>
+                    <text x="260" y="135" text-anchor="middle" fill="#e0e0e0" font-size="12" font-family="monospace">HEARTBEAT Loop</text>
+                    <text x="260" y="155" text-anchor="middle" fill="#8a8a8a" font-size="11" font-family="monospace">evaluate → decide → act → rest</text>
+
+                    <!-- Connector: Core → AI Backend -->
+                    <line x1="260" y1="190" x2="260" y2="220" stroke="#444" stroke-width="1.2"/>
+
+                    <!-- AI Backend box -->
+                    <rect x="160" y="220" width="200" height="44" rx="6" stroke="#444" stroke-width="1.5"/>
+                    <text x="260" y="238" text-anchor="middle" fill="#e0e0e0" font-size="12" font-family="monospace">AI Backend</text>
+                    <text x="260" y="254" text-anchor="middle" fill="#8a8a8a" font-size="11" font-family="monospace">Abstraction Layer</text>
+
+                    <!-- Connector: AI Backend → providers -->
+                    <line x1="260" y1="264" x2="260" y2="286" stroke="#444" stroke-width="1.2"/>
+                    <line x1="120" y1="286" x2="400" y2="286" stroke="#444" stroke-width="1.2"/>
+                    <line x1="120" y1="286" x2="120" y2="300" stroke="#444" stroke-width="1.2"/>
+                    <line x1="260" y1="286" x2="260" y2="300" stroke="#444" stroke-width="1.2"/>
+                    <line x1="400" y1="286" x2="400" y2="300" stroke="#444" stroke-width="1.2"/>
+
+                    <!-- Provider labels -->
+                    <text x="120" y="316" text-anchor="middle" fill="#e0e0e0" font-size="11" font-family="monospace">llama.cpp</text>
+                    <text x="120" y="330" text-anchor="middle" fill="#8a8a8a" font-size="10" font-family="monospace">(primary)</text>
+                    <text x="260" y="316" text-anchor="middle" fill="#e0e0e0" font-size="11" font-family="monospace">Ollama</text>
+                    <text x="260" y="330" text-anchor="middle" fill="#8a8a8a" font-size="10" font-family="monospace">(primary)</text>
+                    <text x="400" y="316" text-anchor="middle" fill="#e0e0e0" font-size="11" font-family="monospace">OpenAI-compat</text>
+                    <text x="400" y="330" text-anchor="middle" fill="#8a8a8a" font-size="10" font-family="monospace">(optional)</text>
+
+                    <!-- Platform Adapters box -->
+                    <rect x="40" y="360" width="440" height="60" rx="8" stroke="#444" stroke-width="1.5"/>
+                    <text x="260" y="384" text-anchor="middle" fill="#8a8a8a" font-size="13" font-family="monospace">Platform Adapters</text>
+                    <text x="260" y="404" text-anchor="middle" fill="#e0e0e0" font-size="11" font-family="monospace">Discord · Telegram · CLI · (more...)</text>
+                </svg>
+            </div>
+        </section>
+
+        <section class="status">
+            <div class="status-badge">🚧 Early Design Phase</div>
+            <p>Architecture is finalized, implementation is starting. Contributions, ideas, and feedback are welcome.</p>
+        </section>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>
+                <a href="https://github.com/YunagiHisa/cordbeat">GitHub</a> ·
+                <a href="https://github.com/YunagiHisa/cordbeat/tree/main/docs">Docs</a> ·
+                <a href="https://github.com/YunagiHisa/cordbeat/blob/main/LICENSE">MIT License</a>
+            </p>
+            <p style="margin-top: 0.5rem;">© 2026 CordBeat Contributors</p>
+        </div>
+    </footer>
+</body>
+</html>

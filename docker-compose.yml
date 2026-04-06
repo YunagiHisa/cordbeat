@@ -1,0 +1,56 @@
+services:
+  # ── CordBeat Core ─────────────────────────────────────────────
+  core:
+    build: .
+    container_name: cordbeat-core
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    extra_hosts:
+      # Allow container to reach Ollama on host
+      - "host.docker.internal:host-gateway"
+
+  # ── Discord Adapter (optional) ────────────────────────────────
+  discord:
+    build:
+      context: .
+      dockerfile: Dockerfile.adapter
+      args:
+        ADAPTER_EXTRA: discord
+    container_name: cordbeat-discord
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    entrypoint: ["python", "-m", "cordbeat.adapter_runner"]
+    command: ["discord", "config.yaml"]
+    depends_on:
+      - core
+    restart: unless-stopped
+    profiles:
+      - discord
+
+  # ── Telegram Adapter (optional) ───────────────────────────────
+  telegram:
+    build:
+      context: .
+      dockerfile: Dockerfile.adapter
+      args:
+        ADAPTER_EXTRA: telegram
+    container_name: cordbeat-telegram
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    entrypoint: ["python", "-m", "cordbeat.adapter_runner"]
+    command: ["telegram", "config.yaml"]
+    depends_on:
+      - core
+    restart: unless-stopped
+    profiles:
+      - telegram

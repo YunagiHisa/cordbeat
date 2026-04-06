@@ -89,3 +89,57 @@ class TestForgettingCurve:
         normal = store.calculate_strength(1.0, elapsed_days=10, emotion_weight=0.0)
         emotional = store.calculate_strength(1.0, elapsed_days=10, emotion_weight=0.8)
         assert emotional > normal
+
+
+class TestConversationHistory:
+    async def test_add_and_get_messages(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        await memory.add_message("u1", "user", "Hello!")
+        await memory.add_message("u1", "assistant", "Hi there!")
+        msgs = await memory.get_recent_messages("u1")
+        assert len(msgs) == 2
+        assert msgs[0]["role"] == "user"
+        assert msgs[0]["content"] == "Hello!"
+        assert msgs[1]["role"] == "assistant"
+
+    async def test_messages_chronological_order(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        for i in range(5):
+            await memory.add_message("u1", "user", f"msg{i}")
+        msgs = await memory.get_recent_messages("u1")
+        assert [m["content"] for m in msgs] == [
+            "msg0",
+            "msg1",
+            "msg2",
+            "msg3",
+            "msg4",
+        ]
+
+    async def test_limit_returns_most_recent(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        for i in range(10):
+            await memory.add_message("u1", "user", f"msg{i}")
+        msgs = await memory.get_recent_messages("u1", limit=3)
+        assert len(msgs) == 3
+        assert msgs[0]["content"] == "msg7"
+        assert msgs[2]["content"] == "msg9"
+
+    async def test_messages_isolated_per_user(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.get_or_create_user("u2", "Bob")
+        await memory.add_message("u1", "user", "Alice says hi")
+        await memory.add_message("u2", "user", "Bob says hi")
+        alice_msgs = await memory.get_recent_messages("u1")
+        bob_msgs = await memory.get_recent_messages("u2")
+        assert len(alice_msgs) == 1
+        assert len(bob_msgs) == 1
+        assert alice_msgs[0]["content"] == "Alice says hi"
+
+    async def test_trim_old_messages(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        for i in range(10):
+            await memory.add_message("u1", "user", f"msg{i}")
+        deleted = await memory.trim_old_messages("u1", keep=3)
+        assert deleted == 7
+        msgs = await memory.get_recent_messages("u1")
+        assert len(msgs) == 3

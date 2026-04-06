@@ -162,3 +162,54 @@ class TestCoreEngine:
         system_arg = mock_ai.generate.call_args[1]["system"]
         assert "CordBeat" in system_arg
         assert "Never harm a user" in system_arg
+
+    async def test_handle_message_stores_conversation(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+    ) -> None:
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Remember this!",
+        )
+        await engine.handle_message(msg)
+        user_id = await memory.resolve_user("test", "user1")
+        assert user_id is not None
+        msgs = await memory.get_recent_messages(user_id)
+        assert len(msgs) == 2
+        assert msgs[0]["role"] == "user"
+        assert msgs[0]["content"] == "Remember this!"
+        assert msgs[1]["role"] == "assistant"
+        assert msgs[1]["content"] == "Hello there!"
+
+    async def test_handle_message_includes_history_in_prompt(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        # Send first message
+        msg1 = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="My name is Alice",
+        )
+        await engine.handle_message(msg1)
+
+        # Send second message — history should be included
+        msg2 = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="What did I just say?",
+        )
+        await engine.handle_message(msg2)
+
+        prompt_arg = mock_ai.generate.call_args[1].get(
+            "prompt",
+            mock_ai.generate.call_args[0][0] if mock_ai.generate.call_args[0] else "",
+        )
+        assert "My name is Alice" in prompt_arg

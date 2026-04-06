@@ -70,6 +70,7 @@ class CoreEngine:
         # Build prompt
         soul_snap = self._soul.get_soul_snapshot()
         profile = await self._memory.get_core_profile(user_id)
+        history = await self._memory.get_recent_messages(user_id, limit=20)
 
         system_prompt = (
             f"You are {soul_snap['name']}. "
@@ -87,6 +88,14 @@ class CoreEngine:
             context_parts.append(
                 f"Known info: {', '.join(f'{k}={v}' for k, v in profile.items())}"
             )
+
+        # Append conversation history
+        if history:
+            context_parts.append("\nConversation history:")
+            for msg in history:
+                prefix = "User" if msg["role"] == "user" else soul_snap["name"]
+                context_parts.append(f"  {prefix}: {msg['content']}")
+
         context = "\n".join(context_parts)
 
         prompt = f"{context}\n\nUser says: {message.content}"
@@ -100,6 +109,21 @@ class CoreEngine:
         except Exception:
             logger.exception("AI generation failed")
             response = "..."
+
+        # Store conversation in memory
+        await self._memory.add_message(
+            user_id,
+            "user",
+            message.content,
+            adapter_id,
+        )
+        if response != "...":
+            await self._memory.add_message(
+                user_id,
+                "assistant",
+                response,
+                adapter_id,
+            )
 
         # Send response back
         reply = GatewayMessage(

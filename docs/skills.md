@@ -11,22 +11,16 @@ One skill = one directory. Drop a directory in, and it's auto-detected.
 
 ```
 skills/
-  web_search/        ← Built-in
+  my_custom_skill/
     skill.yaml
     main.py
-  file_ops/          ← Built-in
-    skill.yaml
-    main.py
-  weather/           ← Built-in
-    skill.yaml
-    main.py
-  shell_exec/        ← Built-in (dangerous, disabled by default)
-    skill.yaml
-    main.py
-  my_custom_skill/   ← User-added
+  another_skill/
     skill.yaml
     main.py
 ```
+
+Skills are user-created. Drop a directory containing `skill.yaml` and
+`main.py` into the skills directory, and CordBeat auto-detects it.
 
 ---
 
@@ -71,15 +65,15 @@ safety:
 
 ---
 
-## Built-in Skills
+## Integrity Verification
 
-| Skill | Level | Description |
-|---|---|---|
-| web_search | safe | Web search and information retrieval |
-| weather | safe | Weather and news |
-| timer | safe | Timers and reminders |
-| file_read | safe | File reading |
-| file_write | requires_confirmation | File writing |
-| api_call | requires_confirmation | External API calls |
-| shell_exec | dangerous | Command execution (off by default) |
-| read_diary | safe | Diary/log reference (MEMORY integration) |
+Skills can declare a SHA-256 hash in `skill.yaml` for integrity checks.
+When present, CordBeat verifies `main.py` against the hash before loading:
+
+```yaml
+integrity:
+  sha256: "a1b2c3d4..."
+```
+
+If the hash does not match, the skill is rejected with an error. Skills
+without an `integrity` field are loaded normally (backwards compatible).

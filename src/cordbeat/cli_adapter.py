@@ -41,7 +41,8 @@ async def main(ws_url: str = "ws://localhost:8765") -> None:
         try:
             while True:
                 line = await loop.run_in_executor(
-                    None, lambda: input("> "),
+                    None,
+                    lambda: input("> "),
                 )
                 if not line.strip():
                     continue

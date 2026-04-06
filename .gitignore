@@ -35,6 +35,10 @@ ENV/
 # ChromaDB
 chroma/
 
+# Runtime data & config (user-specific)
+data/
+config.yaml
+
 # OS
 .DS_Store
 Thumbs.db

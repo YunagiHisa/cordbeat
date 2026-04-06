@@ -54,6 +54,19 @@ CREATE TABLE IF NOT EXISTS certain_records (
     metadata   TEXT DEFAULT '{}',
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    TEXT NOT NULL,
+    role       TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    content    TEXT NOT NULL,
+    adapter_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_conv_user_time
+    ON conversation_messages (user_id, created_at DESC);
 """
 
 
@@ -271,6 +284,58 @@ class MemoryStore:
                 (user_id, limit),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    # ── Conversation History ──────────────────────────────────────────
+
+    async def add_message(
+        self,
+        user_id: str,
+        role: str,
+        content: str,
+        adapter_id: str = "",
+    ) -> None:
+        """Store a conversation message (role: 'user' or 'assistant')."""
+        self._db.execute(
+            "INSERT INTO conversation_messages "
+            "(user_id, role, content, adapter_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, role, content, adapter_id, datetime.now().isoformat()),
+        )
+        self._db.commit()
+
+    async def get_recent_messages(
+        self,
+        user_id: str,
+        limit: int = 20,
+    ) -> list[dict[str, str]]:
+        """Return recent messages in chronological order."""
+        rows = self._db.execute(
+            "SELECT role, content FROM ("
+            "  SELECT role, content, created_at "
+            "  FROM conversation_messages "
+            "  WHERE user_id = ? "
+            "  ORDER BY created_at DESC LIMIT ?"
+            ") sub ORDER BY created_at ASC",
+            (user_id, limit),
+        ).fetchall()
+        return [{"role": row["role"], "content": row["content"]} for row in rows]
+
+    async def trim_old_messages(
+        self,
+        user_id: str,
+        keep: int = 100,
+    ) -> int:
+        """Delete oldest messages beyond the keep limit. Returns count deleted."""
+        result = self._db.execute(
+            "DELETE FROM conversation_messages WHERE user_id = ? "
+            "AND id NOT IN ("
+            "  SELECT id FROM conversation_messages "
+            "  WHERE user_id = ? ORDER BY created_at DESC LIMIT ?"
+            ")",
+            (user_id, user_id, keep),
+        )
+        self._db.commit()
+        return result.rowcount
 
     # ── User management ───────────────────────────────────────────────
 

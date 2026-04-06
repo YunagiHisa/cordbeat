@@ -126,6 +126,53 @@ uv run cordbeat
 uv run python -m cordbeat.cli_adapter
 ```
 
+### Docker
+
+```bash
+# Start Core only
+docker compose up core -d
+
+# Start Core + Discord adapter
+docker compose --profile discord up -d
+
+# Start Core + Telegram adapter
+docker compose --profile telegram up -d
+
+# Start everything
+docker compose --profile discord --profile telegram up -d
+```
+
+> **Note:** Ollama runs on the host machine. The container reaches it via
+> `host.docker.internal`. Set `ai_backend.base_url` to
+> `http://host.docker.internal:11434` in your `config.yaml`.
+
+### Platform Adapters
+
+Adapters run as separate processes and connect to Core via WebSocket.
+
+```bash
+# Discord (requires discord.py)
+uv sync --extra discord
+cordbeat-discord
+
+# Telegram (requires python-telegram-bot)
+uv sync --extra telegram
+cordbeat-telegram
+```
+
+Configure tokens in `config.yaml`:
+```yaml
+adapters:
+  discord:
+    enabled: true
+    options:
+      token: "YOUR_DISCORD_BOT_TOKEN"
+  telegram:
+    enabled: true
+    options:
+      token: "YOUR_TELEGRAM_BOT_TOKEN"
+```
+
 ### Development
 
 ```bash
@@ -153,16 +200,22 @@ cordbeat/
 │   ├── models.py          # Core data models & enums
 │   ├── config.py          # YAML config loader
 │   ├── soul.py            # SOUL — identity, personality, emotion
-│   ├── memory.py          # 4-layer memory (SQLite + ChromaDB)
+│   ├── memory.py          # 4-layer memory (aiosqlite + ChromaDB)
 │   ├── ai_backend.py      # AI abstraction (Ollama / OpenAI-compat)
 │   ├── validation.py      # AI output validation & retry
-│   ├── skills.py          # Pluggable skill registry
+│   ├── skills.py          # Pluggable skill registry (with integrity check)
 │   ├── gateway.py         # WebSocket gateway & adapter base
 │   ├── heartbeat.py       # Autonomous HEARTBEAT loop
 │   ├── engine.py          # Message processing engine
 │   ├── main.py            # Entry point — boots all subsystems
-│   └── cli_adapter.py     # Interactive CLI client
-├── tests/                 # Test suite (41 tests)
+│   ├── cli_adapter.py     # Interactive CLI client
+│   ├── discord_adapter.py # Discord bot adapter
+│   ├── telegram_adapter.py# Telegram bot adapter
+│   └── adapter_runner.py  # Standalone adapter launcher
+├── tests/                 # Test suite (81 tests)
+├── Dockerfile             # Core container image
+├── Dockerfile.adapter     # Adapter container image
+├── docker-compose.yml     # Full stack deployment
 ├── config.example.yaml    # Reference configuration
 ├── pyproject.toml         # Python project configuration (uv)
 └── LICENSE                # MIT License

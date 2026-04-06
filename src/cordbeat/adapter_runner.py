@@ -63,3 +63,12 @@ def discord_cli() -> None:
 def telegram_cli() -> None:
     config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
     asyncio.run(_run_adapter("telegram", config_path))
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python -m cordbeat.adapter_runner <adapter_name> [config.yaml]")
+        sys.exit(1)
+    name = sys.argv[1]
+    path = sys.argv[2] if len(sys.argv) > 2 else "config.yaml"
+    asyncio.run(_run_adapter(name, path))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import logging
 from pathlib import Path
@@ -110,6 +111,17 @@ class SkillRegistry:
         # Dangerous skills default to disabled
         if meta.safety_level == SafetyLevel.DANGEROUS and "enabled" not in raw:
             meta.enabled = False
+
+        # Integrity check: verify main.py hash if declared in skill.yaml
+        expected_hash = raw.get("integrity", {}).get("sha256")
+        if expected_hash:
+            actual_hash = hashlib.sha256(main_path.read_bytes()).hexdigest()
+            if actual_hash != expected_hash:
+                msg = (
+                    f"Skill '{meta.name}' integrity check failed: "
+                    f"expected {expected_hash}, got {actual_hash}"
+                )
+                raise ValueError(msg)
 
         # Load the Python module
         spec = importlib.util.spec_from_file_location(

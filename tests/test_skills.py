@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -130,3 +131,49 @@ class TestSkillRegistry:
         registry.load_all()
         # The evil skill should not be loaded due to path traversal check
         assert registry.get("evil") is None
+
+    def test_integrity_check_passes(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        skill_dir = skills_dir / "verified"
+        skill_dir.mkdir(parents=True)
+
+        main_content = b"def execute(**kwargs):\n    return {'result': 'ok'}\n"
+        sha256 = hashlib.sha256(main_content).hexdigest()
+
+        (skill_dir / "skill.yaml").write_text(
+            f"name: verified\ndescription: Test\nintegrity:\n  sha256: {sha256}\n",
+            encoding="utf-8",
+        )
+        (skill_dir / "main.py").write_bytes(main_content)
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        assert registry.get("verified") is not None
+
+    def test_integrity_check_rejects_tampered(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        skill_dir = skills_dir / "tampered"
+        skill_dir.mkdir(parents=True)
+
+        fake_hash = "deadbeef" + "0" * 56
+        (skill_dir / "skill.yaml").write_text(
+            f"name: tampered\ndescription: Test\nintegrity:\n  sha256: {fake_hash}\n",
+            encoding="utf-8",
+        )
+        (skill_dir / "main.py").write_text(
+            "def execute(**kwargs):\n    return {'result': 'ok'}\n",
+            encoding="utf-8",
+        )
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        # Tampered skill should not be loaded
+        assert registry.get("tampered") is None
+
+    def test_no_integrity_field_still_loads(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "nocheck")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        assert registry.get("nocheck") is not None

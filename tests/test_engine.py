@@ -130,7 +130,7 @@ class TestCoreEngine:
         await engine.handle_message(msg)
         mock_ai.generate.assert_not_awaited()
 
-    async def test_handle_message_ai_failure_returns_fallback(
+    async def test_handle_message_ai_failure_sends_error(
         self,
         engine: CoreEngine,
         mock_ai: AsyncMock,
@@ -145,7 +145,8 @@ class TestCoreEngine:
         )
         await engine.handle_message(msg)
         reply = mock_gateway.send_to_adapter.call_args[0][1]
-        assert reply.content == "..."
+        assert reply.type == MessageType.ERROR
+        assert "failed" in reply.content.lower()
 
     async def test_handle_message_includes_soul_in_prompt(
         self,

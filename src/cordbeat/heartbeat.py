@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime, time
+from datetime import UTC, datetime, time, timezone
 
 from cordbeat.ai_backend import AIBackend
 from cordbeat.config import HeartbeatConfig
@@ -59,8 +59,8 @@ def _parse_time(s: str) -> time:
     return time(hour=int(parts[0]), minute=int(parts[1]))
 
 
-def _in_quiet_hours(quiet_start: str, quiet_end: str) -> bool:
-    now = datetime.now().time()
+def _in_quiet_hours(quiet_start: str, quiet_end: str, tz: timezone = UTC) -> bool:
+    now = datetime.now(tz=tz).time()
     start = _parse_time(quiet_start)
     end = _parse_time(quiet_end)
     if start <= end:

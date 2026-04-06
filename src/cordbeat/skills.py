@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import logging
 from pathlib import Path
@@ -72,6 +73,13 @@ class SkillRegistry:
         yaml_path = skill_path / "skill.yaml"
         main_path = skill_path / "main.py"
 
+        # Security: ensure skill files are inside the skills directory
+        try:
+            main_path.resolve().relative_to(self._skills_dir.resolve())
+        except ValueError:
+            msg = f"Skill path escapes skills directory: {main_path}"
+            raise PermissionError(msg) from None
+
         with yaml_path.open(encoding="utf-8") as f:
             raw: dict[str, Any] = yaml.safe_load(f) or {}
 
@@ -103,6 +111,17 @@ class SkillRegistry:
         # Dangerous skills default to disabled
         if meta.safety_level == SafetyLevel.DANGEROUS and "enabled" not in raw:
             meta.enabled = False
+
+        # Integrity check: verify main.py hash if declared in skill.yaml
+        expected_hash = raw.get("integrity", {}).get("sha256")
+        if expected_hash:
+            actual_hash = hashlib.sha256(main_path.read_bytes()).hexdigest()
+            if actual_hash != expected_hash:
+                msg = (
+                    f"Skill '{meta.name}' integrity check failed: "
+                    f"expected {expected_hash}, got {actual_hash}"
+                )
+                raise ValueError(msg)
 
         # Load the Python module
         spec = importlib.util.spec_from_file_location(

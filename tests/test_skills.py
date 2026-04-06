@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 from pathlib import Path
+
+import pytest
 
 from cordbeat.models import SafetyLevel
 from cordbeat.skills import SkillRegistry
@@ -100,3 +104,76 @@ class TestSkillRegistry:
     def test_get_nonexistent_skill(self, tmp_path: Path) -> None:
         registry = SkillRegistry(tmp_path / "skills")
         assert registry.get("nope") is None
+
+    def test_path_traversal_blocked(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+
+        # Create a skill with a symlink pointing outside the skills directory
+        evil_dir = tmp_path / "evil"
+        evil_dir.mkdir()
+        (evil_dir / "skill.yaml").write_text(
+            "name: evil\ndescription: bad\nsafety:\n  level: safe\n",
+            encoding="utf-8",
+        )
+        (evil_dir / "main.py").write_text(
+            "def execute(**kwargs):\n    return {'pwned': True}\n",
+            encoding="utf-8",
+        )
+
+        link_path = skills_dir / "evil"
+        try:
+            os.symlink(evil_dir, link_path)
+        except OSError:
+            pytest.skip("Cannot create symlinks on this system")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        # The evil skill should not be loaded due to path traversal check
+        assert registry.get("evil") is None
+
+    def test_integrity_check_passes(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        skill_dir = skills_dir / "verified"
+        skill_dir.mkdir(parents=True)
+
+        main_content = b"def execute(**kwargs):\n    return {'result': 'ok'}\n"
+        sha256 = hashlib.sha256(main_content).hexdigest()
+
+        (skill_dir / "skill.yaml").write_text(
+            f"name: verified\ndescription: Test\nintegrity:\n  sha256: {sha256}\n",
+            encoding="utf-8",
+        )
+        (skill_dir / "main.py").write_bytes(main_content)
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        assert registry.get("verified") is not None
+
+    def test_integrity_check_rejects_tampered(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        skill_dir = skills_dir / "tampered"
+        skill_dir.mkdir(parents=True)
+
+        fake_hash = "deadbeef" + "0" * 56
+        (skill_dir / "skill.yaml").write_text(
+            f"name: tampered\ndescription: Test\nintegrity:\n  sha256: {fake_hash}\n",
+            encoding="utf-8",
+        )
+        (skill_dir / "main.py").write_text(
+            "def execute(**kwargs):\n    return {'result': 'ok'}\n",
+            encoding="utf-8",
+        )
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        # Tampered skill should not be loaded
+        assert registry.get("tampered") is None
+
+    def test_no_integrity_field_still_loads(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "nocheck")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        assert registry.get("nocheck") is not None

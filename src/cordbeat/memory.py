@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import aiosqlite
 
 from cordbeat.config import MemoryConfig
 from cordbeat.models import MemoryEntry, UserSummary
@@ -78,17 +79,17 @@ class MemoryStore:
         self._config = config
         self._db_path = Path(config.sqlite_path)
         self._chroma_path = Path(config.chroma_path)
-        self._conn: sqlite3.Connection | None = None
+        self._conn: aiosqlite.Connection | None = None
         self._chroma_client: Any = None
         self._semantic_collection: Any = None
         self._episodic_collection: Any = None
 
     async def initialize(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._db_path))
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_SCHEMA)
-        self._conn.commit()
+        self._conn = await aiosqlite.connect(str(self._db_path))
+        self._conn.row_factory = aiosqlite.Row
+        await self._conn.executescript(_SCHEMA)
+        await self._conn.commit()
 
         self._chroma_path.mkdir(parents=True, exist_ok=True)
         import chromadb  # lazy: heavy dependency, loaded only when needed
@@ -106,11 +107,11 @@ class MemoryStore:
 
     async def close(self) -> None:
         if self._conn:
-            self._conn.close()
+            await self._conn.close()
             self._conn = None
 
     @property
-    def _db(self) -> sqlite3.Connection:
+    def _db(self) -> aiosqlite.Connection:
         if self._conn is None:
             msg = "MemoryStore not initialized"
             raise RuntimeError(msg)
@@ -124,18 +125,19 @@ class MemoryStore:
         key: str,
         value: str,
     ) -> None:
-        self._db.execute(
+        await self._db.execute(
             "INSERT OR REPLACE INTO core_profiles (user_id, key, value) "
             "VALUES (?, ?, ?)",
             (user_id, key, value),
         )
-        self._db.commit()
+        await self._db.commit()
 
     async def get_core_profile(self, user_id: str) -> dict[str, str]:
-        rows = self._db.execute(
+        cursor = await self._db.execute(
             "SELECT key, value FROM core_profiles WHERE user_id = ?",
             (user_id,),
-        ).fetchall()
+        )
+        rows = await cursor.fetchall()
         return {row["key"]: row["value"] for row in rows}
 
     # ── Layer 2: Semantic Memory (ChromaDB, with forgetting) ──────────
@@ -248,7 +250,7 @@ class MemoryStore:
         metadata: dict[str, Any] | None = None,
     ) -> str:
         record_id = str(uuid.uuid4())
-        self._db.execute(
+        await self._db.execute(
             "INSERT INTO certain_records "
             "(id, user_id, content, record_type, created_at, metadata) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -261,7 +263,7 @@ class MemoryStore:
                 json.dumps(metadata or {}),
             ),
         )
-        self._db.commit()
+        await self._db.commit()
         return record_id
 
     async def get_certain_records(
@@ -271,18 +273,19 @@ class MemoryStore:
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         if record_type:
-            rows = self._db.execute(
+            cursor = await self._db.execute(
                 "SELECT * FROM certain_records "
                 "WHERE user_id = ? AND record_type = ? "
                 "ORDER BY created_at DESC LIMIT ?",
                 (user_id, record_type, limit),
-            ).fetchall()
+            )
         else:
-            rows = self._db.execute(
+            cursor = await self._db.execute(
                 "SELECT * FROM certain_records "
                 "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
                 (user_id, limit),
-            ).fetchall()
+            )
+        rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
     # ── Conversation History ──────────────────────────────────────────
@@ -295,13 +298,13 @@ class MemoryStore:
         adapter_id: str = "",
     ) -> None:
         """Store a conversation message (role: 'user' or 'assistant')."""
-        self._db.execute(
+        await self._db.execute(
             "INSERT INTO conversation_messages "
             "(user_id, role, content, adapter_id, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
             (user_id, role, content, adapter_id, datetime.now().isoformat()),
         )
-        self._db.commit()
+        await self._db.commit()
 
     async def get_recent_messages(
         self,
@@ -309,7 +312,7 @@ class MemoryStore:
         limit: int = 20,
     ) -> list[dict[str, str]]:
         """Return recent messages in chronological order."""
-        rows = self._db.execute(
+        cursor = await self._db.execute(
             "SELECT role, content FROM ("
             "  SELECT role, content, created_at "
             "  FROM conversation_messages "
@@ -317,7 +320,8 @@ class MemoryStore:
             "  ORDER BY created_at DESC LIMIT ?"
             ") sub ORDER BY created_at ASC",
             (user_id, limit),
-        ).fetchall()
+        )
+        rows = await cursor.fetchall()
         return [{"role": row["role"], "content": row["content"]} for row in rows]
 
     async def trim_old_messages(
@@ -326,7 +330,7 @@ class MemoryStore:
         keep: int = 100,
     ) -> int:
         """Delete oldest messages beyond the keep limit. Returns count deleted."""
-        result = self._db.execute(
+        cursor = await self._db.execute(
             "DELETE FROM conversation_messages WHERE user_id = ? "
             "AND id NOT IN ("
             "  SELECT id FROM conversation_messages "
@@ -334,8 +338,8 @@ class MemoryStore:
             ")",
             (user_id, user_id, keep),
         )
-        self._db.commit()
-        return result.rowcount
+        await self._db.commit()
+        return cursor.rowcount
 
     # ── User management ───────────────────────────────────────────────
 
@@ -344,10 +348,11 @@ class MemoryStore:
         user_id: str,
         display_name: str,
     ) -> UserSummary:
-        row = self._db.execute(
+        cursor = await self._db.execute(
             "SELECT * FROM users WHERE user_id = ?",
             (user_id,),
-        ).fetchone()
+        )
+        row = await cursor.fetchone()
         if row:
             return UserSummary(
                 user_id=row["user_id"],
@@ -360,15 +365,15 @@ class MemoryStore:
                 emotional_tone=row["emotional_tone"] or "",
                 attention_score=row["attention_score"] or 0.5,
             )
-        self._db.execute(
+        await self._db.execute(
             "INSERT INTO users (user_id, display_name) VALUES (?, ?)",
             (user_id, display_name),
         )
-        self._db.commit()
+        await self._db.commit()
         return UserSummary(user_id=user_id, display_name=display_name)
 
     async def update_user_summary(self, summary: UserSummary) -> None:
-        self._db.execute(
+        await self._db.execute(
             "UPDATE users SET display_name=?, last_talked_at=?, "
             "last_platform=?, last_topic=?, emotional_tone=?, "
             "attention_score=? WHERE user_id=?",
@@ -382,10 +387,11 @@ class MemoryStore:
                 summary.user_id,
             ),
         )
-        self._db.commit()
+        await self._db.commit()
 
     async def get_all_user_summaries(self) -> list[UserSummary]:
-        rows = self._db.execute("SELECT * FROM users").fetchall()
+        cursor = await self._db.execute("SELECT * FROM users")
+        rows = await cursor.fetchall()
         return [
             UserSummary(
                 user_id=row["user_id"],
@@ -407,24 +413,25 @@ class MemoryStore:
         adapter_id: str,
         platform_user_id: str,
     ) -> None:
-        self._db.execute(
+        await self._db.execute(
             "INSERT OR REPLACE INTO platform_links "
             "(user_id, adapter_id, platform_user_id, linked_at) "
             "VALUES (?, ?, ?, ?)",
             (user_id, adapter_id, platform_user_id, datetime.now().isoformat()),
         )
-        self._db.commit()
+        await self._db.commit()
 
     async def resolve_user(
         self,
         adapter_id: str,
         platform_user_id: str,
     ) -> str | None:
-        row = self._db.execute(
+        cursor = await self._db.execute(
             "SELECT user_id FROM platform_links "
             "WHERE adapter_id = ? AND platform_user_id = ?",
             (adapter_id, platform_user_id),
-        ).fetchone()
+        )
+        row = await cursor.fetchone()
         return row["user_id"] if row else None
 
     # ── Forgetting (Ebbinghaus decay) ─────────────────────────────────

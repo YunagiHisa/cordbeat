@@ -42,19 +42,24 @@ class CoreEngine:
 
         # Resolve or create user
         user_id = await self._memory.resolve_user(
-            adapter_id, platform_user_id,
+            adapter_id,
+            platform_user_id,
         )
         if user_id is None:
             user_id = f"cb_{adapter_id}_{platform_user_id}"
             user = await self._memory.get_or_create_user(
-                user_id, platform_user_id,
+                user_id,
+                platform_user_id,
             )
             await self._memory.link_platform(
-                user_id, adapter_id, platform_user_id,
+                user_id,
+                adapter_id,
+                platform_user_id,
             )
         else:
             user = await self._memory.get_or_create_user(
-                user_id, platform_user_id,
+                user_id,
+                platform_user_id,
             )
 
         # Update user summary

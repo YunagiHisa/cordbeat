@@ -3,7 +3,7 @@
 > **A local-first autonomous AI agent that thinks, acts, and stays by your side — powered by your own hardware.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Status: Early Design](https://img.shields.io/badge/Status-Early%20Design-blue)]()
+[![CI](https://github.com/YunagiHisa/cordbeat/actions/workflows/ci.yml/badge.svg)](https://github.com/YunagiHisa/cordbeat/actions/workflows/ci.yml)
 [![Local AI First](https://img.shields.io/badge/AI-Local%20First-green)]()
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 
@@ -56,9 +56,9 @@ Self-contained and easy to add or remove.
 ┌─────────────────────────────────────────┐
 │              CordBeat Core              │
 │                                         │
-│  ┌─────────┐  ┌────────┐  ┌─────────┐  │
-│  │  SOUL   │  │ MEMORY │  │  SKILL  │  │
-│  └─────────┘  └────────┘  └─────────┘  │
+│  ┌─────────┐  ┌────────┐  ┌─────────┐   │
+│  │  SOUL   │  │ MEMORY │  │  SKILL  │   │
+│  └─────────┘  └────────┘  └─────────┘   │
 │                                         │
 │  ┌─────────────────────────────────┐    │
 │  │        HEARTBEAT Loop           │    │
@@ -90,13 +90,13 @@ Self-contained and easy to add or remove.
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (package manager)
-- llama.cpp or Ollama (for local AI inference)
+- [Ollama](https://ollama.com/) (for local AI inference)
 
 ### Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/cordbeat.git
+git clone https://github.com/YunagiHisa/cordbeat.git
 cd cordbeat
 
 # Install dependencies
@@ -109,11 +109,31 @@ uv sync --extra discord
 uv sync --extra dev
 ```
 
+### Running CordBeat
+
+```bash
+# 1. Pull an AI model (e.g. qwen3.5:9b)
+ollama pull qwen3.5:9b
+
+# 2. Copy and edit the config
+cp config.example.yaml config.yaml
+# Edit config.yaml — set your model name and preferences
+
+# 3. Start CordBeat Core
+uv run cordbeat
+
+# 4. In another terminal, connect the CLI adapter
+uv run python -m cordbeat.cli_adapter
+```
+
 ### Development
 
 ```bash
 # Run linter
 uv run ruff check src/ tests/
+
+# Run formatter check
+uv run ruff format --check src/ tests/
 
 # Run type checker
 uv run mypy src/
@@ -128,13 +148,22 @@ uv run pytest
 
 ```
 cordbeat/
-├── .claude/               # Claude Code configuration
-│   ├── settings.json      # Shared project settings
-│   └── rules/             # Path-specific coding rules
+├── .github/workflows/     # CI (ruff, mypy, pytest on 3.11-3.13)
 ├── src/cordbeat/          # Source code
-├── tests/                 # Test suite
-├── docs/                  # Documentation
-├── CLAUDE.md              # Claude Code project instructions
+│   ├── models.py          # Core data models & enums
+│   ├── config.py          # YAML config loader
+│   ├── soul.py            # SOUL — identity, personality, emotion
+│   ├── memory.py          # 4-layer memory (SQLite + ChromaDB)
+│   ├── ai_backend.py      # AI abstraction (Ollama / OpenAI-compat)
+│   ├── validation.py      # AI output validation & retry
+│   ├── skills.py          # Pluggable skill registry
+│   ├── gateway.py         # WebSocket gateway & adapter base
+│   ├── heartbeat.py       # Autonomous HEARTBEAT loop
+│   ├── engine.py          # Message processing engine
+│   ├── main.py            # Entry point — boots all subsystems
+│   └── cli_adapter.py     # Interactive CLI client
+├── tests/                 # Test suite (41 tests)
+├── config.example.yaml    # Reference configuration
 ├── pyproject.toml         # Python project configuration (uv)
 └── LICENSE                # MIT License
 ```
@@ -165,4 +194,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-*Status: Early Design Phase — Architecture finalized, implementation starting*
+*CordBeat is alive — local AI, your rules.*

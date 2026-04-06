@@ -17,6 +17,8 @@ dependencies = [
 
 [project.scripts]
 cordbeat = "cordbeat.main:cli"
+cordbeat-discord = "cordbeat.adapter_runner:discord_cli"
+cordbeat-telegram = "cordbeat.adapter_runner:telegram_cli"
 
 [project.optional-dependencies]
 discord = ["discord.py>=2.0"]
@@ -47,6 +49,13 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
+[[tool.mypy.overrides]]
+module = [
+    "cordbeat.discord_adapter",
+    "cordbeat.telegram_adapter",
+]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

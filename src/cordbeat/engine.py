@@ -108,7 +108,14 @@ class CoreEngine:
             )
         except Exception:
             logger.exception("AI generation failed")
-            response = "..."
+            error_reply = GatewayMessage(
+                type=MessageType.ERROR,
+                adapter_id=adapter_id,
+                platform_user_id=platform_user_id,
+                content="AI generation failed. Please try again later.",
+            )
+            await self._gateway.send_to_adapter(adapter_id, error_reply)
+            return
 
         # Store conversation in memory
         await self._memory.add_message(
@@ -117,13 +124,12 @@ class CoreEngine:
             message.content,
             adapter_id,
         )
-        if response != "...":
-            await self._memory.add_message(
-                user_id,
-                "assistant",
-                response,
-                adapter_id,
-            )
+        await self._memory.add_message(
+            user_id,
+            "assistant",
+            response,
+            adapter_id,
+        )
 
         # Send response back
         reply = GatewayMessage(

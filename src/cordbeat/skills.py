@@ -72,6 +72,13 @@ class SkillRegistry:
         yaml_path = skill_path / "skill.yaml"
         main_path = skill_path / "main.py"
 
+        # Security: ensure skill files are inside the skills directory
+        try:
+            main_path.resolve().relative_to(self._skills_dir.resolve())
+        except ValueError:
+            msg = f"Skill path escapes skills directory: {main_path}"
+            raise PermissionError(msg) from None
+
         with yaml_path.open(encoding="utf-8") as f:
             raw: dict[str, Any] = yaml.safe_load(f) or {}
 

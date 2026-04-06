@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+import pytest
 
 from cordbeat.models import SafetyLevel
 from cordbeat.skills import SkillRegistry
@@ -100,3 +103,30 @@ class TestSkillRegistry:
     def test_get_nonexistent_skill(self, tmp_path: Path) -> None:
         registry = SkillRegistry(tmp_path / "skills")
         assert registry.get("nope") is None
+
+    def test_path_traversal_blocked(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+
+        # Create a skill with a symlink pointing outside the skills directory
+        evil_dir = tmp_path / "evil"
+        evil_dir.mkdir()
+        (evil_dir / "skill.yaml").write_text(
+            "name: evil\ndescription: bad\nsafety:\n  level: safe\n",
+            encoding="utf-8",
+        )
+        (evil_dir / "main.py").write_text(
+            "def execute(**kwargs):\n    return {'pwned': True}\n",
+            encoding="utf-8",
+        )
+
+        link_path = skills_dir / "evil"
+        try:
+            os.symlink(evil_dir, link_path)
+        except OSError:
+            pytest.skip("Cannot create symlinks on this system")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        # The evil skill should not be loaded due to path traversal check
+        assert registry.get("evil") is None

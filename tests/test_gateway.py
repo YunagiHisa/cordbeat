@@ -1,10 +1,13 @@
-"""Tests for gateway message queue."""
+"""Tests for gateway message queue and server."""
 
 from __future__ import annotations
 
 import asyncio
+import json
+from unittest.mock import AsyncMock
 
-from cordbeat.gateway import MessageQueue
+from cordbeat.config import GatewayConfig
+from cordbeat.gateway import GatewayServer, MessageQueue
 from cordbeat.models import GatewayMessage, MessageType
 
 
@@ -99,3 +102,47 @@ class TestMessageQueue:
         task.cancel()
 
         assert order == ["first", "second", "third"]
+
+
+class TestGatewayServer:
+    def test_init(self) -> None:
+        config = GatewayConfig(host="127.0.0.1", port=9999)
+        queue = MessageQueue()
+        server = GatewayServer(config, queue)
+        assert server._config.host == "127.0.0.1"
+        assert server._config.port == 9999
+
+    async def test_send_to_adapter_not_connected(self) -> None:
+        """send_to_adapter with unknown adapter_id → warning, no crash."""
+        config = GatewayConfig()
+        queue = MessageQueue()
+        server = GatewayServer(config, queue)
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="unknown",
+            platform_user_id="u1",
+            content="hello",
+        )
+        # Should not raise
+        await server.send_to_adapter("unknown", msg)
+
+    async def test_send_to_adapter_connected(self) -> None:
+        """send_to_adapter with connected adapter → sends JSON."""
+        config = GatewayConfig()
+        queue = MessageQueue()
+        server = GatewayServer(config, queue)
+
+        mock_ws = AsyncMock()
+        server._connections["test_adapter"] = mock_ws
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test_adapter",
+            platform_user_id="u1",
+            content="hello",
+        )
+        await server.send_to_adapter("test_adapter", msg)
+        mock_ws.send.assert_called_once()
+        payload = json.loads(mock_ws.send.call_args[0][0])
+        assert payload["content"] == "hello"
+        assert payload["type"] == "message"

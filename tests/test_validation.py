@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
+import pytest
+
 from cordbeat.validation import (
     validate_heartbeat_decision,
+    validate_skill_selection,
     validate_soul_update,
     validate_user_summary_update,
+    validated_ai_json,
 )
 
 
@@ -87,3 +93,102 @@ class TestSoulUpdateValidation:
             }
         )
         assert not r.valid
+
+
+class TestSkillSelectionValidation:
+    def test_valid_skill(self) -> None:
+        r = validate_skill_selection(
+            {"skill_name": "web_search"},
+            available_skills={"web_search", "timer"},
+        )
+        assert r.valid
+
+    def test_unknown_skill(self) -> None:
+        r = validate_skill_selection(
+            {"skill_name": "nonexistent"},
+            available_skills={"web_search", "timer"},
+        )
+        assert not r.valid
+
+    def test_no_skill_name(self) -> None:
+        r = validate_skill_selection(
+            {"skill_name": ""},
+            available_skills={"web_search"},
+        )
+        assert r.valid  # empty string is falsy, skipped
+
+
+class TestValidatedAiJson:
+    async def test_valid_on_first_attempt(self) -> None:
+        backend = AsyncMock()
+        backend.generate_json = AsyncMock(
+            return_value={"action": "none", "next_heartbeat_minutes": 60}
+        )
+        result = await validated_ai_json(
+            backend,
+            prompt="test",
+            system="sys",
+            validator=validate_heartbeat_decision,
+        )
+        assert result["action"] == "none"
+        assert backend.generate_json.call_count == 1
+
+    async def test_retry_on_invalid(self) -> None:
+        backend = AsyncMock()
+        backend.generate_json = AsyncMock(
+            side_effect=[
+                {"action": "destroy"},  # invalid
+                {"action": "none", "next_heartbeat_minutes": 60},  # valid
+            ]
+        )
+        result = await validated_ai_json(
+            backend,
+            prompt="test",
+            system="sys",
+            validator=validate_heartbeat_decision,
+        )
+        assert result["action"] == "none"
+        assert backend.generate_json.call_count == 2
+
+    async def test_retry_on_json_error(self) -> None:
+        import json
+
+        backend = AsyncMock()
+        backend.generate_json = AsyncMock(
+            side_effect=[
+                json.JSONDecodeError("bad", "", 0),
+                {"action": "none", "next_heartbeat_minutes": 60},
+            ]
+        )
+        result = await validated_ai_json(
+            backend,
+            prompt="test",
+            system="sys",
+            validator=validate_heartbeat_decision,
+        )
+        assert result["action"] == "none"
+
+    async def test_fallback_after_max_retries(self) -> None:
+        backend = AsyncMock()
+        backend.generate_json = AsyncMock(return_value={"action": "destroy"})
+        fallback = {"action": "none", "next_heartbeat_minutes": 60}
+        result = await validated_ai_json(
+            backend,
+            prompt="test",
+            system="sys",
+            validator=validate_heartbeat_decision,
+            fallback=fallback,
+        )
+        assert result is fallback
+        assert backend.generate_json.call_count == 3  # 1 + MAX_RETRIES
+
+    async def test_raises_without_fallback(self) -> None:
+        backend = AsyncMock()
+        backend.generate_json = AsyncMock(return_value={"action": "destroy"})
+        with pytest.raises(ValueError, match="Validation failed"):
+            await validated_ai_json(
+                backend,
+                prompt="test",
+                system="sys",
+                validator=validate_heartbeat_decision,
+            )

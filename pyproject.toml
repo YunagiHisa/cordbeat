@@ -29,7 +29,6 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.4",
     "mypy>=1.10",
-    "httpx>=0.27",
     "types-PyYAML>=6.0",
 ]
 
@@ -68,6 +67,7 @@ source = ["cordbeat"]
 [tool.coverage.report]
 show_missing = true
 skip_empty = true
+fail_under = 70
 exclude_lines = [
     "pragma: no cover",
     "if __name__",

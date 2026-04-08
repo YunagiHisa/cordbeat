@@ -26,9 +26,12 @@ class Emotion(StrEnum):
 class EmotionState:
     primary: Emotion = Emotion.CALM
     primary_intensity: float = 0.5
+    secondary: Emotion | None = None
+    secondary_intensity: float = 0.0
 
     def __post_init__(self) -> None:
         self.primary_intensity = max(0.0, min(1.0, self.primary_intensity))
+        self.secondary_intensity = max(0.0, min(1.0, self.secondary_intensity))
 
 
 # ── Gateway messages ──────────────────────────────────────────────────

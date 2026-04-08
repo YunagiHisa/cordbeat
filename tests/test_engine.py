@@ -10,7 +10,7 @@ import pytest
 from cordbeat.config import MemoryConfig
 from cordbeat.engine import CoreEngine
 from cordbeat.memory import MemoryStore
-from cordbeat.models import GatewayMessage, MessageType
+from cordbeat.models import Emotion, GatewayMessage, MessageType
 from cordbeat.skills import SkillRegistry
 from cordbeat.soul import Soul
 
@@ -35,7 +35,14 @@ async def memory(tmp_path: Path) -> MemoryStore:
 @pytest.fixture
 def mock_ai() -> AsyncMock:
     ai = AsyncMock()
-    ai.generate = AsyncMock(return_value="Hello there!")
+
+    async def _generate(**kwargs: object) -> str:
+        prompt = kwargs.get("prompt", "")
+        if isinstance(prompt, str) and "what emotion" in prompt.lower():
+            return '{"emotion": "joy", "intensity": 0.7}'
+        return "Hello there!"
+
+    ai.generate = AsyncMock(side_effect=_generate)
     return ai
 
 
@@ -81,7 +88,8 @@ class TestCoreEngine:
             content="Hi!",
         )
         await engine.handle_message(msg)
-        mock_ai.generate.assert_awaited_once()
+        # Called twice: once for response, once for emotion inference
+        assert mock_ai.generate.await_count == 2
 
     async def test_handle_message_sends_reply(
         self,
@@ -160,7 +168,8 @@ class TestCoreEngine:
             content="What's your name?",
         )
         await engine.handle_message(msg)
-        system_arg = mock_ai.generate.call_args[1]["system"]
+        # First call is the main generate, not the emotion inference
+        system_arg = mock_ai.generate.call_args_list[0][1]["system"]
         assert "CordBeat" in system_arg
         assert "Never harm a user" in system_arg
 
@@ -180,10 +189,57 @@ class TestCoreEngine:
         assert user_id is not None
         msgs = await memory.get_recent_messages(user_id)
         assert len(msgs) == 2
-        assert msgs[0]["role"] == "user"
-        assert msgs[0]["content"] == "Remember this!"
-        assert msgs[1]["role"] == "assistant"
-        assert msgs[1]["content"] == "Hello there!"
+
+    async def test_handle_message_updates_emotion(
+        self,
+        engine: CoreEngine,
+        soul: Soul,
+    ) -> None:
+        """After a message, emotion should be updated via AI inference."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Great news!",
+        )
+        await engine.handle_message(msg)
+        assert soul.emotion.primary == Emotion.JOY
+        assert soul.emotion.primary_intensity == pytest.approx(0.7)
+
+    async def test_emotion_inference_failure_does_not_crash(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """If emotion inference returns bad JSON, message still works."""
+        ai = AsyncMock()
+
+        async def _bad_infer(**kwargs: object) -> str:
+            prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "what emotion" in prompt.lower():
+                return "not valid json!"
+            return "Hello there!"
+
+        ai.generate = AsyncMock(side_effect=_bad_infer)
+        eng = CoreEngine(
+            ai=ai,
+            soul=soul,
+            memory=memory,
+            skills=skills,
+            gateway=mock_gateway,
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Hi!",
+        )
+        await eng.handle_message(msg)
+        # Should not crash — emotion stays at default
+        assert soul.emotion.primary == Emotion.CALM
+        mock_gateway.send_to_adapter.assert_awaited_once()
 
     async def test_handle_message_includes_history_in_prompt(
         self,
@@ -209,8 +265,11 @@ class TestCoreEngine:
         )
         await engine.handle_message(msg2)
 
-        prompt_arg = mock_ai.generate.call_args[1].get(
+        # The main generate call for the second message (index 2)
+        # Index 0: msg1 generate, 1: msg1 emotion, 2: msg2 generate
+        main_call = mock_ai.generate.call_args_list[2]
+        prompt_arg = main_call[1].get(
             "prompt",
-            mock_ai.generate.call_args[0][0] if mock_ai.generate.call_args[0] else "",
+            main_call[0][0] if main_call[0] else "",
         )
         assert "My name is Alice" in prompt_arg

@@ -2,17 +2,30 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 
 from cordbeat.ai_backend import AIBackend
 from cordbeat.gateway import GatewayServer
 from cordbeat.memory import MemoryStore
-from cordbeat.models import GatewayMessage, MessageType
+from cordbeat.models import Emotion, GatewayMessage, MessageType
 from cordbeat.skills import SkillRegistry
 from cordbeat.soul import Soul
 
 logger = logging.getLogger(__name__)
+
+_EMOTION_INFERENCE_PROMPT = """\
+Based on this conversation exchange, what emotion should the AI feel?
+User said: {user_message}
+AI responded: {ai_response}
+
+Available emotions: joy, excitement, curiosity, warmth, calm,
+boredom, worry, loneliness, sadness
+
+Respond in JSON only:
+{{"emotion": "one of the emotions above", "intensity": 0.0 to 1.0}}
+"""
 
 
 class CoreEngine:
@@ -72,11 +85,20 @@ class CoreEngine:
         profile = await self._memory.get_core_profile(user_id)
         history = await self._memory.get_recent_messages(user_id, limit=20)
 
+        emotion_desc = (
+            f"Current emotion: {soul_snap['emotion']['primary']} "
+            f"(intensity: {soul_snap['emotion']['intensity']})"
+        )
+        if "secondary" in soul_snap["emotion"]:
+            emotion_desc += (
+                f", secondary: {soul_snap['emotion']['secondary']} "
+                f"(intensity: {soul_snap['emotion']['secondary_intensity']})"
+            )
+
         system_prompt = (
             f"You are {soul_snap['name']}. "
             f"Personality: {', '.join(soul_snap['traits'])}. "
-            f"Current emotion: {soul_snap['emotion']['primary']} "
-            f"(intensity: {soul_snap['emotion']['intensity']}). "
+            f"{emotion_desc}. "
             f"\nImmutable rules:\n"
             + "\n".join(f"- {r}" for r in soul_snap["immutable_rules"])
             + "\n\nRespond naturally to the user's message. "
@@ -131,6 +153,9 @@ class CoreEngine:
             adapter_id,
         )
 
+        # Infer emotion from conversation
+        await self._infer_and_update_emotion(message.content, response)
+
         # Send response back
         reply = GatewayMessage(
             type=MessageType.MESSAGE,
@@ -139,3 +164,26 @@ class CoreEngine:
             content=response,
         )
         await self._gateway.send_to_adapter(adapter_id, reply)
+
+    async def _infer_and_update_emotion(
+        self, user_message: str, ai_response: str
+    ) -> None:
+        """Ask AI to infer emotion from conversation and update SOUL."""
+        prompt = _EMOTION_INFERENCE_PROMPT.format(
+            user_message=user_message[:500],
+            ai_response=ai_response[:500],
+        )
+        try:
+            raw = await self._ai.generate(
+                prompt=prompt,
+                system="Respond in valid JSON only.",
+            )
+            data = json.loads(raw)
+            emotion = Emotion(data["emotion"])
+            intensity = float(data["intensity"])
+            self._soul.update_emotion(emotion, intensity)
+            logger.debug("Emotion updated: %s (%.2f)", emotion, intensity)
+        except (json.JSONDecodeError, KeyError, ValueError):
+            logger.debug("Emotion inference parse failed, skipping")
+        except Exception:
+            logger.debug("Emotion inference failed, skipping")

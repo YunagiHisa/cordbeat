@@ -12,7 +12,7 @@ from typing import Any
 import aiosqlite
 
 from cordbeat.config import MemoryConfig
-from cordbeat.models import MemoryEntry, UserSummary
+from cordbeat.models import MemoryEntry, MemoryLayer, UserSummary
 
 logger = logging.getLogger(__name__)
 
@@ -203,11 +203,13 @@ class MemoryStore:
                     "trust_level": entry.trust_level.value,
                     "strength": entry.strength,
                     "emotion_weight": entry.emotion_weight,
+                    "flashbulb": str(entry.metadata.get("flashbulb", False)),
                     "created_at": entry.created_at.isoformat(),
                     "last_accessed_at": entry.last_accessed_at.isoformat(),
                     **{
                         k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
                         for k, v in entry.metadata.items()
+                        if k != "flashbulb"
                     },
                 }
             ],
@@ -239,6 +241,28 @@ class MemoryStore:
                     }
                 )
         return entries
+
+    async def add_flashbulb_memory(
+        self,
+        user_id: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Create a flashbulb episodic memory — high emotion, no decay.
+
+        Flashbulb memories represent emotionally significant moments
+        that resist forgetting (emotion_weight=1.0, flashbulb=True).
+        """
+        entry = MemoryEntry(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            layer=MemoryLayer.EPISODIC,
+            content=content,
+            strength=1.0,
+            emotion_weight=1.0,
+            metadata={"flashbulb": True, **(metadata or {})},
+        )
+        return await self.add_episodic_memory(entry)
 
     # ── Layer 4: Certain Records (SQLite, no forgetting) ──────────────
 
@@ -484,6 +508,11 @@ class MemoryStore:
             ids_to_delete: list[str] = []
             for i, entry_id in enumerate(all_data["ids"]):
                 meta = all_data["metadatas"][i]
+
+                # Flashbulb memories are protected from decay
+                if str(meta.get("flashbulb", "False")).lower() == "true":
+                    continue
+
                 created_str = meta.get("created_at", "")
                 if not created_str:
                     continue

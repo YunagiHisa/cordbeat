@@ -273,3 +273,64 @@ class TestCoreEngine:
             main_call[0][0] if main_call[0] else "",
         )
         assert "My name is Alice" in prompt_arg
+
+    async def test_high_intensity_creates_flashbulb(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """High emotion intensity (>=0.8) should create a flashbulb memory."""
+        ai = AsyncMock()
+
+        async def _high_emotion(**kwargs: object) -> str:
+            prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.9}'
+            return "That's wonderful!"
+
+        ai.generate = AsyncMock(side_effect=_high_emotion)
+        eng = CoreEngine(
+            ai=ai,
+            soul=soul,
+            memory=memory,
+            skills=skills,
+            gateway=mock_gateway,
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="I just got married!",
+        )
+        await eng.handle_message(msg)
+
+        # Emotion should be updated
+        assert soul.emotion.primary == Emotion.JOY
+
+        # Flashbulb memory should have been created
+        user_id = await memory.resolve_user("test", "user1")
+        assert user_id is not None
+        results = await memory.search_episodic(user_id, "married")
+        assert len(results) >= 1
+        assert results[0]["metadata"]["flashbulb"] == "True"
+
+    async def test_low_intensity_no_flashbulb(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+    ) -> None:
+        """Below threshold intensity should NOT create flashbulb."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="The weather is nice.",
+        )
+        await engine.handle_message(msg)
+        user_id = await memory.resolve_user("test", "user1")
+        assert user_id is not None
+        results = await memory.search_episodic(user_id, "weather")
+        # No flashbulb created (intensity 0.7 < 0.8)
+        assert len(results) == 0

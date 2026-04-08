@@ -154,7 +154,7 @@ class CoreEngine:
         )
 
         # Infer emotion from conversation
-        await self._infer_and_update_emotion(message.content, response)
+        await self._infer_and_update_emotion(user_id, message.content, response)
 
         # Send response back
         reply = GatewayMessage(
@@ -166,9 +166,13 @@ class CoreEngine:
         await self._gateway.send_to_adapter(adapter_id, reply)
 
     async def _infer_and_update_emotion(
-        self, user_message: str, ai_response: str
+        self, user_id: str, user_message: str, ai_response: str
     ) -> None:
-        """Ask AI to infer emotion from conversation and update SOUL."""
+        """Ask AI to infer emotion from conversation and update SOUL.
+
+        If the inferred emotion intensity is high (>=0.8), create a
+        flashbulb memory to preserve this emotionally significant moment.
+        """
         prompt = _EMOTION_INFERENCE_PROMPT.format(
             user_message=user_message[:500],
             ai_response=ai_response[:500],
@@ -183,6 +187,19 @@ class CoreEngine:
             intensity = float(data["intensity"])
             self._soul.update_emotion(emotion, intensity)
             logger.debug("Emotion updated: %s (%.2f)", emotion, intensity)
+
+            # High-intensity emotion → flashbulb memory
+            if intensity >= 0.8 and emotion != Emotion.CALM:
+                summary = (
+                    f"[{emotion.value}] User: {user_message[:200]} "
+                    f"/ Response: {ai_response[:200]}"
+                )
+                await self._memory.add_flashbulb_memory(
+                    user_id,
+                    summary,
+                    metadata={"emotion": emotion.value, "intensity": intensity},
+                )
+                logger.debug("Flashbulb memory created for %s", user_id)
         except (json.JSONDecodeError, KeyError, ValueError):
             logger.debug("Emotion inference parse failed, skipping")
         except Exception:

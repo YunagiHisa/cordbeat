@@ -8,6 +8,7 @@ import pytest
 
 from cordbeat.config import MemoryConfig
 from cordbeat.memory import MemoryStore
+from cordbeat.models import MemoryEntry, MemoryLayer
 
 
 @pytest.fixture
@@ -143,3 +144,52 @@ class TestConversationHistory:
         assert deleted == 7
         msgs = await memory.get_recent_messages("u1")
         assert len(msgs) == 3
+
+
+class TestFlashbulbMemory:
+    async def test_add_flashbulb_memory(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        entry_id = await memory.add_flashbulb_memory("u1", "The day we first talked")
+        assert entry_id is not None
+        # Should be searchable in episodic memory
+        results = await memory.search_episodic("u1", "first talked")
+        assert len(results) >= 1
+        assert results[0]["metadata"]["flashbulb"] == "True"
+        assert float(results[0]["metadata"]["emotion_weight"]) == 1.0
+
+    async def test_flashbulb_resists_decay(self, memory: MemoryStore) -> None:
+        """Flashbulb memories should not be archived during decay."""
+        await memory.get_or_create_user("u1", "Test")
+        # Add a normal episodic memory with very low strength
+        normal = MemoryEntry(
+            id="normal-1",
+            user_id="u1",
+            layer=MemoryLayer.EPISODIC,
+            content="Ordinary conversation",
+            strength=0.001,
+            emotion_weight=0.0,
+        )
+        await memory.add_episodic_memory(normal)
+
+        # Add a flashbulb memory
+        await memory.add_flashbulb_memory("u1", "Emotionally significant moment")
+
+        # Run decay — normal should be archived, flashbulb should survive
+        stats = await memory.decay_and_archive_memories()
+        assert stats["archived"] >= 1
+
+        # Flashbulb should still be searchable
+        results = await memory.search_episodic("u1", "significant moment")
+        assert len(results) >= 1
+        assert results[0]["metadata"]["flashbulb"] == "True"
+
+    async def test_flashbulb_with_custom_metadata(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        await memory.add_flashbulb_memory(
+            "u1",
+            "A joyful moment",
+            metadata={"emotion": "joy", "intensity": 0.9},
+        )
+        results = await memory.search_episodic("u1", "joyful moment")
+        assert len(results) >= 1
+        assert results[0]["metadata"]["emotion"] == "joy"

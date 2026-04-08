@@ -296,10 +296,11 @@ class TestTick:
         self,
         heartbeat: HeartbeatLoop,
     ) -> None:
-        """During quiet hours → skip, return default."""
+        """During quiet hours → runs sleep once, then skips."""
         with patch("cordbeat.heartbeat._in_quiet_hours", return_value=True):
             result = await heartbeat._tick()
         assert result == 60
+        assert heartbeat._sleep_done_today is True
 
     async def test_tick_calls_ai(
         self,
@@ -312,3 +313,131 @@ class TestTick:
         with patch("cordbeat.heartbeat._in_quiet_hours", return_value=False):
             await heartbeat._tick()
         mock_ai.generate_json.assert_called_once()
+
+
+# ── Sleep Phase ───────────────────────────────────────────────────────
+
+
+class TestSleepPhase:
+    async def test_sleep_phase_generates_diary(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Sleep phase generates a diary entry from today's messages."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.add_message("u1", "user", "Hello!", "discord")
+        await memory.add_message("u1", "assistant", "Hi Alice!", "discord")
+
+        mock_ai.generate = AsyncMock(return_value="Today I chatted with Alice.")
+
+        await heartbeat._run_sleep_phase()
+
+        records = await memory.get_certain_records("u1", record_type="diary")
+        assert len(records) == 1
+        assert "Alice" in records[0]["content"]
+
+    async def test_sleep_phase_skips_users_without_messages(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Users with no messages today don't get a diary entry."""
+        await memory.get_or_create_user("u1", "Silent")
+
+        await heartbeat._run_sleep_phase()
+
+        records = await memory.get_certain_records("u1", record_type="diary")
+        assert len(records) == 0
+        mock_ai.generate.assert_not_called()
+
+    async def test_sleep_phase_runs_decay(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """Sleep phase calls decay_and_archive_memories."""
+        memory.decay_and_archive_memories = AsyncMock(
+            return_value={"decayed": 5, "archived": 2}
+        )
+        await heartbeat._run_sleep_phase()
+        memory.decay_and_archive_memories.assert_called_once()
+
+    async def test_sleep_phase_trims_messages(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """Sleep phase trims old messages for each user."""
+        await memory.get_or_create_user("u1", "Alice")
+        memory.trim_old_messages = AsyncMock(return_value=10)
+
+        await heartbeat._run_sleep_phase()
+        memory.trim_old_messages.assert_called_once_with("u1")
+
+    async def test_sleep_phase_only_runs_once_per_quiet_period(
+        self,
+        heartbeat: HeartbeatLoop,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Sleep phase runs only once during quiet hours."""
+        with patch("cordbeat.heartbeat._in_quiet_hours", return_value=True):
+            await heartbeat._tick()
+            await heartbeat._tick()
+
+        # _run_sleep_phase should only be invoked once
+        assert heartbeat._sleep_done_today is True
+
+    async def test_sleep_flag_resets_outside_quiet_hours(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """_sleep_done_today resets when leaving quiet hours."""
+        heartbeat._sleep_done_today = True
+        await memory.get_or_create_user("u1", "Alice")
+
+        with patch("cordbeat.heartbeat._in_quiet_hours", return_value=False):
+            await heartbeat._tick()
+
+        assert heartbeat._sleep_done_today is False
+
+
+# ── Memory consolidation ─────────────────────────────────────────────
+
+
+class TestMemoryConsolidation:
+    async def test_get_todays_messages(
+        self,
+        memory: MemoryStore,
+    ) -> None:
+        """get_todays_messages returns only today's messages."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.add_message("u1", "user", "Hello", "discord")
+        await memory.add_message("u1", "assistant", "Hi!", "discord")
+
+        messages = await memory.get_todays_messages("u1")
+        assert len(messages) == 2
+        assert messages[0]["content"] == "Hello"
+        assert messages[1]["content"] == "Hi!"
+
+    async def test_get_todays_messages_empty(
+        self,
+        memory: MemoryStore,
+    ) -> None:
+        """No messages → empty list."""
+        await memory.get_or_create_user("u1", "Alice")
+        messages = await memory.get_todays_messages("u1")
+        assert messages == []
+
+    async def test_decay_and_archive_empty(
+        self,
+        memory: MemoryStore,
+    ) -> None:
+        """No memories → zero counts."""
+        stats = await memory.decay_and_archive_memories()
+        assert stats["decayed"] == 0
+        assert stats["archived"] == 0

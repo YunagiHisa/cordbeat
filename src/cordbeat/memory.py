@@ -449,3 +449,61 @@ class MemoryStore:
         """
         effective_decay = self._config.decay_rate * (1.0 - emotion_weight * 0.5)
         return base_strength * (1.0 / (1.0 + effective_decay * elapsed_days))
+
+    # ── Sleep Phase (memory consolidation) ────────────────────────────
+
+    async def get_todays_messages(
+        self,
+        user_id: str,
+    ) -> list[dict[str, str]]:
+        """Return all messages from today for diary generation."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        cursor = await self._db.execute(
+            "SELECT role, content FROM conversation_messages "
+            "WHERE user_id = ? AND created_at >= ? "
+            "ORDER BY created_at ASC",
+            (user_id, today),
+        )
+        rows = await cursor.fetchall()
+        return [{"role": row["role"], "content": row["content"]} for row in rows]
+
+    async def decay_and_archive_memories(self) -> dict[str, int]:
+        """Apply forgetting curve to all semantic/episodic memories.
+
+        Returns a dict with counts: {"decayed": N, "archived": N}.
+        """
+        threshold = self._config.archive_threshold
+        now = datetime.now()
+        stats = {"decayed": 0, "archived": 0}
+
+        for collection in (self._semantic_collection, self._episodic_collection):
+            all_data = collection.get(include=["metadatas"])
+            if not all_data or not all_data.get("ids"):
+                continue
+
+            ids_to_delete: list[str] = []
+            for i, entry_id in enumerate(all_data["ids"]):
+                meta = all_data["metadatas"][i]
+                created_str = meta.get("created_at", "")
+                if not created_str:
+                    continue
+
+                created_at = datetime.fromisoformat(created_str)
+                elapsed_days = (now - created_at).total_seconds() / 86400.0
+                base_strength = float(meta.get("strength", 1.0))
+                emotion_weight = float(meta.get("emotion_weight", 0.0))
+
+                new_strength = self.calculate_strength(
+                    base_strength, elapsed_days, emotion_weight
+                )
+
+                if new_strength < threshold:
+                    ids_to_delete.append(entry_id)
+                    stats["archived"] += 1
+                else:
+                    stats["decayed"] += 1
+
+            if ids_to_delete:
+                collection.delete(ids=ids_to_delete)
+
+        return stats

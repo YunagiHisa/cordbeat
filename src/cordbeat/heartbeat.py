@@ -28,7 +28,7 @@ _HEARTBEAT_SYSTEM_PROMPT = """\
 You are {name}. {pronoun} is an autonomous AI agent.
 Personality: {traits}
 Current emotion: {emotion} (intensity: {emotion_intensity})
-
+{secondary_emotion_line}
 Immutable rules:
 {rules}
 
@@ -145,6 +145,9 @@ class HeartbeatLoop:
         # Reset daily flag when we exit quiet hours
         self._sleep_done_today = False
 
+        # ── Emotion decay ─────────────────────────────────────────────
+        self._soul.decay_emotion()
+
         # ── Layer 1: Global scan ──────────────────────────────────────
         users = await self._memory.get_all_user_summaries()
         if not users:
@@ -154,12 +157,19 @@ class HeartbeatLoop:
         global_ctx = self._build_global_context(users)
         soul_snap = self._soul.get_soul_snapshot()
 
+        secondary_line = ""
+        if "secondary" in soul_snap["emotion"]:
+            sec = soul_snap["emotion"]["secondary"]
+            sec_int = soul_snap["emotion"]["secondary_intensity"]
+            secondary_line = f"Secondary emotion: {sec} (intensity: {sec_int})"
+
         system = _HEARTBEAT_SYSTEM_PROMPT.format(
             name=soul_snap["name"],
             pronoun=self._soul.pronoun,
             traits=", ".join(soul_snap["traits"]),
             emotion=soul_snap["emotion"]["primary"],
             emotion_intensity=soul_snap["emotion"]["intensity"],
+            secondary_emotion_line=secondary_line,
             rules="\n".join(f"- {r}" for r in soul_snap["immutable_rules"]),
             skills=self._skills.get_skill_descriptions_for_prompt(),
         )

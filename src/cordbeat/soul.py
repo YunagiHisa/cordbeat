@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,15 @@ import yaml
 from cordbeat.models import Emotion, EmotionState
 
 logger = logging.getLogger(__name__)
+
+# ── Emotion decay constants ───────────────────────────────────────────
+
+# Per-tick decay rate: intensity moves toward baseline by this fraction
+_DECAY_RATE: float = 0.05
+# Baseline intensity — emotions decay toward this, not zero
+_BASELINE_INTENSITY: float = 0.3
+# Below this threshold, secondary emotion is cleared
+_SECONDARY_CLEAR_THRESHOLD: float = 0.1
 
 # ── Immutable rules that soul_core.yaml must always contain ──────────
 
@@ -39,6 +49,8 @@ _DEFAULT_SOUL: dict[str, Any] = {
     "current_emotion": {
         "primary": Emotion.CALM.value,
         "primary_intensity": 0.5,
+        "secondary": Emotion.CURIOSITY.value,
+        "secondary_intensity": 0.3,
     },
     "heartbeat": {
         "quiet_hours": {
@@ -79,9 +91,13 @@ class Soul:
     @property
     def emotion(self) -> EmotionState:
         emo = self._soul.get("current_emotion", {})
+        secondary_raw = emo.get("secondary")
+        secondary = Emotion(secondary_raw) if secondary_raw else None
         return EmotionState(
             primary=Emotion(emo.get("primary", Emotion.CALM.value)),
             primary_intensity=float(emo.get("primary_intensity", 0.5)),
+            secondary=secondary,
+            secondary_intensity=float(emo.get("secondary_intensity", 0.0)),
         )
 
     @property
@@ -91,12 +107,95 @@ class Soul:
 
     # ── mutation (only allowed fields) ────────────────────────────────
 
-    def update_emotion(self, emotion: Emotion, intensity: float) -> None:
+    def update_emotion(
+        self,
+        emotion: Emotion,
+        intensity: float,
+        *,
+        secondary: Emotion | None = None,
+        secondary_intensity: float | None = None,
+    ) -> None:
+        """Update emotion with automatic transition logic.
+
+        When the primary emotion changes, the old primary becomes the
+        secondary (with its intensity halved) unless an explicit secondary
+        is provided.
+        """
         intensity = max(0.0, min(1.0, intensity))
-        self._soul.setdefault("current_emotion", {})
-        self._soul["current_emotion"]["primary"] = emotion.value
-        self._soul["current_emotion"]["primary_intensity"] = intensity
+        emo = self._soul.setdefault("current_emotion", {})
+
+        old_primary = emo.get("primary", Emotion.CALM.value)
+        old_primary_intensity = float(emo.get("primary_intensity", 0.5))
+
+        # Transition: old primary → secondary (unless overridden)
+        if emotion.value != old_primary and secondary is None:
+            secondary = Emotion(old_primary)
+            secondary_intensity = old_primary_intensity * 0.5
+
+        emo["primary"] = emotion.value
+        emo["primary_intensity"] = intensity
+
+        if secondary is not None:
+            sec_int = max(0.0, min(1.0, secondary_intensity or 0.0))
+            emo["secondary"] = secondary.value
+            emo["secondary_intensity"] = sec_int
+        # If secondary not provided and primary didn't change, leave it alone
+
+        self._append_emotion_history(emotion, intensity)
         self._save_soul()
+
+    def decay_emotion(self) -> None:
+        """Apply natural decay toward CALM/baseline.
+
+        Called by the heartbeat tick to simulate emotional cooldown.
+        """
+        emo = self._soul.get("current_emotion", {})
+        changed = False
+
+        # Decay primary intensity toward baseline
+        primary_intensity = float(emo.get("primary_intensity", 0.5))
+        if emo.get("primary", Emotion.CALM.value) != Emotion.CALM.value:
+            new_intensity = primary_intensity - _DECAY_RATE
+            if new_intensity <= _BASELINE_INTENSITY:
+                # Emotion faded enough — revert to calm
+                emo["primary"] = Emotion.CALM.value
+                emo["primary_intensity"] = _BASELINE_INTENSITY
+            else:
+                emo["primary_intensity"] = new_intensity
+            changed = True
+
+        # Decay secondary
+        sec_intensity = float(emo.get("secondary_intensity", 0.0))
+        if sec_intensity > 0:
+            new_sec = sec_intensity - _DECAY_RATE
+            if new_sec < _SECONDARY_CLEAR_THRESHOLD:
+                emo.pop("secondary", None)
+                emo["secondary_intensity"] = 0.0
+            else:
+                emo["secondary_intensity"] = new_sec
+            changed = True
+
+        if changed:
+            self._save_soul()
+
+    @property
+    def emotion_history(self) -> list[dict[str, Any]]:
+        """Return recent emotion change log (newest first)."""
+        return list(self._soul.get("emotion_history", []))
+
+    def _append_emotion_history(self, emotion: Emotion, intensity: float) -> None:
+        """Record an emotion change, keeping last 50 entries."""
+        history: list[dict[str, Any]] = self._soul.setdefault("emotion_history", [])
+        history.append(
+            {
+                "emotion": emotion.value,
+                "intensity": round(intensity, 2),
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+        # Keep last 50
+        if len(history) > 50:
+            self._soul["emotion_history"] = history[-50:]
 
     def update_name(self, name: str) -> None:
         self._soul.setdefault("identity", {})
@@ -136,14 +235,19 @@ class Soul:
 
     def get_soul_snapshot(self) -> dict[str, Any]:
         """Return a read-only snapshot for prompt injection into AI."""
+        emo = self.emotion
+        emotion_data: dict[str, Any] = {
+            "primary": emo.primary.value,
+            "intensity": emo.primary_intensity,
+        }
+        if emo.secondary is not None:
+            emotion_data["secondary"] = emo.secondary.value
+            emotion_data["secondary_intensity"] = emo.secondary_intensity
         return {
             "name": self.name,
             "pronoun": self.pronoun,
             "traits": self.traits,
-            "emotion": {
-                "primary": self.emotion.primary.value,
-                "intensity": self.emotion.primary_intensity,
-            },
+            "emotion": emotion_data,
             "immutable_rules": self.immutable_rules,
         }
 

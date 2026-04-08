@@ -16,7 +16,7 @@ def anyio_backend() -> str:
 class FakeChromaCollection:
     """Lightweight in-memory mock of a ChromaDB collection.
 
-    Supports add() and query() with simple substring matching
+    Supports add(), query(), get(), and delete() with simple matching
     instead of real vector embeddings. Enough for unit tests.
     """
 
@@ -34,6 +34,27 @@ class FakeChromaCollection:
                 "document": documents[i],
                 "metadata": metadatas[i] if metadatas else {},
             }
+
+    def get(
+        self,
+        ids: list[str] | None = None,
+        include: list[str] | None = None,
+    ) -> dict[str, Any]:
+        if ids:
+            entries = {k: v for k, v in self._docs.items() if k in ids}
+        else:
+            entries = dict(self._docs)
+
+        result: dict[str, Any] = {"ids": list(entries.keys())}
+        if not include or "documents" in (include or []):
+            result["documents"] = [e["document"] for e in entries.values()]
+        if not include or "metadatas" in (include or []):
+            result["metadatas"] = [e["metadata"] for e in entries.values()]
+        return result
+
+    def delete(self, ids: list[str]) -> None:
+        for doc_id in ids:
+            self._docs.pop(doc_id, None)
 
     def query(
         self,

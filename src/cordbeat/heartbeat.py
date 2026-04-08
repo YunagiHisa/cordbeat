@@ -50,6 +50,14 @@ You MUST respond in valid JSON:
 }}
 """
 
+_DIARY_SYSTEM_PROMPT = """\
+You are {name}, reviewing today's conversations to write a diary entry.
+Write a brief, reflective diary entry summarizing what happened today.
+Note key topics, emotional moments, and anything worth remembering.
+Keep it concise (3-5 sentences). Write in first person.
+Respond with ONLY the diary text, no JSON.
+"""
+
 # Regex to strip characters that could manipulate prompt structure
 _SANITIZE_RE = re.compile(r"[#\n\r\x00-\x1f]")
 
@@ -90,6 +98,7 @@ class HeartbeatLoop:
         self._gateway = gateway
         self._queue = queue
         self._running = False
+        self._sleep_done_today = False
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
@@ -127,8 +136,14 @@ class HeartbeatLoop:
         """Execute one HEARTBEAT cycle. Returns next interval in minutes."""
         quiet_start, quiet_end = self._soul.quiet_hours
         if _in_quiet_hours(quiet_start, quiet_end):
+            if not self._sleep_done_today:
+                await self._run_sleep_phase()
+                self._sleep_done_today = True
             logger.debug("In quiet hours, skipping HEARTBEAT")
             return self._config.default_interval_minutes
+
+        # Reset daily flag when we exit quiet hours
+        self._sleep_done_today = False
 
         # ── Layer 1: Global scan ──────────────────────────────────────
         users = await self._memory.get_all_user_summaries()
@@ -257,3 +272,77 @@ class HeartbeatLoop:
             logger.info("Skill '%s' result: %s", decision.skill_name, result)
         except Exception:
             logger.exception("Skill '%s' failed", decision.skill_name)
+
+    # ── Sleep Phase ───────────────────────────────────────────────────
+
+    async def _run_sleep_phase(self) -> None:
+        """Memory consolidation during quiet hours.
+
+        1. For each user, review today's conversations and generate a diary entry.
+        2. Apply forgetting curve and archive decayed memories.
+        3. Trim old conversation messages.
+        """
+        logger.info("Sleep phase started — consolidating memories")
+
+        users = await self._memory.get_all_user_summaries()
+        soul_snap = self._soul.get_soul_snapshot()
+
+        # 1. Generate diary entries per user
+        for user in users:
+            try:
+                messages = await self._memory.get_todays_messages(user.user_id)
+                if not messages:
+                    continue
+
+                conversation = "\n".join(
+                    f"{'User' if m['role'] == 'user' else soul_snap['name']}: "
+                    f"{m['content']}"
+                    for m in messages
+                )
+                system = _DIARY_SYSTEM_PROMPT.format(name=soul_snap["name"])
+                prompt = (
+                    f"Today's conversation with {user.display_name}:\n\n{conversation}"
+                )
+
+                diary_text = await self._ai.generate(
+                    prompt=prompt,
+                    system=system,
+                    temperature=0.5,
+                    max_tokens=512,
+                )
+
+                await self._memory.add_certain_record(
+                    user_id=user.user_id,
+                    content=diary_text.strip(),
+                    record_type="diary",
+                    metadata={"date": datetime.now().strftime("%Y-%m-%d")},
+                )
+                logger.info("Diary written for user %s", user.user_id)
+            except Exception:
+                logger.exception("Failed to write diary for user %s", user.user_id)
+
+        # 2. Decay and archive weak memories
+        try:
+            stats = await self._memory.decay_and_archive_memories()
+            logger.info(
+                "Memory consolidation: %d decayed, %d archived",
+                stats["decayed"],
+                stats["archived"],
+            )
+        except Exception:
+            logger.exception("Memory decay/archive failed")
+
+        # 3. Trim old conversation messages per user
+        for user in users:
+            try:
+                deleted = await self._memory.trim_old_messages(user.user_id)
+                if deleted > 0:
+                    logger.info(
+                        "Trimmed %d old messages for user %s",
+                        deleted,
+                        user.user_id,
+                    )
+            except Exception:
+                logger.exception("Failed to trim messages for user %s", user.user_id)
+
+        logger.info("Sleep phase completed")

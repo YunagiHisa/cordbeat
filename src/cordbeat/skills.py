@@ -49,7 +49,9 @@ class Skill:
         result = fn(**params)
         if hasattr(result, "__await__"):
             result = await result
-        return dict(result)
+        if not isinstance(result, dict):
+            return {"result": result}
+        return result
 
     async def _execute_sandboxed(
         self,
@@ -63,7 +65,9 @@ class Skill:
             result = fn(**params)
             if hasattr(result, "__await__"):
                 result = await result
-            return dict(result)
+            if not isinstance(result, dict):
+                return {"result": result}
+            return result
 
     def _build_context(self) -> SkillContext:
         return SkillContext(

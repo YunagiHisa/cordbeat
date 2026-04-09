@@ -57,7 +57,7 @@ class OllamaBackend(AIBackend):
         self._base_url = config.base_url.rstrip("/")
         self._model = config.model
         self._options = config.options
-        self._client = httpx.AsyncClient(timeout=120.0)
+        self._client = httpx.AsyncClient(timeout=config.timeout)
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -103,7 +103,7 @@ class OpenAICompatBackend(AIBackend):
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
-        self._client = httpx.AsyncClient(timeout=120.0, headers=headers)
+        self._client = httpx.AsyncClient(timeout=config.timeout, headers=headers)
 
     async def aclose(self) -> None:
         await self._client.aclose()

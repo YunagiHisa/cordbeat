@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import zoneinfo
 from datetime import UTC, datetime, time, tzinfo
 
@@ -20,6 +19,7 @@ from cordbeat.models import (
     SafetyLevel,
     UserSummary,
 )
+from cordbeat.prompt import sanitize
 from cordbeat.skills import SkillRegistry
 from cordbeat.soul import Soul
 from cordbeat.validation import validate_heartbeat_decision, validated_ai_json
@@ -59,9 +59,6 @@ Note key topics, emotional moments, and anything worth remembering.
 Keep it concise (3-5 sentences). Write in first person.
 Respond with ONLY the diary text, no JSON.
 """
-
-# Regex to strip characters that could manipulate prompt structure
-_SANITIZE_RE = re.compile(r"[#\n\r\x00-\x1f]")
 
 
 def _parse_time(s: str) -> time:
@@ -225,9 +222,9 @@ class HeartbeatLoop:
                 delta = datetime.now() - u.last_talked_at
                 elapsed = f" ({delta.days}d ago)" if delta.days > 0 else " (today)"
             # Sanitize user-controlled fields to prevent prompt injection
-            name = _SANITIZE_RE.sub("", u.display_name)[:50]
-            topic = _SANITIZE_RE.sub("", u.last_topic)[:50]
-            tone = _SANITIZE_RE.sub("", u.emotional_tone)[:50]
+            name = sanitize(u.display_name, strict=True)[:50]
+            topic = sanitize(u.last_topic, strict=True)[:50]
+            tone = sanitize(u.emotional_tone, strict=True)[:50]
             lines.append(
                 f"- {name} (ID: {u.user_id}){elapsed}: "
                 f"topic='{topic}', tone='{tone}', "

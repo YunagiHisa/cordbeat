@@ -5,12 +5,19 @@ from __future__ import annotations
 import json
 import logging
 import re
+import uuid
 from datetime import datetime
 
 from cordbeat.ai_backend import AIBackend
 from cordbeat.gateway import GatewayServer
 from cordbeat.memory import MemoryStore
-from cordbeat.models import Emotion, GatewayMessage, MessageType
+from cordbeat.models import (
+    Emotion,
+    GatewayMessage,
+    MemoryEntry,
+    MemoryLayer,
+    MessageType,
+)
 from cordbeat.skills import SkillRegistry
 from cordbeat.soul import Soul
 
@@ -36,6 +43,26 @@ boredom, worry, loneliness, sadness
 
 Respond in JSON only:
 {{"emotion": "one of the emotions above", "intensity": 0.0 to 1.0}}
+"""
+
+_MEMORY_EXTRACTION_PROMPT = """\
+Analyze this conversation exchange and extract memory-worthy information.
+User ({user_name}) said: {user_message}
+AI responded: {ai_response}
+
+Extract the following in JSON:
+{{
+  "topic": "brief topic label (3-5 words, or empty string if trivial)",
+  "emotional_tone": "one word describing user's tone (e.g. happy, curious, \
+frustrated, neutral)",
+  "facts": ["list of new facts/preferences about the user, or empty list"],
+  "episode_summary": "one-sentence summary if this is a memorable moment, \
+or empty string"
+}}
+
+Only include facts that are clearly stated or strongly implied.
+Do NOT fabricate or assume information.
+Respond in valid JSON only.
 """
 
 
@@ -123,6 +150,24 @@ class CoreEngine:
             )
             context_parts.append(f"Known info: {sanitized}")
 
+        # Retrieve relevant semantic memories (preferences, facts)
+        semantic_memories = await self._memory.search_semantic(
+            user_id, message.content, n_results=3
+        )
+        if semantic_memories:
+            context_parts.append("\nKnown preferences/facts:")
+            for mem in semantic_memories:
+                context_parts.append(f"  - {mem['content']}")
+
+        # Retrieve relevant episodic memories (past moments)
+        episodic_memories = await self._memory.search_episodic(
+            user_id, message.content, n_results=3
+        )
+        if episodic_memories:
+            context_parts.append("\nRelated past moments:")
+            for mem in episodic_memories:
+                context_parts.append(f"  - {mem['content']}")
+
         # Append conversation history
         if history:
             context_parts.append("\nConversation history:")
@@ -169,6 +214,11 @@ class CoreEngine:
 
         # Infer emotion from conversation
         await self._infer_and_update_emotion(user_id, message.content, response)
+
+        # Extract and store memories (topic, facts, episodes)
+        await self._extract_and_store_memories(
+            user_id, user.display_name, message.content, response
+        )
 
         # Send response back
         reply = GatewayMessage(
@@ -218,3 +268,65 @@ class CoreEngine:
             logger.debug("Emotion inference parse failed, skipping")
         except Exception:
             logger.debug("Emotion inference failed, skipping")
+
+    async def _extract_and_store_memories(
+        self,
+        user_id: str,
+        user_name: str,
+        user_message: str,
+        ai_response: str,
+    ) -> None:
+        """Extract topic, facts, and episodes from conversation via AI."""
+        prompt = _MEMORY_EXTRACTION_PROMPT.format(
+            user_name=user_name[:50],
+            user_message=user_message[:500],
+            ai_response=ai_response[:500],
+        )
+        try:
+            raw = await self._ai.generate(
+                prompt=prompt,
+                system="Respond in valid JSON only.",
+                temperature=0.2,
+            )
+            data = json.loads(raw)
+        except (json.JSONDecodeError, Exception):
+            logger.debug("Memory extraction failed, skipping")
+            return
+
+        # Update user summary with topic and tone
+        topic = data.get("topic", "")
+        tone = data.get("emotional_tone", "")
+        if topic or tone:
+            user = await self._memory.get_or_create_user(user_id, user_name)
+            if topic:
+                user.last_topic = str(topic)[:100]
+            if tone:
+                user.emotional_tone = str(tone)[:50]
+            await self._memory.update_user_summary(user)
+
+        # Store semantic facts (preferences, knowledge)
+        facts = data.get("facts", [])
+        if isinstance(facts, list):
+            for fact in facts[:5]:  # Cap at 5 facts per message
+                if not isinstance(fact, str) or len(fact.strip()) < 3:
+                    continue
+                entry = MemoryEntry(
+                    id=str(uuid.uuid4()),
+                    user_id=user_id,
+                    layer=MemoryLayer.SEMANTIC,
+                    content=fact.strip(),
+                )
+                await self._memory.add_semantic_memory(entry)
+                logger.debug("Semantic memory stored for %s: %s", user_id, fact)
+
+        # Store episodic summary if notable
+        episode = data.get("episode_summary", "")
+        if isinstance(episode, str) and len(episode.strip()) > 10:
+            entry = MemoryEntry(
+                id=str(uuid.uuid4()),
+                user_id=user_id,
+                layer=MemoryLayer.EPISODIC,
+                content=episode.strip(),
+            )
+            await self._memory.add_episodic_memory(entry)
+            logger.debug("Episodic memory stored for %s", user_id)

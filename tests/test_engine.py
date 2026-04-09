@@ -40,6 +40,11 @@ def mock_ai() -> AsyncMock:
         prompt = kwargs.get("prompt", "")
         if isinstance(prompt, str) and "what emotion" in prompt.lower():
             return '{"emotion": "joy", "intensity": 0.7}'
+        if isinstance(prompt, str) and "extract memory" in prompt.lower():
+            return (
+                '{"topic": "greeting", "emotional_tone": "neutral",'
+                ' "facts": [], "episode_summary": ""}'
+            )
         return "Hello there!"
 
     ai.generate = AsyncMock(side_effect=_generate)
@@ -88,8 +93,8 @@ class TestCoreEngine:
             content="Hi!",
         )
         await engine.handle_message(msg)
-        # Called twice: once for response, once for emotion inference
-        assert mock_ai.generate.await_count == 2
+        # Called three times: response, emotion inference, memory extraction
+        assert mock_ai.generate.await_count == 3
 
     async def test_handle_message_sends_reply(
         self,
@@ -220,6 +225,11 @@ class TestCoreEngine:
             prompt = kwargs.get("prompt", "")
             if isinstance(prompt, str) and "what emotion" in prompt.lower():
                 return "not valid json!"
+            if isinstance(prompt, str) and "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "", "emotional_tone": "",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
             return "Hello there!"
 
         ai.generate = AsyncMock(side_effect=_bad_infer)
@@ -265,9 +275,10 @@ class TestCoreEngine:
         )
         await engine.handle_message(msg2)
 
-        # The main generate call for the second message (index 2)
-        # Index 0: msg1 generate, 1: msg1 emotion, 2: msg2 generate
-        main_call = mock_ai.generate.call_args_list[2]
+        # The main generate call for the second message
+        # Index 0: msg1 response, 1: msg1 emotion, 2: msg1 extraction,
+        # 3: msg2 response
+        main_call = mock_ai.generate.call_args_list[3]
         prompt_arg = main_call[1].get(
             "prompt",
             main_call[0][0] if main_call[0] else "",
@@ -288,6 +299,11 @@ class TestCoreEngine:
             prompt = kwargs.get("prompt", "")
             if isinstance(prompt, str) and "what emotion" in prompt.lower():
                 return '{"emotion": "joy", "intensity": 0.9}'
+            if isinstance(prompt, str) and "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "marriage", "emotional_tone": "ecstatic",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
             return "That's wonderful!"
 
         ai.generate = AsyncMock(side_effect=_high_emotion)
@@ -334,3 +350,171 @@ class TestCoreEngine:
         results = await memory.search_episodic(user_id, "weather")
         # No flashbulb created (intensity 0.7 < 0.8)
         assert len(results) == 0
+
+    async def test_handle_message_calls_memory_extraction(
+        self,
+        engine: CoreEngine,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """After a message, memory extraction should be called."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Hi!",
+        )
+        await engine.handle_message(msg)
+        # 3 calls: main generate, emotion inference, memory extraction
+        assert mock_ai.generate.await_count == 3
+
+    async def test_memory_extraction_stores_facts(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Extracted facts should be stored as semantic memories."""
+        ai = AsyncMock()
+
+        async def _generate(**kwargs: object) -> str:
+            prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "what emotion" in prompt.lower():
+                return '{"emotion": "curiosity", "intensity": 0.5}'
+            if isinstance(prompt, str) and "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "programming", "emotional_tone": "curious",'
+                    ' "facts": ["User enjoys Python programming"],'
+                    ' "episode_summary": ""}'
+                )
+            return "That's cool!"
+
+        ai.generate = AsyncMock(side_effect=_generate)
+        eng = CoreEngine(
+            ai=ai, soul=soul, memory=memory, skills=skills, gateway=mock_gateway
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="I love Python!",
+        )
+        await eng.handle_message(msg)
+
+        user_id = await memory.resolve_user("test", "user1")
+        assert user_id is not None
+        results = await memory.search_semantic(user_id, "Python")
+        assert len(results) >= 1
+        assert "Python" in results[0]["content"]
+
+    async def test_memory_extraction_stores_episode(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Notable episodes should be stored as episodic memories."""
+        ai = AsyncMock()
+
+        async def _generate(**kwargs: object) -> str:
+            prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "what emotion" in prompt.lower():
+                return '{"emotion": "warmth", "intensity": 0.6}'
+            if isinstance(prompt, str) and "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "career", "emotional_tone": "excited",'
+                    ' "facts": [],'
+                    ' "episode_summary": '
+                    '"User shared they got a new job as a developer"}'
+                )
+            return "Congratulations!"
+
+        ai.generate = AsyncMock(side_effect=_generate)
+        eng = CoreEngine(
+            ai=ai, soul=soul, memory=memory, skills=skills, gateway=mock_gateway
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="I got a new job!",
+        )
+        await eng.handle_message(msg)
+
+        user_id = await memory.resolve_user("test", "user1")
+        assert user_id is not None
+        results = await memory.search_episodic(user_id, "new job")
+        assert len(results) >= 1
+        assert "developer" in results[0]["content"]
+
+    async def test_memory_extraction_updates_user_summary(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Extracted topic and tone should update UserSummary."""
+        ai = AsyncMock()
+
+        async def _generate(**kwargs: object) -> str:
+            prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "what emotion" in prompt.lower():
+                return '{"emotion": "calm", "intensity": 0.5}'
+            if isinstance(prompt, str) and "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "cooking recipes", "emotional_tone": "happy",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "Nice recipe!"
+
+        ai.generate = AsyncMock(side_effect=_generate)
+        eng = CoreEngine(
+            ai=ai, soul=soul, memory=memory, skills=skills, gateway=mock_gateway
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Check out this recipe!",
+        )
+        await eng.handle_message(msg)
+
+        user_id = await memory.resolve_user("test", "user1")
+        assert user_id is not None
+        summaries = await memory.get_all_user_summaries()
+        user = next(u for u in summaries if u.user_id == user_id)
+        assert user.last_topic == "cooking recipes"
+        assert user.emotional_tone == "happy"
+
+    async def test_memory_extraction_failure_does_not_crash(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Bad extraction JSON should not crash message handling."""
+        ai = AsyncMock()
+
+        async def _bad_extract(**kwargs: object) -> str:
+            prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "what emotion" in prompt.lower():
+                return '{"emotion": "calm", "intensity": 0.5}'
+            if isinstance(prompt, str) and "extract memory" in prompt.lower():
+                return "not valid json!"
+            return "Hello!"
+
+        ai.generate = AsyncMock(side_effect=_bad_extract)
+        eng = CoreEngine(
+            ai=ai, soul=soul, memory=memory, skills=skills, gateway=mock_gateway
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Test",
+        )
+        await eng.handle_message(msg)
+        mock_gateway.send_to_adapter.assert_awaited_once()

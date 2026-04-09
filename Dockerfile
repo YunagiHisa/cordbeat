@@ -36,5 +36,9 @@ VOLUME /app/config.yaml
 # Gateway WebSocket port
 EXPOSE 8765
 
+# Health check: verify the WebSocket server is accepting connections
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import socket; s=socket.create_connection(('localhost',8765),2); s.close()"
+
 ENTRYPOINT ["python", "-m", "cordbeat.main"]
 CMD ["config.yaml"]

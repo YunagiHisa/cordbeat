@@ -1,5 +1,14 @@
 # CordBeat Configuration
 # Copy this file to config.yaml and adjust settings.
+#
+# Environment variable overrides:
+#   All settings can be overridden via env vars with the CORDBEAT_ prefix.
+#   Use double underscores (__) for nesting:
+#     CORDBEAT_GATEWAY__PORT=9000
+#     CORDBEAT_AI_BACKEND__MODEL=gpt-4
+#     CORDBEAT_ADAPTERS__DISCORD__OPTIONS__TOKEN=your-token
+#
+# You can also place a .env file next to config.yaml.
 
 gateway:
   host: "0.0.0.0"
@@ -16,6 +25,7 @@ heartbeat:
   max_interval_minutes: 1440
   quiet_hours_start: "01:00"
   quiet_hours_end: "07:00"
+  timezone: "UTC"  # IANA timezone (e.g. "Asia/Tokyo")
 
 memory:
   sqlite_path: "data/cordbeat.db"

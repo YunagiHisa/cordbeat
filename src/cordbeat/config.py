@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+_ENV_PREFIX = "CORDBEAT_"
 
 
 @dataclass
@@ -69,14 +72,102 @@ def _build_dataclass(cls: type, data: dict[str, Any]) -> Any:
     return cls(**filtered)
 
 
-def load_config(path: str | Path) -> Config:
-    """Load configuration from a YAML file."""
-    path = Path(path)
-    if not path.exists():
-        return Config()
+def _load_dotenv(path: Path) -> None:
+    """Load .env file into os.environ if it exists.
 
+    Supports simple KEY=VALUE lines. Ignores comments and blank lines.
+    Strips optional surrounding quotes from values.
+    """
+    if not path.is_file():
+        return
     with path.open(encoding="utf-8") as f:
-        raw: dict[str, Any] = yaml.safe_load(f) or {}
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            # Strip surrounding quotes
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            os.environ.setdefault(key, value)
+
+
+def _apply_env_overrides(raw: dict[str, Any]) -> None:
+    """Overlay CORDBEAT_* environment variables onto the raw config dict.
+
+    Mapping convention:
+        CORDBEAT_GATEWAY__HOST  → raw["gateway"]["host"]
+        CORDBEAT_AI_BACKEND__MODEL → raw["ai_backend"]["model"]
+        CORDBEAT_ADAPTERS__DISCORD__OPTIONS__TOKEN
+            → raw["adapters"]["discord"]["options"]["token"]
+
+    Double-underscore (__) separates nesting levels.
+    The first segment after the prefix uses lowercase for the top-level key.
+    """
+    for env_key, env_value in os.environ.items():
+        if not env_key.startswith(_ENV_PREFIX):
+            continue
+        remainder = env_key[len(_ENV_PREFIX) :]
+        parts = [p.lower() for p in remainder.split("__")]
+        if not parts:
+            continue
+
+        target = raw
+        for part in parts[:-1]:
+            if part not in target:
+                target[part] = {}
+            child = target[part]
+            if not isinstance(child, dict):
+                break
+            target = child
+        else:
+            target[parts[-1]] = _coerce_value(env_value)
+
+
+def _coerce_value(value: str) -> Any:
+    """Convert string env var to an appropriate Python type."""
+    if value.lower() in ("true", "1", "yes"):
+        return True
+    if value.lower() in ("false", "0", "no"):
+        return False
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    return value
+
+
+def load_config(path: str | Path) -> Config:
+    """Load configuration from a YAML file with env var overrides.
+
+    Loading order (later wins):
+        1. Dataclass defaults
+        2. YAML file values
+        3. .env file (same directory as config, or CWD)
+        4. CORDBEAT_* environment variables
+    """
+    path = Path(path)
+
+    # Load .env from config directory or CWD
+    env_path = path.parent / ".env" if path.parent != Path() else Path(".env")
+    _load_dotenv(env_path)
+
+    if not path.exists():
+        raw: dict[str, Any] = {}
+    else:
+        with path.open(encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+
+    # Apply environment variable overrides
+    _apply_env_overrides(raw)
 
     gateway = _build_dataclass(
         GatewayConfig,

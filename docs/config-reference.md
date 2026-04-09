@@ -16,6 +16,8 @@ ai_backend:
   provider: ollama
   base_url: "http://localhost:11434"
   model: "qwen3.5:9b"
+  timeout: 120.0
+  max_tokens: 1024
   options:
     num_predict: 512
     temperature: 0.8
@@ -32,6 +34,8 @@ memory:
   chroma_path: "data/chroma"
   decay_rate: 0.1
   archive_threshold: 0.05
+  conversation_history_limit: 20
+  memory_search_results: 3
 
 soul_dir: "data/soul"
 skills_dir: "skills"
@@ -71,6 +75,8 @@ adapters:
 | `provider` | string | `"ollama"` | AI provider (`ollama` or `openai`) |
 | `base_url` | string | `"http://localhost:11434"` | API base URL |
 | `model` | string | `"llama3"` | Model name |
+| `timeout` | float | `120.0` | HTTP request timeout in seconds |
+| `max_tokens` | int | `1024` | Maximum tokens for AI generation |
 | `options` | dict | `{}` | Provider-specific options (passed directly to API) |
 
 Common options for Ollama:
@@ -99,6 +105,8 @@ Common options for Ollama:
 | `chroma_path` | string | `"data/chroma"` | Path to ChromaDB storage |
 | `decay_rate` | float | `0.1` | Ebbinghaus forgetting curve decay rate |
 | `archive_threshold` | float | `0.05` | Memory strength threshold for archival |
+| `conversation_history_limit` | int | `20` | Max messages included in prompt context |
+| `memory_search_results` | int | `3` | Max semantic/episodic search results per query |
 
 ### `adapters.<name>`
 

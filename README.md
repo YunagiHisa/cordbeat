@@ -203,6 +203,8 @@ cordbeat/
 │   ├── memory.py          # 4-layer memory (aiosqlite + ChromaDB)
 │   ├── ai_backend.py      # AI abstraction (Ollama / OpenAI-compat)
 │   ├── validation.py      # AI output validation & retry
+│   ├── prompt.py          # Prompt building & input sanitization
+│   ├── extraction.py      # AI-driven memory extraction
 │   ├── skills.py          # Pluggable skill registry (with integrity check)
 │   ├── gateway.py         # WebSocket gateway & adapter base
 │   ├── heartbeat.py       # Autonomous HEARTBEAT loop
@@ -212,7 +214,8 @@ cordbeat/
 │   ├── discord_adapter.py # Discord bot adapter
 │   ├── telegram_adapter.py# Telegram bot adapter
 │   └── adapter_runner.py  # Standalone adapter launcher
-├── tests/                 # Test suite (81 tests)
+├── tests/                 # Test suite (215+ tests)
+├── docs/                  # Design & architecture documentation
 ├── Dockerfile             # Core container image
 ├── Dockerfile.adapter     # Adapter container image
 ├── docker-compose.yml     # Full stack deployment
@@ -233,11 +236,17 @@ See the [docs/](docs/) directory for detailed design and architecture documentat
 
 CordBeat is in early design stage. Contributions, ideas, and feedback are welcome!
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and
+pull request guidelines.
+
+Please note that this project follows a [Code of Conduct](CODE_OF_CONDUCT.md).
+
+---
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for our security policy, skill execution risks,
+and how to report vulnerabilities.
 
 ---
 

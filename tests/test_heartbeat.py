@@ -568,3 +568,173 @@ class TestMemoryConsolidation:
         stats = await memory.decay_and_archive_memories()
         assert stats["decayed"] == 0
         assert stats["archived"] == 0
+
+
+# ── Lifecycle ─────────────────────────────────────────────────────────
+
+
+class TestLifecycle:
+    async def test_start_and_stop(
+        self,
+        heartbeat: HeartbeatLoop,
+    ) -> None:
+        """start() creates a task, stop() cancels it."""
+        await heartbeat.start()
+        assert heartbeat._task is not None
+        assert heartbeat._running is True
+
+        await heartbeat.stop()
+        assert heartbeat._running is False
+
+    async def test_stop_without_start(
+        self,
+        heartbeat: HeartbeatLoop,
+    ) -> None:
+        """stop() before start() should not crash."""
+        await heartbeat.stop()
+
+
+# ── Global context: elapsed time ──────────────────────────────────────
+
+
+class TestBuildGlobalContextElapsed:
+    def test_user_with_last_talked_at_today(
+        self,
+        heartbeat: HeartbeatLoop,
+    ) -> None:
+        from datetime import datetime
+
+        users = [
+            UserSummary(
+                user_id="u1",
+                display_name="Alice",
+                last_topic="",
+                emotional_tone="",
+                attention_score=0.5,
+                last_talked_at=datetime.now(),
+            ),
+        ]
+        ctx = heartbeat._build_global_context(users)
+        assert "(today)" in ctx
+
+    def test_user_with_last_talked_at_days_ago(
+        self,
+        heartbeat: HeartbeatLoop,
+    ) -> None:
+        from datetime import datetime, timedelta
+
+        users = [
+            UserSummary(
+                user_id="u1",
+                display_name="Bob",
+                last_topic="",
+                emotional_tone="",
+                attention_score=0.5,
+                last_talked_at=datetime.now() - timedelta(days=3),
+            ),
+        ]
+        ctx = heartbeat._build_global_context(users)
+        assert "(3d ago)" in ctx
+
+
+# ── Skill execution in heartbeat ─────────────────────────────────────
+
+
+class TestSkillExecution:
+    async def test_safe_skill_executes(
+        self,
+        heartbeat: HeartbeatLoop,
+        skills: SkillRegistry,
+    ) -> None:
+        """Safe enabled skill runs successfully."""
+        from types import SimpleNamespace
+
+        module = SimpleNamespace(execute=lambda **kw: {"result": "done"})
+        meta = SkillMeta(
+            name="safe_skill",
+            description="Safe",
+            usage="",
+            safety_level=SafetyLevel.SAFE,
+            enabled=True,
+        )
+        skills._skills["safe_skill"] = Skill(meta=meta, module=module)
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="safe_skill",
+            skill_params={},
+        )
+        # Should not raise
+        await heartbeat._execute_decision(decision)
+
+    async def test_skill_execution_failure_handled(
+        self,
+        heartbeat: HeartbeatLoop,
+        skills: SkillRegistry,
+    ) -> None:
+        """Skill that raises is caught and logged."""
+        from types import SimpleNamespace
+
+        def bad_execute(**kw: object) -> None:
+            msg = "skill error"
+            raise RuntimeError(msg)
+
+        module = SimpleNamespace(execute=bad_execute)
+        meta = SkillMeta(
+            name="bad_skill",
+            description="Broken",
+            usage="",
+            safety_level=SafetyLevel.SAFE,
+            enabled=True,
+        )
+        skills._skills["bad_skill"] = Skill(meta=meta, module=module)
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="bad_skill",
+            skill_params={},
+        )
+        # Should not raise
+        await heartbeat._execute_decision(decision)
+
+
+# ── Sleep phase error handling ────────────────────────────────────────
+
+
+class TestSleepPhaseErrors:
+    async def test_diary_error_does_not_stop_sleep(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """If diary generation fails for one user, sleep continues."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.add_message("u1", "user", "hi", "discord")
+
+        mock_ai.generate = AsyncMock(side_effect=RuntimeError("AI down"))
+        # Should not raise — error is logged and skipped
+        await heartbeat._run_sleep_phase()
+
+    async def test_decay_error_does_not_stop_sleep(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """If decay_and_archive fails, sleep continues."""
+        memory.decay_and_archive_memories = AsyncMock(
+            side_effect=RuntimeError("DB error")
+        )
+        # Should not raise
+        await heartbeat._run_sleep_phase()
+
+    async def test_trim_error_does_not_stop_sleep(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """If trim_old_messages fails, sleep continues."""
+        await memory.get_or_create_user("u1", "Alice")
+        memory.trim_old_messages = AsyncMock(side_effect=RuntimeError("DB error"))
+        # Should not raise
+        await heartbeat._run_sleep_phase()

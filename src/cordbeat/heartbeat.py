@@ -17,6 +17,7 @@ from cordbeat.models import (
     HeartbeatAction,
     HeartbeatDecision,
     MessageType,
+    SafetyLevel,
     UserSummary,
 )
 from cordbeat.skills import SkillRegistry
@@ -292,6 +293,25 @@ class HeartbeatLoop:
         skill = self._skills.get(decision.skill_name)
         if skill is None:
             logger.warning("Unknown skill: %s", decision.skill_name)
+            return
+
+        if not skill.meta.enabled:
+            logger.warning("Skill '%s' is disabled, skipping", decision.skill_name)
+            return
+
+        # Block dangerous skills from autonomous execution
+        if skill.meta.safety_level == SafetyLevel.DANGEROUS:
+            logger.warning(
+                "Skill '%s' is dangerous, blocked from HEARTBEAT execution",
+                decision.skill_name,
+            )
+            return
+
+        if skill.meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION:
+            logger.info(
+                "Skill '%s' requires confirmation, skipping autonomous run",
+                decision.skill_name,
+            )
             return
 
         try:

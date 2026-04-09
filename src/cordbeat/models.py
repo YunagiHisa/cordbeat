@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, StrEnum
+from pathlib import Path
 from typing import Any
 
 # ── Emotions ──────────────────────────────────────────────────────────
@@ -130,6 +131,16 @@ class SkillMeta:
     network: bool = False
     filesystem: bool = False
     enabled: bool = True
+
+
+@dataclass
+class SkillContext:
+    """Runtime permissions passed to skill execute() functions."""
+
+    sandbox: bool = False
+    network: bool = False
+    filesystem: bool = False
+    work_dir: Path | None = None
 
 
 # ── MEMORY ────────────────────────────────────────────────────────────

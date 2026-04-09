@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 
 from cordbeat.ai_backend import AIBackend
@@ -14,6 +15,16 @@ from cordbeat.skills import SkillRegistry
 from cordbeat.soul import Soul
 
 logger = logging.getLogger(__name__)
+
+# Strip control characters that could manipulate prompt structure
+_SANITIZE_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+_MAX_USER_INPUT_LEN = 2000
+
+
+def _sanitize_user_input(text: str) -> str:
+    """Remove control characters and truncate user input for safe prompt use."""
+    return _SANITIZE_RE.sub("", text)[:_MAX_USER_INPUT_LEN]
+
 
 _EMOTION_INFERENCE_PROMPT = """\
 Based on this conversation exchange, what emotion should the AI feel?
@@ -105,22 +116,25 @@ class CoreEngine:
             "Keep your response concise."
         )
 
-        context_parts = [f"User: {user.display_name}"]
+        context_parts = [f"User: {_sanitize_user_input(user.display_name)}"]
         if profile:
-            context_parts.append(
-                f"Known info: {', '.join(f'{k}={v}' for k, v in profile.items())}"
+            sanitized = ", ".join(
+                f"{k}={_sanitize_user_input(str(v))}" for k, v in profile.items()
             )
+            context_parts.append(f"Known info: {sanitized}")
 
         # Append conversation history
         if history:
             context_parts.append("\nConversation history:")
             for msg in history:
                 prefix = "User" if msg["role"] == "user" else soul_snap["name"]
-                context_parts.append(f"  {prefix}: {msg['content']}")
+                sanitized = _sanitize_user_input(msg["content"])
+                context_parts.append(f"  {prefix}: {sanitized}")
 
         context = "\n".join(context_parts)
 
-        prompt = f"{context}\n\nUser says: {message.content}"
+        safe_content = _sanitize_user_input(message.content)
+        prompt = f"{context}\n\nUser says: {safe_content}"
 
         # Generate response
         try:

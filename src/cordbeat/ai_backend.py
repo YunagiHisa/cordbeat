@@ -7,6 +7,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
+import httpx
+
 from cordbeat.config import AIBackendConfig
 
 logger = logging.getLogger(__name__)
@@ -24,6 +26,9 @@ class AIBackend(ABC):
         max_tokens: int = 1024,
     ) -> str:
         """Generate a text completion."""
+
+    async def aclose(self) -> None:
+        """Close underlying resources. Subclasses may override."""
 
     async def generate_json(
         self,
@@ -52,6 +57,10 @@ class OllamaBackend(AIBackend):
         self._base_url = config.base_url.rstrip("/")
         self._model = config.model
         self._options = config.options
+        self._client = httpx.AsyncClient(timeout=120.0)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     async def generate(
         self,
@@ -60,8 +69,6 @@ class OllamaBackend(AIBackend):
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ) -> str:
-        import httpx
-
         payload: dict[str, Any] = {
             "model": self._model,
             "prompt": prompt,
@@ -75,13 +82,12 @@ class OllamaBackend(AIBackend):
         if system:
             payload["system"] = system
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                f"{self._base_url}/api/generate",
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        resp = await self._client.post(
+            f"{self._base_url}/api/generate",
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
         logger.debug("Ollama raw keys: %s", list(data.keys()))
         logger.debug("Ollama response: %.200s", data.get("response", ""))
         return str(data.get("response", ""))
@@ -94,6 +100,13 @@ class OpenAICompatBackend(AIBackend):
         self._base_url = config.base_url.rstrip("/")
         self._model = config.model
         self._api_key = config.options.get("api_key", "")
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        self._client = httpx.AsyncClient(timeout=120.0, headers=headers)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     async def generate(
         self,
@@ -102,30 +115,22 @@ class OpenAICompatBackend(AIBackend):
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ) -> str:
-        import httpx
-
         messages: list[dict[str, str]] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
-
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                f"{self._base_url}/v1/chat/completions",
-                headers=headers,
-                json={
-                    "model": self._model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        resp = await self._client.post(
+            f"{self._base_url}/v1/chat/completions",
+            json={
+                "model": self._model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
         try:
             return str(data["choices"][0]["message"]["content"])
         except (KeyError, IndexError) as exc:

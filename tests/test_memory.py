@@ -193,3 +193,21 @@ class TestFlashbulbMemory:
         results = await memory.search_episodic("u1", "joyful moment")
         assert len(results) >= 1
         assert results[0]["metadata"]["emotion"] == "joy"
+
+
+class TestResolvePlatformUser:
+    async def test_resolve_linked_user(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+        result = await memory.resolve_platform_user("u1", "discord")
+        assert result == "discord_123"
+
+    async def test_resolve_unknown_user(self, memory: MemoryStore) -> None:
+        result = await memory.resolve_platform_user("no_user", "discord")
+        assert result is None
+
+    async def test_resolve_wrong_adapter(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+        result = await memory.resolve_platform_user("u1", "telegram")
+        assert result is None

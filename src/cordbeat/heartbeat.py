@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import UTC, datetime, time, timezone
+import zoneinfo
+from datetime import UTC, datetime, time, tzinfo
 
 from cordbeat.ai_backend import AIBackend
 from cordbeat.config import HeartbeatConfig
@@ -67,7 +68,7 @@ def _parse_time(s: str) -> time:
     return time(hour=int(parts[0]), minute=int(parts[1]))
 
 
-def _in_quiet_hours(quiet_start: str, quiet_end: str, tz: timezone = UTC) -> bool:
+def _in_quiet_hours(quiet_start: str, quiet_end: str, tz: tzinfo = UTC) -> bool:
     now = datetime.now(tz=tz).time()
     start = _parse_time(quiet_start)
     end = _parse_time(quiet_end)
@@ -135,7 +136,11 @@ class HeartbeatLoop:
     async def _tick(self) -> int:
         """Execute one HEARTBEAT cycle. Returns next interval in minutes."""
         quiet_start, quiet_end = self._soul.quiet_hours
-        if _in_quiet_hours(quiet_start, quiet_end):
+        try:
+            tz = zoneinfo.ZoneInfo(self._config.timezone)
+        except (KeyError, zoneinfo.ZoneInfoNotFoundError, Exception):
+            tz = UTC  # type: ignore[assignment]
+        if _in_quiet_hours(quiet_start, quiet_end, tz=tz):
             if not self._sleep_done_today:
                 await self._run_sleep_phase()
                 self._sleep_done_today = True
@@ -251,10 +256,22 @@ class HeartbeatLoop:
             logger.warning("HEARTBEAT message missing target")
             return
 
+        platform_user_id = await self._memory.resolve_platform_user(
+            decision.target_user_id,
+            decision.target_adapter_id,
+        )
+        if not platform_user_id:
+            logger.warning(
+                "Cannot resolve platform_user_id for user=%s adapter=%s",
+                decision.target_user_id,
+                decision.target_adapter_id,
+            )
+            return
+
         message = GatewayMessage(
             type=MessageType.HEARTBEAT_MESSAGE,
             adapter_id=decision.target_adapter_id,
-            platform_user_id="",  # Will be resolved by gateway
+            platform_user_id=platform_user_id,
             content=decision.content,
         )
         await self._gateway.send_to_adapter(

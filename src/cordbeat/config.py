@@ -41,6 +41,8 @@ class MemoryConfig:
     chroma_path: str = "data/chroma"
     decay_rate: float = 0.1
     archive_threshold: float = 0.05
+    conversation_history_limit: int = 20
+    memory_search_results: int = 3
 
 
 @dataclass
@@ -48,6 +50,8 @@ class AIBackendConfig:
     provider: str = "ollama"
     base_url: str = "http://localhost:11434"
     model: str = "llama3"
+    timeout: float = 120.0
+    max_tokens: int = 1024
     options: dict[str, Any] = field(default_factory=dict)
 
 

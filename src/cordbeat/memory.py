@@ -72,306 +72,14 @@ CREATE INDEX IF NOT EXISTS idx_conv_user_time
 """
 
 
-class MemoryStore:
-    """4-layer memory system with SQLite for structured data
-    and ChromaDB for vector-based semantic/episodic memory."""
+# ── Internal: User management ─────────────────────────────────────────
 
-    def __init__(self, config: MemoryConfig) -> None:
-        self._config = config
-        self._db_path = Path(config.sqlite_path)
-        self._chroma_path = Path(config.chroma_path)
-        self._conn: aiosqlite.Connection | None = None
-        self._chroma_client: Any = None
-        self._semantic_collection: Any = None
-        self._episodic_collection: Any = None
 
-    async def initialize(self) -> None:
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = await aiosqlite.connect(str(self._db_path))
-        self._conn.row_factory = aiosqlite.Row
-        await self._conn.executescript(_SCHEMA)
-        await self._conn.commit()
+class _UserStore:
+    """Handles user CRUD and platform link resolution."""
 
-        self._chroma_path.mkdir(parents=True, exist_ok=True)
-        import chromadb  # lazy: heavy dependency, loaded only when needed
-
-        self._chroma_client = await asyncio.to_thread(
-            chromadb.PersistentClient,
-            path=str(self._chroma_path),
-        )
-        self._semantic_collection = await asyncio.to_thread(
-            self._chroma_client.get_or_create_collection,
-            name="semantic_memory",
-        )
-        self._episodic_collection = await asyncio.to_thread(
-            self._chroma_client.get_or_create_collection,
-            name="episodic_memory",
-        )
-        logger.info("Memory store initialized")
-
-    async def close(self) -> None:
-        if self._conn:
-            await self._conn.close()
-            self._conn = None
-
-    @property
-    def _db(self) -> aiosqlite.Connection:
-        if self._conn is None:
-            msg = "MemoryStore not initialized"
-            raise RuntimeError(msg)
-        return self._conn
-
-    # ── Layer 1: Core Profile (SQLite, no forgetting) ─────────────────
-
-    async def set_core_profile(
-        self,
-        user_id: str,
-        key: str,
-        value: str,
-    ) -> None:
-        await self._db.execute(
-            "INSERT OR REPLACE INTO core_profiles (user_id, key, value) "
-            "VALUES (?, ?, ?)",
-            (user_id, key, value),
-        )
-        await self._db.commit()
-
-    async def get_core_profile(self, user_id: str) -> dict[str, str]:
-        cursor = await self._db.execute(
-            "SELECT key, value FROM core_profiles WHERE user_id = ?",
-            (user_id,),
-        )
-        rows = await cursor.fetchall()
-        return {row["key"]: row["value"] for row in rows}
-
-    # ── Layer 2: Semantic Memory (ChromaDB, with forgetting) ──────────
-
-    async def add_semantic_memory(self, entry: MemoryEntry) -> str:
-        entry_id = entry.id or str(uuid.uuid4())
-        metadata = {
-            "user_id": entry.user_id,
-            "trust_level": entry.trust_level.value,
-            "strength": entry.strength,
-            "emotion_weight": entry.emotion_weight,
-            "created_at": entry.created_at.isoformat(),
-            "last_accessed_at": entry.last_accessed_at.isoformat(),
-            **{
-                k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
-                for k, v in entry.metadata.items()
-            },
-        }
-        await asyncio.to_thread(
-            self._semantic_collection.add,
-            ids=[entry_id],
-            documents=[entry.content],
-            metadatas=[metadata],
-        )
-        return entry_id
-
-    async def search_semantic(
-        self,
-        user_id: str,
-        query: str,
-        n_results: int = 5,
-    ) -> list[dict[str, Any]]:
-        results = await asyncio.to_thread(
-            self._semantic_collection.query,
-            query_texts=[query],
-            n_results=n_results,
-            where={"user_id": user_id},
-        )
-        entries = []
-        if results and results["ids"]:
-            for i, doc_id in enumerate(results["ids"][0]):
-                entries.append(
-                    {
-                        "id": doc_id,
-                        "content": results["documents"][0][i],
-                        "metadata": results["metadatas"][0][i],
-                        "distance": results["distances"][0][i]
-                        if results.get("distances")
-                        else None,
-                    }
-                )
-        return entries
-
-    # ── Layer 3: Episodic Memory (ChromaDB, with forgetting) ──────────
-
-    async def add_episodic_memory(self, entry: MemoryEntry) -> str:
-        entry_id = entry.id or str(uuid.uuid4())
-        metadata = {
-            "user_id": entry.user_id,
-            "trust_level": entry.trust_level.value,
-            "strength": entry.strength,
-            "emotion_weight": entry.emotion_weight,
-            "flashbulb": str(entry.metadata.get("flashbulb", False)),
-            "created_at": entry.created_at.isoformat(),
-            "last_accessed_at": entry.last_accessed_at.isoformat(),
-            **{
-                k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
-                for k, v in entry.metadata.items()
-                if k != "flashbulb"
-            },
-        }
-        await asyncio.to_thread(
-            self._episodic_collection.add,
-            ids=[entry_id],
-            documents=[entry.content],
-            metadatas=[metadata],
-        )
-        return entry_id
-
-    async def search_episodic(
-        self,
-        user_id: str,
-        query: str,
-        n_results: int = 5,
-    ) -> list[dict[str, Any]]:
-        results = await asyncio.to_thread(
-            self._episodic_collection.query,
-            query_texts=[query],
-            n_results=n_results,
-            where={"user_id": user_id},
-        )
-        entries = []
-        if results and results["ids"]:
-            for i, doc_id in enumerate(results["ids"][0]):
-                entries.append(
-                    {
-                        "id": doc_id,
-                        "content": results["documents"][0][i],
-                        "metadata": results["metadatas"][0][i],
-                        "distance": results["distances"][0][i]
-                        if results.get("distances")
-                        else None,
-                    }
-                )
-        return entries
-
-    async def add_flashbulb_memory(
-        self,
-        user_id: str,
-        content: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> str:
-        """Create a flashbulb episodic memory — high emotion, no decay.
-
-        Flashbulb memories represent emotionally significant moments
-        that resist forgetting (emotion_weight=1.0, flashbulb=True).
-        """
-        entry = MemoryEntry(
-            id=str(uuid.uuid4()),
-            user_id=user_id,
-            layer=MemoryLayer.EPISODIC,
-            content=content,
-            strength=1.0,
-            emotion_weight=1.0,
-            metadata={"flashbulb": True, **(metadata or {})},
-        )
-        return await self.add_episodic_memory(entry)
-
-    # ── Layer 4: Certain Records (SQLite, no forgetting) ──────────────
-
-    async def add_certain_record(
-        self,
-        user_id: str,
-        content: str,
-        record_type: str = "log",
-        metadata: dict[str, Any] | None = None,
-    ) -> str:
-        record_id = str(uuid.uuid4())
-        await self._db.execute(
-            "INSERT INTO certain_records "
-            "(id, user_id, content, record_type, created_at, metadata) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                record_id,
-                user_id,
-                content,
-                record_type,
-                datetime.now().isoformat(),
-                json.dumps(metadata or {}),
-            ),
-        )
-        await self._db.commit()
-        return record_id
-
-    async def get_certain_records(
-        self,
-        user_id: str,
-        record_type: str | None = None,
-        limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        if record_type:
-            cursor = await self._db.execute(
-                "SELECT * FROM certain_records "
-                "WHERE user_id = ? AND record_type = ? "
-                "ORDER BY created_at DESC LIMIT ?",
-                (user_id, record_type, limit),
-            )
-        else:
-            cursor = await self._db.execute(
-                "SELECT * FROM certain_records "
-                "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
-                (user_id, limit),
-            )
-        rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
-
-    # ── Conversation History ──────────────────────────────────────────
-
-    async def add_message(
-        self,
-        user_id: str,
-        role: str,
-        content: str,
-        adapter_id: str = "",
-    ) -> None:
-        """Store a conversation message (role: 'user' or 'assistant')."""
-        await self._db.execute(
-            "INSERT INTO conversation_messages "
-            "(user_id, role, content, adapter_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (user_id, role, content, adapter_id, datetime.now().isoformat()),
-        )
-        await self._db.commit()
-
-    async def get_recent_messages(
-        self,
-        user_id: str,
-        limit: int = 20,
-    ) -> list[dict[str, str]]:
-        """Return recent messages in chronological order."""
-        cursor = await self._db.execute(
-            "SELECT role, content FROM ("
-            "  SELECT role, content, created_at "
-            "  FROM conversation_messages "
-            "  WHERE user_id = ? "
-            "  ORDER BY created_at DESC LIMIT ?"
-            ") sub ORDER BY created_at ASC",
-            (user_id, limit),
-        )
-        rows = await cursor.fetchall()
-        return [{"role": row["role"], "content": row["content"]} for row in rows]
-
-    async def trim_old_messages(
-        self,
-        user_id: str,
-        keep: int = 100,
-    ) -> int:
-        """Delete oldest messages beyond the keep limit. Returns count deleted."""
-        cursor = await self._db.execute(
-            "DELETE FROM conversation_messages WHERE user_id = ? "
-            "AND id NOT IN ("
-            "  SELECT id FROM conversation_messages "
-            "  WHERE user_id = ? ORDER BY created_at DESC LIMIT ?"
-            ")",
-            (user_id, user_id, keep),
-        )
-        await self._db.commit()
-        return cursor.rowcount
-
-    # ── User management ───────────────────────────────────────────────
+    def __init__(self, db: aiosqlite.Connection) -> None:
+        self._db = db
 
     async def get_or_create_user(
         self,
@@ -478,49 +186,101 @@ class MemoryStore:
         row = await cursor.fetchone()
         return row["platform_user_id"] if row else None
 
-    # ── Forgetting (Ebbinghaus decay) ─────────────────────────────────
 
-    def calculate_strength(
-        self,
-        base_strength: float,
-        elapsed_days: float,
-        emotion_weight: float = 0.0,
-    ) -> float:
-        """Apply Ebbinghaus-inspired forgetting curve.
+# ── Internal: Vector memory (semantic + episodic) ─────────────────────
 
-        strength = base_strength * (1 / (1 + decay_rate * elapsed_days))
-        Emotional memories decay slower.
-        """
-        effective_decay = self._config.decay_rate * (1.0 - emotion_weight * 0.5)
-        return base_strength * (1.0 / (1.0 + effective_decay * elapsed_days))
 
-    # ── Sleep Phase (memory consolidation) ────────────────────────────
+def _build_memory_metadata(entry: MemoryEntry) -> dict[str, Any]:
+    """Build ChromaDB-compatible metadata dict from a MemoryEntry."""
+    metadata: dict[str, Any] = {
+        "user_id": entry.user_id,
+        "trust_level": entry.trust_level.value,
+        "strength": entry.strength,
+        "emotion_weight": entry.emotion_weight,
+        "created_at": entry.created_at.isoformat(),
+        "last_accessed_at": entry.last_accessed_at.isoformat(),
+    }
+    for k, v in entry.metadata.items():
+        if k == "flashbulb":
+            metadata["flashbulb"] = str(v)
+        elif isinstance(v, (dict, list)):
+            metadata[k] = json.dumps(v)
+        else:
+            metadata[k] = str(v)
+    return metadata
 
-    async def get_todays_messages(
+
+class _VectorMemory:
+    """Wraps ChromaDB collections for semantic and episodic memory."""
+
+    def __init__(self, semantic: Any, episodic: Any) -> None:
+        self._semantic = semantic
+        self._episodic = episodic
+
+    async def add_semantic(self, entry: MemoryEntry) -> str:
+        entry_id = entry.id or str(uuid.uuid4())
+        metadata = _build_memory_metadata(entry)
+        await asyncio.to_thread(
+            self._semantic.add,
+            ids=[entry_id],
+            documents=[entry.content],
+            metadatas=[metadata],
+        )
+        return entry_id
+
+    async def search_semantic(
         self,
         user_id: str,
-    ) -> list[dict[str, str]]:
-        """Return all messages from today for diary generation."""
-        today = datetime.now().strftime("%Y-%m-%d")
-        cursor = await self._db.execute(
-            "SELECT role, content FROM conversation_messages "
-            "WHERE user_id = ? AND created_at >= ? "
-            "ORDER BY created_at ASC",
-            (user_id, today),
+        query: str,
+        n_results: int = 5,
+    ) -> list[dict[str, Any]]:
+        return await self._query_collection(self._semantic, user_id, query, n_results)
+
+    async def add_episodic(self, entry: MemoryEntry) -> str:
+        entry_id = entry.id or str(uuid.uuid4())
+        metadata = _build_memory_metadata(entry)
+        await asyncio.to_thread(
+            self._episodic.add,
+            ids=[entry_id],
+            documents=[entry.content],
+            metadatas=[metadata],
         )
-        rows = await cursor.fetchall()
-        return [{"role": row["role"], "content": row["content"]} for row in rows]
+        return entry_id
 
-    async def decay_and_archive_memories(self) -> dict[str, int]:
-        """Apply forgetting curve to all semantic/episodic memories.
+    async def search_episodic(
+        self,
+        user_id: str,
+        query: str,
+        n_results: int = 5,
+    ) -> list[dict[str, Any]]:
+        return await self._query_collection(self._episodic, user_id, query, n_results)
 
-        Returns a dict with counts: {"decayed": N, "archived": N}.
-        """
-        threshold = self._config.archive_threshold
+    async def add_flashbulb(
+        self,
+        user_id: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        entry = MemoryEntry(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            layer=MemoryLayer.EPISODIC,
+            content=content,
+            strength=1.0,
+            emotion_weight=1.0,
+            metadata={"flashbulb": True, **(metadata or {})},
+        )
+        return await self.add_episodic(entry)
+
+    async def decay_and_archive(
+        self,
+        config: MemoryConfig,
+    ) -> dict[str, int]:
+        threshold = config.archive_threshold
         now = datetime.now()
         stats = {"decayed": 0, "archived": 0}
 
-        for collection in (self._semantic_collection, self._episodic_collection):
+        for collection in (self._semantic, self._episodic):
             all_data = await asyncio.to_thread(collection.get, include=["metadatas"])
             if not all_data or not all_data.get("ids"):
                 continue
@@ -529,7 +289,6 @@ class MemoryStore:
             for i, entry_id in enumerate(all_data["ids"]):
                 meta = all_data["metadatas"][i]
 
-                # Flashbulb memories are protected from decay
                 if str(meta.get("flashbulb", "False")).lower() == "true":
                     continue
 
@@ -542,8 +301,9 @@ class MemoryStore:
                 base_strength = float(meta.get("strength", 1.0))
                 emotion_weight = float(meta.get("emotion_weight", 0.0))
 
-                new_strength = self.calculate_strength(
-                    base_strength, elapsed_days, emotion_weight
+                effective_decay = config.decay_rate * (1.0 - emotion_weight * 0.5)
+                new_strength = base_strength * (
+                    1.0 / (1.0 + effective_decay * elapsed_days)
                 )
 
                 if new_strength < threshold:
@@ -556,3 +316,385 @@ class MemoryStore:
                 await asyncio.to_thread(collection.delete, ids=ids_to_delete)
 
         return stats
+
+    @staticmethod
+    async def _query_collection(
+        collection: Any,
+        user_id: str,
+        query: str,
+        n_results: int,
+    ) -> list[dict[str, Any]]:
+        results = await asyncio.to_thread(
+            collection.query,
+            query_texts=[query],
+            n_results=n_results,
+            where={"user_id": user_id},
+        )
+        entries: list[dict[str, Any]] = []
+        if results and results["ids"]:
+            for i, doc_id in enumerate(results["ids"][0]):
+                entries.append(
+                    {
+                        "id": doc_id,
+                        "content": results["documents"][0][i],
+                        "metadata": results["metadatas"][0][i],
+                        "distance": results["distances"][0][i]
+                        if results.get("distances")
+                        else None,
+                    }
+                )
+        return entries
+
+
+# ── Internal: Conversation history ────────────────────────────────────
+
+
+class _ConversationStore:
+    """SQLite-backed conversation message storage."""
+
+    def __init__(self, db: aiosqlite.Connection) -> None:
+        self._db = db
+
+    async def add_message(
+        self,
+        user_id: str,
+        role: str,
+        content: str,
+        adapter_id: str = "",
+    ) -> None:
+        await self._db.execute(
+            "INSERT INTO conversation_messages "
+            "(user_id, role, content, adapter_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, role, content, adapter_id, datetime.now().isoformat()),
+        )
+        await self._db.commit()
+
+    async def get_recent_messages(
+        self,
+        user_id: str,
+        limit: int = 20,
+    ) -> list[dict[str, str]]:
+        cursor = await self._db.execute(
+            "SELECT role, content FROM ("
+            "  SELECT role, content, created_at "
+            "  FROM conversation_messages "
+            "  WHERE user_id = ? "
+            "  ORDER BY created_at DESC LIMIT ?"
+            ") sub ORDER BY created_at ASC",
+            (user_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [{"role": row["role"], "content": row["content"]} for row in rows]
+
+    async def get_todays_messages(
+        self,
+        user_id: str,
+    ) -> list[dict[str, str]]:
+        today = datetime.now().strftime("%Y-%m-%d")
+        cursor = await self._db.execute(
+            "SELECT role, content FROM conversation_messages "
+            "WHERE user_id = ? AND created_at >= ? "
+            "ORDER BY created_at ASC",
+            (user_id, today),
+        )
+        rows = await cursor.fetchall()
+        return [{"role": row["role"], "content": row["content"]} for row in rows]
+
+    async def trim_old_messages(
+        self,
+        user_id: str,
+        keep: int = 100,
+    ) -> int:
+        cursor = await self._db.execute(
+            "DELETE FROM conversation_messages WHERE user_id = ? "
+            "AND id NOT IN ("
+            "  SELECT id FROM conversation_messages "
+            "  WHERE user_id = ? ORDER BY created_at DESC LIMIT ?"
+            ")",
+            (user_id, user_id, keep),
+        )
+        await self._db.commit()
+        return cursor.rowcount
+
+
+# ── Internal: Certain records ─────────────────────────────────────────
+
+
+class _RecordStore:
+    """SQLite-backed immutable records (core profiles + certain records)."""
+
+    def __init__(self, db: aiosqlite.Connection) -> None:
+        self._db = db
+
+    async def set_core_profile(
+        self,
+        user_id: str,
+        key: str,
+        value: str,
+    ) -> None:
+        await self._db.execute(
+            "INSERT OR REPLACE INTO core_profiles (user_id, key, value) "
+            "VALUES (?, ?, ?)",
+            (user_id, key, value),
+        )
+        await self._db.commit()
+
+    async def get_core_profile(self, user_id: str) -> dict[str, str]:
+        cursor = await self._db.execute(
+            "SELECT key, value FROM core_profiles WHERE user_id = ?",
+            (user_id,),
+        )
+        rows = await cursor.fetchall()
+        return {row["key"]: row["value"] for row in rows}
+
+    async def add_certain_record(
+        self,
+        user_id: str,
+        content: str,
+        record_type: str = "log",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        record_id = str(uuid.uuid4())
+        await self._db.execute(
+            "INSERT INTO certain_records "
+            "(id, user_id, content, record_type, created_at, metadata) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                record_id,
+                user_id,
+                content,
+                record_type,
+                datetime.now().isoformat(),
+                json.dumps(metadata or {}),
+            ),
+        )
+        await self._db.commit()
+        return record_id
+
+    async def get_certain_records(
+        self,
+        user_id: str,
+        record_type: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if record_type:
+            cursor = await self._db.execute(
+                "SELECT * FROM certain_records "
+                "WHERE user_id = ? AND record_type = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (user_id, record_type, limit),
+            )
+        else:
+            cursor = await self._db.execute(
+                "SELECT * FROM certain_records "
+                "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                (user_id, limit),
+            )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+# ── Facade ────────────────────────────────────────────────────────────
+
+
+class MemoryStore:
+    """Facade over the 4-layer memory system.
+
+    Delegates to internal stores:
+    - ``_UserStore`` — user CRUD and platform links
+    - ``_RecordStore`` — core profiles and certain records
+    - ``_ConversationStore`` — conversation history
+    - ``_VectorMemory`` — semantic/episodic ChromaDB collections
+    """
+
+    def __init__(self, config: MemoryConfig) -> None:
+        self._config = config
+        self._db_path = Path(config.sqlite_path)
+        self._chroma_path = Path(config.chroma_path)
+        self._conn: aiosqlite.Connection | None = None
+        self._users: _UserStore | None = None
+        self._records: _RecordStore | None = None
+        self._conversations: _ConversationStore | None = None
+        self._vectors: _VectorMemory | None = None
+
+    async def initialize(self) -> None:
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = await aiosqlite.connect(str(self._db_path))
+        self._conn.row_factory = aiosqlite.Row
+        await self._conn.executescript(_SCHEMA)
+        await self._conn.commit()
+
+        self._users = _UserStore(self._conn)
+        self._records = _RecordStore(self._conn)
+        self._conversations = _ConversationStore(self._conn)
+
+        self._chroma_path.mkdir(parents=True, exist_ok=True)
+        import chromadb
+
+        client = await asyncio.to_thread(
+            chromadb.PersistentClient,
+            path=str(self._chroma_path),
+        )
+        semantic = await asyncio.to_thread(
+            client.get_or_create_collection,
+            name="semantic_memory",
+        )
+        episodic = await asyncio.to_thread(
+            client.get_or_create_collection,
+            name="episodic_memory",
+        )
+        self._vectors = _VectorMemory(semantic, episodic)
+        logger.info("Memory store initialized")
+
+    async def close(self) -> None:
+        if self._conn:
+            await self._conn.close()
+            self._conn = None
+
+    # ── User management (delegates to _UserStore) ─────────────────
+
+    async def get_or_create_user(
+        self,
+        user_id: str,
+        display_name: str,
+    ) -> UserSummary:
+        return await self._users.get_or_create_user(user_id, display_name)  # type: ignore[union-attr]
+
+    async def update_user_summary(self, summary: UserSummary) -> None:
+        await self._users.update_user_summary(summary)  # type: ignore[union-attr]
+
+    async def get_all_user_summaries(self) -> list[UserSummary]:
+        return await self._users.get_all_user_summaries()  # type: ignore[union-attr]
+
+    async def link_platform(
+        self,
+        user_id: str,
+        adapter_id: str,
+        platform_user_id: str,
+    ) -> None:
+        await self._users.link_platform(user_id, adapter_id, platform_user_id)  # type: ignore[union-attr]
+
+    async def resolve_user(
+        self,
+        adapter_id: str,
+        platform_user_id: str,
+    ) -> str | None:
+        return await self._users.resolve_user(adapter_id, platform_user_id)  # type: ignore[union-attr]
+
+    async def resolve_platform_user(
+        self,
+        user_id: str,
+        adapter_id: str,
+    ) -> str | None:
+        return await self._users.resolve_platform_user(user_id, adapter_id)  # type: ignore[union-attr]
+
+    # ── Core profiles + certain records (delegates to _RecordStore) ──
+
+    async def set_core_profile(
+        self,
+        user_id: str,
+        key: str,
+        value: str,
+    ) -> None:
+        await self._records.set_core_profile(user_id, key, value)  # type: ignore[union-attr]
+
+    async def get_core_profile(self, user_id: str) -> dict[str, str]:
+        return await self._records.get_core_profile(user_id)  # type: ignore[union-attr]
+
+    async def add_certain_record(
+        self,
+        user_id: str,
+        content: str,
+        record_type: str = "log",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        return await self._records.add_certain_record(  # type: ignore[union-attr]
+            user_id, content, record_type, metadata
+        )
+
+    async def get_certain_records(
+        self,
+        user_id: str,
+        record_type: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        return await self._records.get_certain_records(user_id, record_type, limit)  # type: ignore[union-attr]
+
+    # ── Conversation history (delegates to _ConversationStore) ────
+
+    async def add_message(
+        self,
+        user_id: str,
+        role: str,
+        content: str,
+        adapter_id: str = "",
+    ) -> None:
+        await self._conversations.add_message(user_id, role, content, adapter_id)  # type: ignore[union-attr]
+
+    async def get_recent_messages(
+        self,
+        user_id: str,
+        limit: int = 20,
+    ) -> list[dict[str, str]]:
+        return await self._conversations.get_recent_messages(user_id, limit)  # type: ignore[union-attr]
+
+    async def get_todays_messages(
+        self,
+        user_id: str,
+    ) -> list[dict[str, str]]:
+        return await self._conversations.get_todays_messages(user_id)  # type: ignore[union-attr]
+
+    async def trim_old_messages(
+        self,
+        user_id: str,
+        keep: int = 100,
+    ) -> int:
+        return await self._conversations.trim_old_messages(user_id, keep)  # type: ignore[union-attr]
+
+    # ── Semantic / episodic memory (delegates to _VectorMemory) ───
+
+    async def add_semantic_memory(self, entry: MemoryEntry) -> str:
+        return await self._vectors.add_semantic(entry)  # type: ignore[union-attr]
+
+    async def search_semantic(
+        self,
+        user_id: str,
+        query: str,
+        n_results: int = 5,
+    ) -> list[dict[str, Any]]:
+        return await self._vectors.search_semantic(user_id, query, n_results)  # type: ignore[union-attr]
+
+    async def add_episodic_memory(self, entry: MemoryEntry) -> str:
+        return await self._vectors.add_episodic(entry)  # type: ignore[union-attr]
+
+    async def search_episodic(
+        self,
+        user_id: str,
+        query: str,
+        n_results: int = 5,
+    ) -> list[dict[str, Any]]:
+        return await self._vectors.search_episodic(user_id, query, n_results)  # type: ignore[union-attr]
+
+    async def add_flashbulb_memory(
+        self,
+        user_id: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        return await self._vectors.add_flashbulb(user_id, content, metadata)  # type: ignore[union-attr]
+
+    # ── Forgetting (Ebbinghaus decay) ─────────────────────────────
+
+    def calculate_strength(
+        self,
+        base_strength: float,
+        elapsed_days: float,
+        emotion_weight: float = 0.0,
+    ) -> float:
+        """Apply Ebbinghaus-inspired forgetting curve."""
+        effective_decay = self._config.decay_rate * (1.0 - emotion_weight * 0.5)
+        return base_strength * (1.0 / (1.0 + effective_decay * elapsed_days))
+
+    async def decay_and_archive_memories(self) -> dict[str, int]:
+        return await self._vectors.decay_and_archive(self._config)  # type: ignore[union-attr]

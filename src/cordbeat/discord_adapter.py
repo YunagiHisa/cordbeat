@@ -8,18 +8,18 @@ import logging
 from datetime import datetime
 from typing import Any
 
-import websockets
-
 from cordbeat.config import AdapterConfig
+from cordbeat.gateway import RetryableConnection
 
 logger = logging.getLogger(__name__)
 
 ADAPTER_ID = "discord"
-_MAX_BACKOFF = 60
 
 
-class DiscordAdapter:
+class DiscordAdapter(RetryableConnection):
     """Discord bot that forwards messages to CordBeat Core via WebSocket."""
+
+    adapter_id = ADAPTER_ID
 
     def __init__(self, config: AdapterConfig) -> None:
         self._config = config
@@ -76,40 +76,8 @@ class DiscordAdapter:
         if self._bot:
             await self._bot.close()
 
-    async def _connect_to_core(self) -> None:
-        backoff = 1
-        while self._running:
-            try:
-                self._ws = await websockets.connect(self._ws_url)
-                await self._ws.send(json.dumps({"adapter_id": ADAPTER_ID}))
-                ack = json.loads(await self._ws.recv())
-                logger.info("Connected to Core: %s", ack.get("content", "OK"))
-                backoff = 1
-
-                # Listen for messages from Core
-                await self._listen_core()
-            except Exception:
-                if not self._running:
-                    break
-                logger.warning(
-                    "Core connection failed, retrying in %ds...",
-                    backoff,
-                )
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, _MAX_BACKOFF)
-
-    async def _listen_core(self) -> None:
-        try:
-            async for raw in self._ws:
-                data = json.loads(raw)
-                msg_type = data.get("type", "")
-                content = data.get("content", "")
-                platform_user_id = data.get("platform_user_id", "")
-
-                if msg_type in ("message", "heartbeat_message", "error"):
-                    await self._send_to_discord(platform_user_id, content)
-        except websockets.ConnectionClosed:
-            logger.info("Core connection closed")
+    async def _dispatch_core_message(self, platform_user_id: str, content: str) -> None:
+        await self._send_to_discord(platform_user_id, content)
 
     async def _forward_to_core(self, message: Any) -> None:
         if self._ws is None:

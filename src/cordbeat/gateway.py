@@ -17,6 +17,8 @@ from cordbeat.models import GatewayMessage, MessageType
 
 logger = logging.getLogger(__name__)
 
+_MAX_BACKOFF = 60
+
 
 class BaseAdapter(ABC):
     """Base class for platform adapters (Discord, Telegram, CLI, etc.)."""
@@ -43,6 +45,56 @@ class BaseAdapter(ABC):
     @abstractmethod
     async def on_disconnect(self) -> None:
         """Handle disconnection from Core."""
+
+
+class RetryableConnection:
+    """Mixin / helper for adapters that connect to Core via WebSocket.
+
+    Handles exponential-backoff reconnection and incoming message dispatch.
+    Subclasses implement ``_dispatch_core_message`` to handle inbound data.
+    """
+
+    _ws: Any
+    _running: bool
+    _ws_url: str
+    adapter_id: str
+
+    async def _connect_to_core(self) -> None:
+        """Maintain a persistent WebSocket connection to Core with retry."""
+        backoff = 1
+        while self._running:
+            try:
+                self._ws = await websockets.connect(self._ws_url)
+                await self._ws.send(json.dumps({"adapter_id": self.adapter_id}))
+                ack = json.loads(await self._ws.recv())
+                logger.info("Connected to Core: %s", ack.get("content", "OK"))
+                backoff = 1
+                await self._listen_core()
+            except Exception:
+                if not self._running:
+                    break
+                logger.warning(
+                    "Core connection failed, retrying in %ds...",
+                    backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, _MAX_BACKOFF)
+
+    async def _listen_core(self) -> None:
+        try:
+            async for raw in self._ws:
+                data = json.loads(raw)
+                msg_type = data.get("type", "")
+                content = data.get("content", "")
+                platform_user_id = data.get("platform_user_id", "")
+                if msg_type in ("message", "heartbeat_message", "error"):
+                    await self._dispatch_core_message(platform_user_id, content)
+        except websockets.ConnectionClosed:
+            logger.info("Core connection closed")
+
+    async def _dispatch_core_message(self, platform_user_id: str, content: str) -> None:
+        """Override in subclass to route messages to the platform."""
+        raise NotImplementedError
 
 
 # ── Message queue ─────────────────────────────────────────────────────

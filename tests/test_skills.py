@@ -255,3 +255,113 @@ class TestSkillSandbox:
         result = await skill.execute({})
         assert result["network"] is True
         assert result["filesystem"] is False
+
+
+class TestSkillDescriptions:
+    def test_get_descriptions_for_prompt(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "greet", safety="safe")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        desc = registry.get_skill_descriptions_for_prompt()
+        assert "greet" in desc
+        assert "safe" in desc
+
+    def test_no_skills_available(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        desc = registry.get_skill_descriptions_for_prompt()
+        assert desc == "(no skills available)"
+
+    def test_disabled_skills_excluded(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "off", enabled=False)
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        desc = registry.get_skill_descriptions_for_prompt()
+        assert desc == "(no skills available)"
+
+
+class TestSkillExecution:
+    async def test_skill_no_execute_function(self, tmp_path: Path) -> None:
+        """Skill module without execute() raises RuntimeError."""
+        code = "def nope():\n    pass\n"
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "broken", main_code=code)
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("broken")
+        assert skill is not None
+        with pytest.raises(RuntimeError, match="no execute"):
+            await skill.execute({})
+
+    async def test_async_skill(self, tmp_path: Path) -> None:
+        """Async execute functions should be awaited."""
+        code = "async def execute(**kwargs):\n    return {'async': True}\n"
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "async_skill", main_code=code)
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("async_skill")
+        assert skill is not None
+        result = await skill.execute({})
+        assert result == {"async": True}
+
+    async def test_non_dict_result_wrapped(self, tmp_path: Path) -> None:
+        """Non-dict return values are wrapped in {'result': value}."""
+        code = "def execute(**kwargs):\n    return 42\n"
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "num_skill", main_code=code)
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("num_skill")
+        assert skill is not None
+        result = await skill.execute({})
+        assert result == {"result": 42}
+
+    async def test_sandboxed_async_skill(self, tmp_path: Path) -> None:
+        """Async sandboxed skill is properly awaited."""
+        code = "async def execute(**kwargs):\n    return {'sandboxed_async': True}\n"
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "sb_async", sandbox=True, main_code=code)
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("sb_async")
+        assert skill is not None
+        result = await skill.execute({})
+        assert result == {"sandboxed_async": True}
+
+    async def test_sandboxed_non_dict_wrapped(self, tmp_path: Path) -> None:
+        """Non-dict from sandboxed skill is wrapped."""
+        code = "def execute(**kwargs):\n    return 'text'\n"
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "sb_text", sandbox=True, main_code=code)
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("sb_text")
+        assert skill is not None
+        result = await skill.execute({})
+        assert result == {"result": "text"}
+
+    def test_enabled_skill_names(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "active", enabled=True)
+        _create_skill(skills_dir, "inactive", enabled=False)
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        names = registry.enabled_skill_names
+        assert "active" in names
+        assert "inactive" not in names
+
+    def test_skip_dir_without_yaml(self, tmp_path: Path) -> None:
+        """Directory without skill.yaml is skipped."""
+        skills_dir = tmp_path / "skills"
+        bad_dir = skills_dir / "no_yaml"
+        bad_dir.mkdir(parents=True)
+        (bad_dir / "main.py").write_text("pass\n", encoding="utf-8")
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        assert registry.get("no_yaml") is None

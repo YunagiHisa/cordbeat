@@ -4,11 +4,27 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from cordbeat.config import GatewayConfig
-from cordbeat.gateway import GatewayServer, MessageQueue
+from cordbeat.gateway import GatewayServer, MessageQueue, RetryableConnection
 from cordbeat.models import GatewayMessage, MessageType
+
+
+class _AsyncIter:
+    """Helper to create an async iterator from a list."""
+
+    def __init__(self, items: list[str]) -> None:
+        self._items = iter(items)
+
+    def __aiter__(self) -> _AsyncIter:
+        return self
+
+    async def __anext__(self) -> str:
+        try:
+            return next(self._items)
+        except StopIteration:
+            raise StopAsyncIteration
 
 
 class TestMessageQueue:
@@ -146,3 +162,178 @@ class TestGatewayServer:
         payload = json.loads(mock_ws.send.call_args[0][0])
         assert payload["content"] == "hello"
         assert payload["type"] == "message"
+
+    async def test_start_and_stop(self) -> None:
+        config = GatewayConfig(host="127.0.0.1", port=0)
+        queue = MessageQueue()
+        server = GatewayServer(config, queue)
+        await server.start()
+        assert server._server is not None
+        await server.stop()
+
+    async def test_stop_when_not_started(self) -> None:
+        config = GatewayConfig()
+        queue = MessageQueue()
+        server = GatewayServer(config, queue)
+        # Should not raise
+        await server.stop()
+
+    async def test_handle_connection_valid_handshake(self) -> None:
+        config = GatewayConfig()
+        queue = MessageQueue()
+        server = GatewayServer(config, queue)
+
+        mock_ws = AsyncMock()
+        # First recv returns adapter ID, then iterator yields a message
+        handshake = json.dumps({"adapter_id": "test_adapter"})
+        msg_data = json.dumps(
+            {
+                "type": "message",
+                "adapter_id": "test_adapter",
+                "platform_user_id": "u1",
+                "content": "hello",
+            }
+        )
+        mock_ws.recv = AsyncMock(return_value=handshake)
+        mock_ws.__aiter__ = lambda self: _AsyncIter([msg_data])
+        mock_ws.send = AsyncMock()
+        mock_ws.close = AsyncMock()
+
+        await server._handle_connection(mock_ws)
+
+        # Adapter should have been registered then cleaned up
+        assert "test_adapter" not in server._connections
+        # ACK should have been sent
+        assert mock_ws.send.call_count >= 1
+        ack = json.loads(mock_ws.send.call_args_list[0][0][0])
+        assert ack["type"] == "ack"
+
+    async def test_handle_connection_missing_adapter_id(self) -> None:
+        config = GatewayConfig()
+        queue = MessageQueue()
+        server = GatewayServer(config, queue)
+
+        mock_ws = AsyncMock()
+        mock_ws.recv = AsyncMock(return_value=json.dumps({}))
+        mock_ws.close = AsyncMock()
+
+        await server._handle_connection(mock_ws)
+        mock_ws.close.assert_called_once_with(1008, "Missing adapter_id")
+
+    async def test_handle_connection_handshake_timeout(self) -> None:
+        config = GatewayConfig()
+        queue = MessageQueue()
+        server = GatewayServer(config, queue)
+
+        mock_ws = AsyncMock()
+
+        async def slow_recv() -> str:
+            await asyncio.sleep(20)
+            return "{}"
+
+        mock_ws.recv = slow_recv
+
+        # Patch wait_for timeout to be very short
+        with patch("cordbeat.gateway.asyncio.wait_for", side_effect=TimeoutError):
+            await server._handle_connection(mock_ws)
+        # Should not crash
+
+    async def test_handle_connection_invalid_message(self) -> None:
+        config = GatewayConfig()
+        queue = MessageQueue()
+        server = GatewayServer(config, queue)
+
+        mock_ws = AsyncMock()
+        handshake = json.dumps({"adapter_id": "test_adapter"})
+        invalid_msg = "not valid json"
+        mock_ws.recv = AsyncMock(return_value=handshake)
+        mock_ws.__aiter__ = lambda self: _AsyncIter([invalid_msg])
+        mock_ws.send = AsyncMock()
+
+        await server._handle_connection(mock_ws)
+        # Error response should have been sent (after ACK)
+        calls = mock_ws.send.call_args_list
+        assert len(calls) >= 2
+        error_payload = json.loads(calls[-1][0][0])
+        assert error_payload["type"] == "error"
+
+    async def test_queue_receives_valid_message(self) -> None:
+        config = GatewayConfig()
+        queue = MessageQueue()
+        server = GatewayServer(config, queue)
+
+        mock_ws = AsyncMock()
+        handshake = json.dumps({"adapter_id": "test_adapter"})
+        msg_data = json.dumps(
+            {
+                "type": "message",
+                "adapter_id": "test_adapter",
+                "platform_user_id": "u1",
+                "content": "hello world",
+            }
+        )
+        mock_ws.recv = AsyncMock(return_value=handshake)
+        mock_ws.__aiter__ = lambda self: _AsyncIter([msg_data])
+        mock_ws.send = AsyncMock()
+
+        await server._handle_connection(mock_ws)
+        assert not queue._queue.empty()
+        queued_msg = await queue._queue.get()
+        assert queued_msg.content == "hello world"
+
+
+class TestRetryableConnection:
+    async def test_dispatch_core_message_raises(self) -> None:
+        """Base _dispatch_core_message raises NotImplementedError."""
+        conn = RetryableConnection()
+        try:
+            await conn._dispatch_core_message("u1", "hello")
+            raise AssertionError("Should have raised")  # noqa: TRY301
+        except NotImplementedError:
+            pass
+
+    async def test_listen_core_dispatches_message(self) -> None:
+        conn = RetryableConnection()
+        dispatched: list[tuple[str, str]] = []
+
+        async def fake_dispatch(uid: str, content: str) -> None:
+            dispatched.append((uid, content))
+
+        conn._dispatch_core_message = fake_dispatch  # type: ignore[assignment]
+        msg = json.dumps(
+            {
+                "type": "message",
+                "platform_user_id": "u1",
+                "content": "hi",
+            }
+        )
+
+        # Simulate a WebSocket that yields one message then closes
+        mock_ws = AsyncMock()
+        mock_ws.__aiter__ = lambda self: _AsyncIter([msg])
+        conn._ws = mock_ws
+
+        await conn._listen_core()
+        assert dispatched == [("u1", "hi")]
+
+    async def test_listen_core_ignores_unknown_types(self) -> None:
+        conn = RetryableConnection()
+        dispatched: list[tuple[str, str]] = []
+
+        async def fake_dispatch(uid: str, content: str) -> None:
+            dispatched.append((uid, content))
+
+        conn._dispatch_core_message = fake_dispatch  # type: ignore[assignment]
+        msg = json.dumps(
+            {
+                "type": "unknown_type",
+                "platform_user_id": "u1",
+                "content": "hi",
+            }
+        )
+        mock_ws = AsyncMock()
+        mock_ws.__aiter__ = lambda self: _AsyncIter([msg])
+        conn._ws = mock_ws
+
+        await conn._listen_core()
+        assert dispatched == []

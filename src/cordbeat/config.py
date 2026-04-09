@@ -29,6 +29,7 @@ class HeartbeatConfig:
     max_interval_minutes: int = 1440
     quiet_hours_start: str = "01:00"
     quiet_hours_end: str = "07:00"
+    timezone: str = "UTC"
 
 
 @dataclass

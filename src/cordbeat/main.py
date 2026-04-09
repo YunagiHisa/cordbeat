@@ -106,6 +106,7 @@ async def main(config_path: str = "config.yaml") -> None:
     await heartbeat.stop()
     await gateway.stop()
     queue_task.cancel()
+    await ai.aclose()
     await memory.close()
     logger.info("CordBeat stopped")
 

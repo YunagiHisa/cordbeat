@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -94,13 +95,16 @@ class MemoryStore:
         self._chroma_path.mkdir(parents=True, exist_ok=True)
         import chromadb  # lazy: heavy dependency, loaded only when needed
 
-        self._chroma_client = chromadb.PersistentClient(
+        self._chroma_client = await asyncio.to_thread(
+            chromadb.PersistentClient,
             path=str(self._chroma_path),
         )
-        self._semantic_collection = self._chroma_client.get_or_create_collection(
+        self._semantic_collection = await asyncio.to_thread(
+            self._chroma_client.get_or_create_collection,
             name="semantic_memory",
         )
-        self._episodic_collection = self._chroma_client.get_or_create_collection(
+        self._episodic_collection = await asyncio.to_thread(
+            self._chroma_client.get_or_create_collection,
             name="episodic_memory",
         )
         logger.info("Memory store initialized")
@@ -144,23 +148,23 @@ class MemoryStore:
 
     async def add_semantic_memory(self, entry: MemoryEntry) -> str:
         entry_id = entry.id or str(uuid.uuid4())
-        self._semantic_collection.add(
+        metadata = {
+            "user_id": entry.user_id,
+            "trust_level": entry.trust_level.value,
+            "strength": entry.strength,
+            "emotion_weight": entry.emotion_weight,
+            "created_at": entry.created_at.isoformat(),
+            "last_accessed_at": entry.last_accessed_at.isoformat(),
+            **{
+                k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+                for k, v in entry.metadata.items()
+            },
+        }
+        await asyncio.to_thread(
+            self._semantic_collection.add,
             ids=[entry_id],
             documents=[entry.content],
-            metadatas=[
-                {
-                    "user_id": entry.user_id,
-                    "trust_level": entry.trust_level.value,
-                    "strength": entry.strength,
-                    "emotion_weight": entry.emotion_weight,
-                    "created_at": entry.created_at.isoformat(),
-                    "last_accessed_at": entry.last_accessed_at.isoformat(),
-                    **{
-                        k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
-                        for k, v in entry.metadata.items()
-                    },
-                }
-            ],
+            metadatas=[metadata],
         )
         return entry_id
 
@@ -170,7 +174,8 @@ class MemoryStore:
         query: str,
         n_results: int = 5,
     ) -> list[dict[str, Any]]:
-        results = self._semantic_collection.query(
+        results = await asyncio.to_thread(
+            self._semantic_collection.query,
             query_texts=[query],
             n_results=n_results,
             where={"user_id": user_id},
@@ -194,25 +199,25 @@ class MemoryStore:
 
     async def add_episodic_memory(self, entry: MemoryEntry) -> str:
         entry_id = entry.id or str(uuid.uuid4())
-        self._episodic_collection.add(
+        metadata = {
+            "user_id": entry.user_id,
+            "trust_level": entry.trust_level.value,
+            "strength": entry.strength,
+            "emotion_weight": entry.emotion_weight,
+            "flashbulb": str(entry.metadata.get("flashbulb", False)),
+            "created_at": entry.created_at.isoformat(),
+            "last_accessed_at": entry.last_accessed_at.isoformat(),
+            **{
+                k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+                for k, v in entry.metadata.items()
+                if k != "flashbulb"
+            },
+        }
+        await asyncio.to_thread(
+            self._episodic_collection.add,
             ids=[entry_id],
             documents=[entry.content],
-            metadatas=[
-                {
-                    "user_id": entry.user_id,
-                    "trust_level": entry.trust_level.value,
-                    "strength": entry.strength,
-                    "emotion_weight": entry.emotion_weight,
-                    "flashbulb": str(entry.metadata.get("flashbulb", False)),
-                    "created_at": entry.created_at.isoformat(),
-                    "last_accessed_at": entry.last_accessed_at.isoformat(),
-                    **{
-                        k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
-                        for k, v in entry.metadata.items()
-                        if k != "flashbulb"
-                    },
-                }
-            ],
+            metadatas=[metadata],
         )
         return entry_id
 
@@ -222,7 +227,8 @@ class MemoryStore:
         query: str,
         n_results: int = 5,
     ) -> list[dict[str, Any]]:
-        results = self._episodic_collection.query(
+        results = await asyncio.to_thread(
+            self._episodic_collection.query,
             query_texts=[query],
             n_results=n_results,
             where={"user_id": user_id},
@@ -458,6 +464,20 @@ class MemoryStore:
         row = await cursor.fetchone()
         return row["user_id"] if row else None
 
+    async def resolve_platform_user(
+        self,
+        user_id: str,
+        adapter_id: str,
+    ) -> str | None:
+        """Reverse-lookup: internal user_id + adapter → platform_user_id."""
+        cursor = await self._db.execute(
+            "SELECT platform_user_id FROM platform_links "
+            "WHERE user_id = ? AND adapter_id = ?",
+            (user_id, adapter_id),
+        )
+        row = await cursor.fetchone()
+        return row["platform_user_id"] if row else None
+
     # ── Forgetting (Ebbinghaus decay) ─────────────────────────────────
 
     def calculate_strength(
@@ -501,7 +521,7 @@ class MemoryStore:
         stats = {"decayed": 0, "archived": 0}
 
         for collection in (self._semantic_collection, self._episodic_collection):
-            all_data = collection.get(include=["metadatas"])
+            all_data = await asyncio.to_thread(collection.get, include=["metadatas"])
             if not all_data or not all_data.get("ids"):
                 continue
 
@@ -533,6 +553,6 @@ class MemoryStore:
                     stats["decayed"] += 1
 
             if ids_to_delete:
-                collection.delete(ids=ids_to_delete)
+                await asyncio.to_thread(collection.delete, ids=ids_to_delete)
 
         return stats

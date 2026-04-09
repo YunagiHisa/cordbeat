@@ -28,6 +28,8 @@ class DiscordAdapter:
         self._bot: Any = None
         self._ws: Any = None
         self._running = False
+        # Cache last channel per user for guild replies
+        self._user_channels: dict[str, int] = {}
 
     async def start(self) -> None:
         try:
@@ -114,6 +116,12 @@ class DiscordAdapter:
             logger.warning("Not connected to Core, dropping message")
             return
 
+        user_id = str(message.author.id)
+        channel_id = message.channel.id
+
+        # Cache channel for reply routing
+        self._user_channels[user_id] = channel_id
+
         payload = json.dumps(
             {
                 "type": "message",
@@ -142,6 +150,15 @@ class DiscordAdapter:
             return
 
         try:
+            # Try guild channel first, fall back to DM
+            channel_id = self._user_channels.get(platform_user_id)
+            if channel_id:
+                channel = self._bot.get_channel(channel_id)
+                if channel:
+                    await channel.send(content)
+                    return
+
+            # Fallback: DM the user
             user = await self._bot.fetch_user(int(platform_user_id))
             if user:
                 await user.send(content)

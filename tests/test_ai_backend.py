@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -87,17 +87,14 @@ class TestOllamaBackend:
         mock_response.json.return_value = {"response": "Hello!"}
         mock_response.raise_for_status = MagicMock()
 
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await backend.generate("test prompt", system="sys")
+        result = await backend.generate("test prompt", system="sys")
 
         assert result == "Hello!"
-        mock_client.post.assert_called_once()
-        call_kwargs = mock_client.post.call_args
+        backend._client.post.assert_called_once()
+        call_kwargs = backend._client.post.call_args
         assert "/api/generate" in call_kwargs[0][0]
 
     async def test_generate_empty_response(self) -> None:
@@ -108,15 +105,19 @@ class TestOllamaBackend:
         mock_response.json.return_value = {}
         mock_response.raise_for_status = MagicMock()
 
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await backend.generate("test")
+        result = await backend.generate("test")
 
         assert result == ""
+
+    async def test_aclose(self) -> None:
+        cfg = AIBackendConfig(provider="ollama")
+        backend = OllamaBackend(cfg)
+        backend._client = AsyncMock()
+        await backend.aclose()
+        backend._client.aclose.assert_called_once()
 
 
 # ── OpenAICompatBackend ───────────────────────────────────────────────
@@ -136,16 +137,13 @@ class TestOpenAICompatBackend:
         mock_response.json.return_value = {"choices": [{"message": {"content": "Hi!"}}]}
         mock_response.raise_for_status = MagicMock()
 
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await backend.generate("test prompt", system="sys")
+        result = await backend.generate("test prompt", system="sys")
 
         assert result == "Hi!"
-        call_kwargs = mock_client.post.call_args
+        call_kwargs = backend._client.post.call_args
         assert "/v1/chat/completions" in call_kwargs[0][0]
 
     async def test_unexpected_response_format(self) -> None:
@@ -156,11 +154,8 @@ class TestOpenAICompatBackend:
         mock_response.json.return_value = {"bad": "format"}
         mock_response.raise_for_status = MagicMock()
 
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            with pytest.raises(RuntimeError, match="Unexpected response format"):
-                await backend.generate("test")
+        with pytest.raises(RuntimeError, match="Unexpected response format"):
+            await backend.generate("test")

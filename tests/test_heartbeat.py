@@ -220,8 +220,11 @@ class TestExecuteDecision:
     async def test_action_message_sends(
         self,
         heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
         mock_gateway: AsyncMock,
     ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
         decision = HeartbeatDecision(
             action=HeartbeatAction.MESSAGE,
             content="Hello!",
@@ -232,7 +235,24 @@ class TestExecuteDecision:
         mock_gateway.send_to_adapter.assert_called_once()
         call_args = mock_gateway.send_to_adapter.call_args
         assert call_args[0][0] == "discord"
-        assert call_args[0][1].type == MessageType.HEARTBEAT_MESSAGE
+        msg = call_args[0][1]
+        assert msg.type == MessageType.HEARTBEAT_MESSAGE
+        assert msg.platform_user_id == "discord_123"
+
+    async def test_action_message_unresolvable_user(
+        self,
+        heartbeat: HeartbeatLoop,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """No platform link → warning, no send."""
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.MESSAGE,
+            content="Hello!",
+            target_user_id="u_unknown",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_decision(decision)
+        mock_gateway.send_to_adapter.assert_not_called()
 
     async def test_action_message_missing_target(
         self,
@@ -313,6 +333,38 @@ class TestTick:
         with patch("cordbeat.heartbeat._in_quiet_hours", return_value=False):
             await heartbeat._tick()
         mock_ai.generate_json.assert_called_once()
+
+    async def test_tick_uses_configured_timezone(
+        self,
+        heartbeat: HeartbeatLoop,
+    ) -> None:
+        """Timezone from config is passed to _in_quiet_hours."""
+        heartbeat._config.timezone = "Asia/Tokyo"
+        with patch(
+            "cordbeat.heartbeat._in_quiet_hours",
+            return_value=True,
+        ) as mock_quiet:
+            await heartbeat._tick()
+        _, kwargs = mock_quiet.call_args
+        import zoneinfo
+
+        assert kwargs["tz"] == zoneinfo.ZoneInfo("Asia/Tokyo")
+
+    async def test_tick_invalid_timezone_falls_back_to_utc(
+        self,
+        heartbeat: HeartbeatLoop,
+    ) -> None:
+        """Invalid timezone string falls back to UTC."""
+        heartbeat._config.timezone = "Invalid/Zone"
+        with patch(
+            "cordbeat.heartbeat._in_quiet_hours",
+            return_value=True,
+        ) as mock_quiet:
+            await heartbeat._tick()
+        _, kwargs = mock_quiet.call_args
+        from datetime import UTC
+
+        assert kwargs["tz"] is UTC
 
 
 # ── Sleep Phase ───────────────────────────────────────────────────────

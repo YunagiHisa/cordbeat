@@ -5,14 +5,19 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import logging
+import tempfile
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from cordbeat.models import SafetyLevel, SkillMeta, SkillParam
+from cordbeat.models import SafetyLevel, SkillContext, SkillMeta, SkillParam
 
 logger = logging.getLogger(__name__)
+
+
+class SkillPermissionError(Exception):
+    """Raised when a skill violates its sandbox permissions."""
 
 
 class Skill:
@@ -23,16 +28,49 @@ class Skill:
         self._module = module
 
     async def execute(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Execute the skill's main function."""
+        """Execute the skill's main function with permission context."""
         fn = getattr(self._module, "execute", None)
         if fn is None:
             msg = f"Skill '{self.meta.name}' has no execute() function"
             raise RuntimeError(msg)
+
+        context = self._build_context()
+
+        # Inject context if the skill accepts it
+        import inspect
+
+        sig = inspect.signature(fn)
+        if "context" in sig.parameters:
+            params = {**params, "context": context}
+
+        if self.meta.sandbox:
+            return await self._execute_sandboxed(fn, params, context)
+
         result = fn(**params)
-        # Support both sync and async execute functions
         if hasattr(result, "__await__"):
             result = await result
         return dict(result)
+
+    async def _execute_sandboxed(
+        self,
+        fn: Any,
+        params: dict[str, Any],
+        context: SkillContext,
+    ) -> dict[str, Any]:
+        """Execute skill in a sandboxed context with a temp work directory."""
+        with tempfile.TemporaryDirectory(prefix="cordbeat_skill_") as tmpdir:
+            context.work_dir = Path(tmpdir)
+            result = fn(**params)
+            if hasattr(result, "__await__"):
+                result = await result
+            return dict(result)
+
+    def _build_context(self) -> SkillContext:
+        return SkillContext(
+            sandbox=self.meta.sandbox,
+            network=self.meta.network,
+            filesystem=self.meta.filesystem,
+        )
 
 
 class SkillRegistry:

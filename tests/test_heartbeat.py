@@ -16,9 +16,11 @@ from cordbeat.models import (
     HeartbeatAction,
     HeartbeatDecision,
     MessageType,
+    SafetyLevel,
+    SkillMeta,
     UserSummary,
 )
-from cordbeat.skills import SkillRegistry
+from cordbeat.skills import Skill, SkillRegistry
 from cordbeat.soul import Soul
 
 # ── Helper time parsing ───────────────────────────────────────────────
@@ -284,6 +286,79 @@ class TestExecuteDecision:
     ) -> None:
         """Missing skill_name → warning, no crash."""
         decision = HeartbeatDecision(action=HeartbeatAction.SKILL)
+        await heartbeat._execute_decision(decision)
+
+    async def test_dangerous_skill_blocked(
+        self,
+        heartbeat: HeartbeatLoop,
+        skills: SkillRegistry,
+    ) -> None:
+        """Dangerous skills should be blocked from autonomous execution."""
+        # Create a mock skill with DANGEROUS safety level
+        from types import SimpleNamespace
+
+        module = SimpleNamespace(execute=lambda **kw: {"result": "should not run"})
+        meta = SkillMeta(
+            name="danger_skill",
+            description="Dangerous",
+            usage="",
+            safety_level=SafetyLevel.DANGEROUS,
+            enabled=True,
+        )
+        skills._skills["danger_skill"] = Skill(meta=meta, module=module)
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="danger_skill",
+        )
+        # Should not raise, should just log and skip
+        await heartbeat._execute_decision(decision)
+
+    async def test_requires_confirmation_skill_blocked(
+        self,
+        heartbeat: HeartbeatLoop,
+        skills: SkillRegistry,
+    ) -> None:
+        """Skills requiring confirmation should be skipped autonomously."""
+        from types import SimpleNamespace
+
+        module = SimpleNamespace(execute=lambda **kw: {"result": "should not run"})
+        meta = SkillMeta(
+            name="confirm_skill",
+            description="Needs confirmation",
+            usage="",
+            safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
+            enabled=True,
+        )
+        skills._skills["confirm_skill"] = Skill(meta=meta, module=module)
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="confirm_skill",
+        )
+        await heartbeat._execute_decision(decision)
+
+    async def test_disabled_skill_blocked(
+        self,
+        heartbeat: HeartbeatLoop,
+        skills: SkillRegistry,
+    ) -> None:
+        """Disabled skills should be skipped."""
+        from types import SimpleNamespace
+
+        module = SimpleNamespace(execute=lambda **kw: {"result": "should not run"})
+        meta = SkillMeta(
+            name="disabled_skill",
+            description="Disabled",
+            usage="",
+            enabled=False,
+        )
+        skills._skills["disabled_skill"] = Skill(meta=meta, module=module)
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="disabled_skill",
+        )
         await heartbeat._execute_decision(decision)
 
     async def test_action_propose_improvement(

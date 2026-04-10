@@ -364,14 +364,19 @@ class TestExecuteDecision:
     async def test_action_propose_improvement(
         self,
         heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
         mock_gateway: AsyncMock,
     ) -> None:
+        """Proposal is stored in memory."""
         decision = HeartbeatDecision(
             action=HeartbeatAction.PROPOSE_IMPROVEMENT,
             content="Improve memory decay",
         )
         await heartbeat._execute_decision(decision)
-        mock_gateway.send_to_adapter.assert_not_called()
+        # Stored under __system__ since no target user
+        records = await memory.get_certain_records("__system__", record_type="proposal")
+        assert len(records) == 1
+        assert "Improve memory decay" in records[0]["content"]
 
 
 # ── Tick ──────────────────────────────────────────────────────────────
@@ -959,3 +964,103 @@ class TestTwoLayerIntegration:
         # Only triage call, no Layer 2
         assert mock_ai.generate_json.call_count == 1
         assert result == 60
+
+
+# ── Proposal workflow ─────────────────────────────────────────────────
+
+
+class TestProposalWorkflow:
+    async def test_proposal_stored_with_target_user(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Proposal with target user is stored and notification sent."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.PROPOSE_IMPROVEMENT,
+            content="Add weather skill",
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_decision(decision)
+
+        # Proposal stored under user
+        records = await memory.get_certain_records("u1", record_type="proposal")
+        assert len(records) == 1
+        assert "Add weather skill" in records[0]["content"]
+
+        # Notification sent via gateway
+        mock_gateway.send_to_adapter.assert_called_once()
+        call_args = mock_gateway.send_to_adapter.call_args
+        msg = call_args[0][1]
+        assert "suggestion" in msg.content
+        assert "Add weather skill" in msg.content
+
+    async def test_proposal_stored_without_target(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Proposal without target user is stored under __system__."""
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.PROPOSE_IMPROVEMENT,
+            content="Optimize sleep phase",
+        )
+        await heartbeat._execute_decision(decision)
+
+        # Stored under __system__
+        records = await memory.get_certain_records("__system__", record_type="proposal")
+        assert len(records) == 1
+
+        # No notification sent (no target)
+        mock_gateway.send_to_adapter.assert_not_called()
+
+    async def test_proposal_unresolvable_user_still_stored(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Proposal with unresolvable user is stored but no notification."""
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.PROPOSE_IMPROVEMENT,
+            content="Improve diary quality",
+            target_user_id="unknown_user",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_decision(decision)
+
+        records = await memory.get_certain_records(
+            "unknown_user", record_type="proposal"
+        )
+        assert len(records) == 1
+
+        # No notification (can't resolve platform user)
+        mock_gateway.send_to_adapter.assert_not_called()
+
+    async def test_proposal_metadata_has_status(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """Proposal metadata contains pending status."""
+        import json
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.PROPOSE_IMPROVEMENT,
+            content="Add new skill",
+            target_user_id="u_sys",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_decision(decision)
+
+        records = await memory.get_certain_records("u_sys", record_type="proposal")
+        assert len(records) == 1
+        meta = json.loads(records[0]["metadata"])
+        assert meta["status"] == "pending"
+        assert meta["adapter_id"] == "discord"

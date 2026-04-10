@@ -371,10 +371,7 @@ class HeartbeatLoop:
             case HeartbeatAction.SKILL:
                 await self._execute_skill(decision)
             case HeartbeatAction.PROPOSE_IMPROVEMENT:
-                logger.info(
-                    "Improvement proposal: %s",
-                    decision.content,
-                )
+                await self._store_and_notify_proposal(decision)
             case HeartbeatAction.NONE:
                 logger.debug("HEARTBEAT decided: do nothing")
 
@@ -445,6 +442,48 @@ class HeartbeatLoop:
             logger.info("Skill '%s' result: %s", decision.skill_name, result)
         except Exception:
             logger.exception("Skill '%s' failed", decision.skill_name)
+
+    async def _store_and_notify_proposal(
+        self,
+        decision: HeartbeatDecision,
+    ) -> None:
+        """Store an improvement proposal and notify the target user."""
+        user_id = decision.target_user_id
+        adapter_id = decision.target_adapter_id
+        content = decision.content
+
+        # Store proposal in memory
+        metadata: dict[str, Any] = {"status": "pending"}
+        if adapter_id:
+            metadata["adapter_id"] = adapter_id
+
+        proposal_id = await self._memory.add_certain_record(
+            user_id=user_id or "__system__",
+            content=content,
+            record_type="proposal",
+            metadata=metadata,
+        )
+        logger.info("Improvement proposal stored (id=%s): %s", proposal_id, content)
+
+        # Notify user if target is specified
+        if user_id and adapter_id:
+            platform_user_id = await self._memory.resolve_platform_user(
+                user_id, adapter_id
+            )
+            if platform_user_id:
+                soul_snap = self._soul.get_soul_snapshot()
+                notification = GatewayMessage(
+                    type=MessageType.HEARTBEAT_MESSAGE,
+                    adapter_id=adapter_id,
+                    platform_user_id=platform_user_id,
+                    content=(f"💡 {soul_snap['name']} has a suggestion:\n\n{content}"),
+                )
+                await self._gateway.send_to_adapter(adapter_id, notification)
+                logger.info(
+                    "Proposal notification sent to %s via %s",
+                    user_id,
+                    adapter_id,
+                )
 
     # ── Sleep Phase ───────────────────────────────────────────────────
 

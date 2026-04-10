@@ -57,6 +57,63 @@ def validate_heartbeat_decision(data: dict[str, Any]) -> ValidationResult:
     return ValidationResult(valid=len(errors) == 0, errors=errors)
 
 
+def validate_heartbeat_triage(data: dict[str, Any]) -> ValidationResult:
+    """Validate HEARTBEAT Layer 1 triage JSON from AI.
+
+    Expected format::
+
+        {
+            "users": [
+                {"user_id": "...", "reason": "..."},
+                ...
+            ],
+            "next_heartbeat_minutes": 60
+        }
+    """
+    errors: list[ValidationError] = []
+
+    users = data.get("users")
+    if not isinstance(users, list):
+        errors.append(
+            ValidationError(
+                field="users",
+                message="must be a list",
+                value=users,
+            )
+        )
+    else:
+        for i, entry in enumerate(users):
+            if not isinstance(entry, dict):
+                errors.append(
+                    ValidationError(
+                        field=f"users[{i}]",
+                        message="must be a dict",
+                        value=entry,
+                    )
+                )
+                continue
+            if not entry.get("user_id"):
+                errors.append(
+                    ValidationError(
+                        field=f"users[{i}].user_id",
+                        message="user_id is required",
+                    )
+                )
+
+    minutes = data.get("next_heartbeat_minutes")
+    if minutes is not None:
+        if not isinstance(minutes, int | float) or minutes < 1 or minutes > 1440:
+            errors.append(
+                ValidationError(
+                    field="next_heartbeat_minutes",
+                    message="must be between 1 and 1440",
+                    value=minutes,
+                )
+            )
+
+    return ValidationResult(valid=len(errors) == 0, errors=errors)
+
+
 def validate_user_summary_update(data: dict[str, Any]) -> ValidationResult:
     """Validate AI-generated user summary updates."""
     errors: list[ValidationError] = []

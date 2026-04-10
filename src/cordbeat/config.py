@@ -43,6 +43,8 @@ class MemoryConfig:
     archive_threshold: float = 0.05
     conversation_history_limit: int = 20
     memory_search_results: int = 3
+    diary_max_tokens: int = 512
+    facts_per_message_limit: int = 5
 
 
 @dataclass

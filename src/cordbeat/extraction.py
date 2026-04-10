@@ -7,6 +7,7 @@ import logging
 import uuid
 
 from cordbeat.ai_backend import AIBackend
+from cordbeat.config import MemoryConfig
 from cordbeat.memory import MemoryStore
 from cordbeat.models import Emotion, MemoryEntry, MemoryLayer
 from cordbeat.soul import Soul
@@ -54,10 +55,12 @@ class MemoryExtractor:
         ai: AIBackend,
         soul: Soul,
         memory: MemoryStore,
+        memory_config: MemoryConfig | None = None,
     ) -> None:
         self._ai = ai
         self._soul = soul
         self._memory = memory
+        self._memory_config = memory_config or MemoryConfig()
 
     async def infer_and_update_emotion(
         self, user_id: str, user_message: str, ai_response: str
@@ -137,7 +140,7 @@ class MemoryExtractor:
         # Store semantic facts (preferences, knowledge)
         facts = data.get("facts", [])
         if isinstance(facts, list):
-            for fact in facts[:5]:  # Cap at 5 facts per message
+            for fact in facts[: self._memory_config.facts_per_message_limit]:
                 if not isinstance(fact, str) or len(fact.strip()) < 3:
                     continue
                 entry = MemoryEntry(

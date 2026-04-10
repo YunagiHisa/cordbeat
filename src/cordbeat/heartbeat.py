@@ -9,7 +9,7 @@ from datetime import UTC, datetime, time, tzinfo
 from typing import Any
 
 from cordbeat.ai_backend import AIBackend
-from cordbeat.config import HeartbeatConfig
+from cordbeat.config import HeartbeatConfig, MemoryConfig
 from cordbeat.gateway import GatewayServer, MessageQueue
 from cordbeat.memory import MemoryStore
 from cordbeat.models import (
@@ -118,6 +118,7 @@ class HeartbeatLoop:
         skills: SkillRegistry,
         gateway: GatewayServer,
         queue: MessageQueue,
+        memory_config: MemoryConfig | None = None,
     ) -> None:
         self._config = config
         self._ai = ai
@@ -126,6 +127,7 @@ class HeartbeatLoop:
         self._skills = skills
         self._gateway = gateway
         self._queue = queue
+        self._memory_config = memory_config or MemoryConfig()
         self._running = False
         self._sleep_done_today = False
         self._task: asyncio.Task[None] | None = None
@@ -269,12 +271,19 @@ class HeartbeatLoop:
 
         # Load detailed context
         profile = await self._memory.get_core_profile(user.user_id)
-        history = await self._memory.get_recent_messages(user.user_id, limit=20)
+        history = await self._memory.get_recent_messages(
+            user.user_id,
+            limit=self._memory_config.conversation_history_limit,
+        )
         semantic = await self._memory.search_semantic(
-            user.user_id, triage_reason, n_results=3
+            user.user_id,
+            triage_reason,
+            n_results=self._memory_config.memory_search_results,
         )
         episodic = await self._memory.search_episodic(
-            user.user_id, triage_reason, n_results=3
+            user.user_id,
+            triage_reason,
+            n_results=self._memory_config.memory_search_results,
         )
 
         context = build_context(
@@ -520,7 +529,7 @@ class HeartbeatLoop:
                     prompt=prompt,
                     system=system,
                     temperature=0.5,
-                    max_tokens=512,
+                    max_tokens=self._memory_config.diary_max_tokens,
                 )
 
                 await self._memory.add_certain_record(

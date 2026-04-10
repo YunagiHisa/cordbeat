@@ -56,6 +56,7 @@ async def main(config_path: str = "config.yaml") -> None:
         memory=memory,
         skills=skills,
         gateway=gateway,
+        memory_config=config.memory,
     )
     queue.set_handler(engine.handle_message)
 
@@ -67,6 +68,7 @@ async def main(config_path: str = "config.yaml") -> None:
         skills=skills,
         gateway=gateway,
         queue=queue,
+        memory_config=config.memory,
     )
 
     # ── Start services ────────────────────────────────────────────

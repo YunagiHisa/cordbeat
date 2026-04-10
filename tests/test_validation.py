@@ -8,6 +8,7 @@ import pytest
 
 from cordbeat.validation import (
     validate_heartbeat_decision,
+    validate_heartbeat_triage,
     validate_skill_selection,
     validate_soul_update,
     validate_user_summary_update,
@@ -116,6 +117,50 @@ class TestSkillSelectionValidation:
             available_skills={"web_search"},
         )
         assert r.valid  # empty string is falsy, skipped
+
+
+class TestTriageValidation:
+    def test_valid_triage(self) -> None:
+        r = validate_heartbeat_triage(
+            {
+                "users": [{"user_id": "u1", "reason": "lonely"}],
+                "next_heartbeat_minutes": 30,
+            }
+        )
+        assert r.valid
+
+    def test_valid_empty_users(self) -> None:
+        r = validate_heartbeat_triage({"users": [], "next_heartbeat_minutes": 60})
+        assert r.valid
+
+    def test_users_not_a_list(self) -> None:
+        r = validate_heartbeat_triage(
+            {"users": "invalid", "next_heartbeat_minutes": 60}
+        )
+        assert not r.valid
+        assert any("must be a list" in e.message for e in r.errors)
+
+    def test_user_entry_not_dict(self) -> None:
+        r = validate_heartbeat_triage(
+            {"users": ["not a dict"], "next_heartbeat_minutes": 60}
+        )
+        assert not r.valid
+        assert any("must be a dict" in e.message for e in r.errors)
+
+    def test_user_entry_missing_user_id(self) -> None:
+        r = validate_heartbeat_triage(
+            {"users": [{"reason": "lonely"}], "next_heartbeat_minutes": 60}
+        )
+        assert not r.valid
+        assert any("user_id is required" in e.message for e in r.errors)
+
+    def test_invalid_interval(self) -> None:
+        r = validate_heartbeat_triage({"users": [], "next_heartbeat_minutes": 0})
+        assert not r.valid
+
+    def test_missing_users_key(self) -> None:
+        r = validate_heartbeat_triage({"next_heartbeat_minutes": 60})
+        assert not r.valid
 
 
 class TestValidatedAiJson:

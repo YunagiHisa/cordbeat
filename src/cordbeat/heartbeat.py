@@ -6,6 +6,7 @@ import asyncio
 import logging
 import zoneinfo
 from datetime import UTC, datetime, time, tzinfo
+from typing import Any
 
 from cordbeat.ai_backend import AIBackend
 from cordbeat.config import HeartbeatConfig
@@ -19,14 +20,42 @@ from cordbeat.models import (
     SafetyLevel,
     UserSummary,
 )
-from cordbeat.prompt import sanitize
+from cordbeat.prompt import build_context, sanitize
 from cordbeat.skills import SkillRegistry
 from cordbeat.soul import Soul
-from cordbeat.validation import validate_heartbeat_decision, validated_ai_json
+from cordbeat.validation import (
+    validate_heartbeat_decision,
+    validate_heartbeat_triage,
+    validated_ai_json,
+)
 
 logger = logging.getLogger(__name__)
 
-_HEARTBEAT_SYSTEM_PROMPT = """\
+# ── Layer 1: Triage prompt ────────────────────────────────────────────
+
+_TRIAGE_SYSTEM_PROMPT = """\
+You are {name}. {pronoun} is an autonomous AI agent.
+Personality: {traits}
+Current emotion: {emotion} (intensity: {emotion_intensity})
+{secondary_emotion_line}
+
+You are executing HEARTBEAT Layer 1 — a quick triage scan.
+Review the user summaries below and decide which users need attention right now.
+Consider: how long since you last talked, their emotional tone, attention score.
+If nobody needs attention, return an empty list.
+
+You MUST respond in valid JSON:
+{{
+  "users": [
+    {{"user_id": "user ID", "reason": "brief reason for attention"}}
+  ],
+  "next_heartbeat_minutes": 60
+}}
+"""
+
+# ── Layer 2: Per-user decision prompt ─────────────────────────────────
+
+_DECISION_SYSTEM_PROMPT = """\
 You are {name}. {pronoun} is an autonomous AI agent.
 Personality: {traits}
 Current emotion: {emotion} (intensity: {emotion_intensity})
@@ -37,8 +66,9 @@ Immutable rules:
 Available skills:
 {skills}
 
-You are now executing a HEARTBEAT cycle.
-Based on the information below, decide what to do.
+You are executing HEARTBEAT Layer 2 — a detailed evaluation for one user.
+Based on the user's context, conversation history, and memories below,
+decide what action to take for this specific user.
 
 You MUST respond in valid JSON:
 {{
@@ -46,8 +76,8 @@ You MUST respond in valid JSON:
   "content": "message text or skill description (empty for action=none)",
   "skill_name": "skill name (only when action=skill)",
   "skill_params": {{}},
-  "target_user_id": "target user ID (when action=message)",
-  "target_adapter_id": "target adapter ID (when action=message)",
+  "target_user_id": "{target_user_id}",
+  "target_adapter_id": "{target_adapter_id}",
   "next_heartbeat_minutes": 60
 }}
 """
@@ -151,12 +181,51 @@ class HeartbeatLoop:
         # ── Emotion decay ─────────────────────────────────────────────
         self._soul.decay_emotion()
 
-        # ── Layer 1: Global scan ──────────────────────────────────────
+        # ── Layer 1: Triage ───────────────────────────────────────────
         users = await self._memory.get_all_user_summaries()
         if not users:
             return self._config.default_interval_minutes
 
-        # Build global context
+        triage_result = await self._layer1_triage(users)
+        selected_ids: list[dict[str, str]] = triage_result.get("users", [])
+        triage_interval = int(
+            triage_result.get(
+                "next_heartbeat_minutes",
+                self._config.default_interval_minutes,
+            )
+        )
+
+        if not selected_ids:
+            logger.debug("Layer 1: no users need attention")
+            return triage_interval
+
+        # Build a lookup for quick access
+        user_map = {u.user_id: u for u in users}
+
+        # ── Layer 2: Per-user evaluation ──────────────────────────────
+        min_interval = triage_interval
+        for entry in selected_ids:
+            uid = entry.get("user_id", "")
+            reason = entry.get("reason", "")
+            user = user_map.get(uid)
+            if user is None:
+                logger.warning("Layer 1 selected unknown user_id: %s", uid)
+                continue
+
+            logger.info("Layer 2: evaluating user %s (reason: %s)", uid, reason)
+            decision = await self._layer2_evaluate(user, reason)
+            await self._execute_decision(decision)
+            min_interval = min(min_interval, decision.next_heartbeat_minutes)
+
+        return min_interval
+
+    # ── Layer 1: Triage ───────────────────────────────────────────────
+
+    async def _layer1_triage(
+        self,
+        users: list[UserSummary],
+    ) -> dict[str, Any]:
+        """Lightweight scan to decide which users need attention."""
         global_ctx = self._build_global_context(users)
         soul_snap = self._soul.get_soul_snapshot()
 
@@ -166,7 +235,64 @@ class HeartbeatLoop:
             sec_int = soul_snap["emotion"]["secondary_intensity"]
             secondary_line = f"Secondary emotion: {sec} (intensity: {sec_int})"
 
-        system = _HEARTBEAT_SYSTEM_PROMPT.format(
+        system = _TRIAGE_SYSTEM_PROMPT.format(
+            name=soul_snap["name"],
+            pronoun=self._soul.pronoun,
+            traits=", ".join(soul_snap["traits"]),
+            emotion=soul_snap["emotion"]["primary"],
+            emotion_intensity=soul_snap["emotion"]["intensity"],
+            secondary_emotion_line=secondary_line,
+        )
+
+        fallback: dict[str, Any] = {
+            "users": [],
+            "next_heartbeat_minutes": self._config.default_interval_minutes,
+        }
+
+        return await validated_ai_json(
+            self._ai,
+            prompt=global_ctx,
+            system=system,
+            validator=validate_heartbeat_triage,
+            fallback=fallback,
+        )
+
+    # ── Layer 2: Per-user evaluation ──────────────────────────────────
+
+    async def _layer2_evaluate(
+        self,
+        user: UserSummary,
+        triage_reason: str,
+    ) -> HeartbeatDecision:
+        """Detailed evaluation with full context for a single user."""
+        soul_snap = self._soul.get_soul_snapshot()
+
+        # Load detailed context
+        profile = await self._memory.get_core_profile(user.user_id)
+        history = await self._memory.get_recent_messages(user.user_id, limit=20)
+        semantic = await self._memory.search_semantic(
+            user.user_id, triage_reason, n_results=3
+        )
+        episodic = await self._memory.search_episodic(
+            user.user_id, triage_reason, n_results=3
+        )
+
+        context = build_context(
+            user_display_name=user.display_name,
+            profile=profile or None,
+            semantic_memories=semantic or None,
+            episodic_memories=episodic or None,
+            history=history or None,
+            soul_name=soul_snap["name"],
+        )
+
+        secondary_line = ""
+        if "secondary" in soul_snap["emotion"]:
+            sec = soul_snap["emotion"]["secondary"]
+            sec_int = soul_snap["emotion"]["secondary_intensity"]
+            secondary_line = f"Secondary emotion: {sec} (intensity: {sec_int})"
+
+        system = _DECISION_SYSTEM_PROMPT.format(
             name=soul_snap["name"],
             pronoun=self._soul.pronoun,
             traits=", ".join(soul_snap["traits"]),
@@ -175,7 +301,11 @@ class HeartbeatLoop:
             secondary_emotion_line=secondary_line,
             rules="\n".join(f"- {r}" for r in soul_snap["immutable_rules"]),
             skills=self._skills.get_skill_descriptions_for_prompt(),
+            target_user_id=user.user_id,
+            target_adapter_id=user.last_platform or "unknown",
         )
+
+        prompt = f"Triage reason: {sanitize(triage_reason, strict=True)}\n\n{context}"
 
         fallback = {
             "action": "none",
@@ -185,19 +315,21 @@ class HeartbeatLoop:
 
         decision_data = await validated_ai_json(
             self._ai,
-            prompt=global_ctx,
+            prompt=prompt,
             system=system,
             validator=validate_heartbeat_decision,
             fallback=fallback,
         )
 
-        decision = HeartbeatDecision(
+        return HeartbeatDecision(
             action=HeartbeatAction(decision_data.get("action", "none")),
             content=decision_data.get("content", ""),
             skill_name=decision_data.get("skill_name"),
             skill_params=decision_data.get("skill_params", {}),
-            target_user_id=decision_data.get("target_user_id"),
-            target_adapter_id=decision_data.get("target_adapter_id"),
+            target_user_id=decision_data.get("target_user_id", user.user_id),
+            target_adapter_id=decision_data.get(
+                "target_adapter_id", user.last_platform
+            ),
             next_heartbeat_minutes=int(
                 decision_data.get(
                     "next_heartbeat_minutes",
@@ -205,9 +337,6 @@ class HeartbeatLoop:
                 ),
             ),
         )
-
-        await self._execute_decision(decision)
-        return decision.next_heartbeat_minutes
 
     def _build_global_context(self, users: list[UserSummary]) -> str:
         lines = [

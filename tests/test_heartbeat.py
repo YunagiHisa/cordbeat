@@ -403,11 +403,19 @@ class TestTick:
         memory: MemoryStore,
         mock_ai: AsyncMock,
     ) -> None:
-        """With users, AI should be called for decision."""
+        """With users, AI should be called for triage (Layer 1)."""
         await memory.get_or_create_user("u1", "user1")
+        # Layer 1 returns no users to act on → only triage call
+        mock_ai.generate_json = AsyncMock(
+            return_value={
+                "users": [],
+                "next_heartbeat_minutes": 30,
+            }
+        )
         with patch("cordbeat.heartbeat._in_quiet_hours", return_value=False):
-            await heartbeat._tick()
+            result = await heartbeat._tick()
         mock_ai.generate_json.assert_called_once()
+        assert result == 30
 
     async def test_tick_uses_configured_timezone(
         self,
@@ -738,3 +746,216 @@ class TestSleepPhaseErrors:
         memory.trim_old_messages = AsyncMock(side_effect=RuntimeError("DB error"))
         # Should not raise
         await heartbeat._run_sleep_phase()
+
+
+# ── Two-layer architecture ────────────────────────────────────────────
+
+
+class TestLayer1Triage:
+    async def test_triage_returns_selected_users(
+        self,
+        heartbeat: HeartbeatLoop,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Layer 1 should return list of users needing attention."""
+        mock_ai.generate_json = AsyncMock(
+            return_value={
+                "users": [{"user_id": "u1", "reason": "lonely"}],
+                "next_heartbeat_minutes": 30,
+            }
+        )
+        users = [
+            UserSummary(user_id="u1", display_name="Alice"),
+            UserSummary(user_id="u2", display_name="Bob"),
+        ]
+        result = await heartbeat._layer1_triage(users)
+        assert len(result["users"]) == 1
+        assert result["users"][0]["user_id"] == "u1"
+        assert result["next_heartbeat_minutes"] == 30
+
+    async def test_triage_empty_result(
+        self,
+        heartbeat: HeartbeatLoop,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Layer 1 returning empty means nobody needs attention."""
+        mock_ai.generate_json = AsyncMock(
+            return_value={"users": [], "next_heartbeat_minutes": 60}
+        )
+        users = [UserSummary(user_id="u1", display_name="Alice")]
+        result = await heartbeat._layer1_triage(users)
+        assert result["users"] == []
+
+    async def test_triage_fallback_on_validation_failure(
+        self,
+        heartbeat: HeartbeatLoop,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Invalid AI output → fallback with empty users list."""
+        import json
+
+        mock_ai.generate_json = AsyncMock(
+            side_effect=json.JSONDecodeError("bad", "", 0)
+        )
+        users = [UserSummary(user_id="u1", display_name="Alice")]
+        result = await heartbeat._layer1_triage(users)
+        assert result["users"] == []
+
+
+class TestLayer2Evaluate:
+    async def test_evaluate_returns_decision(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Layer 2 should return a HeartbeatDecision for the user."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.add_message("u1", "user", "Hello", "discord")
+        mock_ai.generate_json = AsyncMock(
+            return_value={
+                "action": "message",
+                "content": "How are you?",
+                "target_user_id": "u1",
+                "target_adapter_id": "discord",
+                "next_heartbeat_minutes": 30,
+            }
+        )
+        user = UserSummary(
+            user_id="u1",
+            display_name="Alice",
+            last_platform="discord",
+        )
+        decision = await heartbeat._layer2_evaluate(user, "lonely user")
+        assert decision.action == HeartbeatAction.MESSAGE
+        assert decision.content == "How are you?"
+        assert decision.target_user_id == "u1"
+
+    async def test_evaluate_fallback_on_validation_failure(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Invalid AI output → fallback to action=none."""
+        import json
+
+        await memory.get_or_create_user("u1", "Alice")
+        mock_ai.generate_json = AsyncMock(
+            side_effect=json.JSONDecodeError("bad", "", 0)
+        )
+        user = UserSummary(user_id="u1", display_name="Alice")
+        decision = await heartbeat._layer2_evaluate(user, "check in")
+        assert decision.action == HeartbeatAction.NONE
+
+    async def test_evaluate_defaults_target_from_user(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """If AI doesn't specify target, defaults from user summary."""
+        await memory.get_or_create_user("u1", "Alice")
+        mock_ai.generate_json = AsyncMock(
+            return_value={
+                "action": "none",
+                "content": "",
+                "next_heartbeat_minutes": 60,
+            }
+        )
+        user = UserSummary(
+            user_id="u1",
+            display_name="Alice",
+            last_platform="telegram",
+        )
+        decision = await heartbeat._layer2_evaluate(user, "routine check")
+        assert decision.target_user_id == "u1"
+        assert decision.target_adapter_id == "telegram"
+
+
+class TestTwoLayerIntegration:
+    async def test_tick_triage_then_evaluate(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Full tick: triage selects user → evaluate sends message."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+        await memory.add_message("u1", "user", "Hello", "discord")
+
+        call_count = 0
+
+        async def mock_generate_json(prompt: str, **kwargs: object) -> dict:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Layer 1: triage
+                return {
+                    "users": [{"user_id": "u1", "reason": "hasn't talked recently"}],
+                    "next_heartbeat_minutes": 45,
+                }
+            # Layer 2: decision
+            return {
+                "action": "message",
+                "content": "Hey Alice!",
+                "target_user_id": "u1",
+                "target_adapter_id": "discord",
+                "next_heartbeat_minutes": 30,
+            }
+
+        mock_ai.generate_json = AsyncMock(side_effect=mock_generate_json)
+
+        with patch("cordbeat.heartbeat._in_quiet_hours", return_value=False):
+            result = await heartbeat._tick()
+
+        # 2 AI calls: triage + evaluate
+        assert mock_ai.generate_json.call_count == 2
+        # Message was sent
+        mock_gateway.send_to_adapter.assert_called_once()
+        # Min of triage(45) and decision(30)
+        assert result == 30
+
+    async def test_tick_triage_selects_no_one(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Triage returns empty → no Layer 2 calls, no messages."""
+        await memory.get_or_create_user("u1", "Alice")
+        mock_ai.generate_json = AsyncMock(
+            return_value={"users": [], "next_heartbeat_minutes": 60}
+        )
+
+        with patch("cordbeat.heartbeat._in_quiet_hours", return_value=False):
+            result = await heartbeat._tick()
+
+        assert mock_ai.generate_json.call_count == 1
+        mock_gateway.send_to_adapter.assert_not_called()
+        assert result == 60
+
+    async def test_tick_unknown_user_in_triage_skipped(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """If triage returns unknown user_id, it's skipped in Layer 2."""
+        await memory.get_or_create_user("u1", "Alice")
+        mock_ai.generate_json = AsyncMock(
+            return_value={
+                "users": [{"user_id": "nonexistent", "reason": "???"}],
+                "next_heartbeat_minutes": 60,
+            }
+        )
+
+        with patch("cordbeat.heartbeat._in_quiet_hours", return_value=False):
+            result = await heartbeat._tick()
+
+        # Only triage call, no Layer 2
+        assert mock_ai.generate_json.call_count == 1
+        assert result == 60

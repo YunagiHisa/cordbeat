@@ -211,3 +211,85 @@ class TestResolvePlatformUser:
         await memory.link_platform("u1", "discord", "discord_123")
         result = await memory.resolve_platform_user("u1", "telegram")
         assert result is None
+
+
+class TestProposalOperations:
+    async def test_get_proposal_by_id(self, memory: MemoryStore) -> None:
+        pid = await memory.add_certain_record(
+            "u1",
+            "Test proposal",
+            record_type="proposal",
+            metadata={"status": "pending"},
+        )
+        result = await memory.get_proposal(pid)
+        assert result is not None
+        assert result["id"] == pid
+        assert result["content"] == "Test proposal"
+
+    async def test_get_proposal_not_found(self, memory: MemoryStore) -> None:
+        result = await memory.get_proposal("nonexistent-id")
+        assert result is None
+
+    async def test_get_proposal_ignores_non_proposals(
+        self,
+        memory: MemoryStore,
+    ) -> None:
+        """get_proposal only returns records with record_type=proposal."""
+        rid = await memory.add_certain_record(
+            "u1",
+            "A log entry",
+            record_type="log",
+        )
+        result = await memory.get_proposal(rid)
+        assert result is None
+
+    async def test_update_proposal_status(self, memory: MemoryStore) -> None:
+        pid = await memory.add_certain_record(
+            "u1",
+            "Pending proposal",
+            record_type="proposal",
+            metadata={"status": "pending"},
+        )
+        updated = await memory.update_proposal_status(pid, "approved")
+        assert updated is True
+
+        result = await memory.get_proposal(pid)
+        assert result is not None
+        import json
+
+        meta = json.loads(result["metadata"])
+        assert meta["status"] == "approved"
+
+    async def test_update_proposal_status_not_found(
+        self,
+        memory: MemoryStore,
+    ) -> None:
+        updated = await memory.update_proposal_status("bad-id", "approved")
+        assert updated is False
+
+    async def test_get_pending_proposals(self, memory: MemoryStore) -> None:
+        await memory.add_certain_record(
+            "u1",
+            "Pending 1",
+            record_type="proposal",
+            metadata={"status": "pending"},
+        )
+        await memory.add_certain_record(
+            "u1",
+            "Approved",
+            record_type="proposal",
+            metadata={"status": "approved"},
+        )
+        await memory.add_certain_record(
+            "u2",
+            "Pending 2",
+            record_type="proposal",
+            metadata={"status": "pending"},
+        )
+
+        all_pending = await memory.get_pending_proposals()
+        assert len(all_pending) == 2
+
+        u1_pending = await memory.get_pending_proposals(user_id="u1")
+        assert len(u1_pending) == 1
+        assert u1_pending[0]["content"] == "Pending 1"

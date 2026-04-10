@@ -494,6 +494,70 @@ class _RecordStore:
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
+    async def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        """Retrieve a single proposal by ID."""
+        cursor = await self._db.execute(
+            "SELECT * FROM certain_records WHERE id = ? AND record_type = 'proposal'",
+            (proposal_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def update_proposal_status(
+        self,
+        proposal_id: str,
+        status: str,
+    ) -> bool:
+        """Update the status field inside a proposal's metadata.
+
+        Returns True if the proposal was found and updated.
+        """
+        row_cursor = await self._db.execute(
+            "SELECT metadata FROM certain_records "
+            "WHERE id = ? AND record_type = 'proposal'",
+            (proposal_id,),
+        )
+        row = await row_cursor.fetchone()
+        if row is None:
+            return False
+
+        meta = json.loads(row["metadata"]) if row["metadata"] else {}
+        meta["status"] = status
+        await self._db.execute(
+            "UPDATE certain_records SET metadata = ? WHERE id = ?",
+            (json.dumps(meta), proposal_id),
+        )
+        await self._db.commit()
+        return True
+
+    async def get_pending_proposals(
+        self,
+        user_id: str | None = None,
+        status: str = "pending",
+    ) -> list[dict[str, Any]]:
+        """Return all proposals matching the given status."""
+        if user_id:
+            cursor = await self._db.execute(
+                "SELECT * FROM certain_records "
+                "WHERE record_type = 'proposal' AND user_id = ? "
+                "ORDER BY created_at ASC",
+                (user_id,),
+            )
+        else:
+            cursor = await self._db.execute(
+                "SELECT * FROM certain_records "
+                "WHERE record_type = 'proposal' "
+                "ORDER BY created_at ASC",
+            )
+        rows = await cursor.fetchall()
+        results = []
+        for row in rows:
+            record = dict(row)
+            meta = json.loads(record.get("metadata") or "{}")
+            if meta.get("status") == status:
+                results.append(record)
+        return results
+
 
 # ── Facade ────────────────────────────────────────────────────────────
 
@@ -620,6 +684,23 @@ class MemoryStore:
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         return await self._records.get_certain_records(user_id, record_type, limit)  # type: ignore[union-attr]
+
+    async def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        return await self._records.get_proposal(proposal_id)  # type: ignore[union-attr]
+
+    async def update_proposal_status(
+        self,
+        proposal_id: str,
+        status: str,
+    ) -> bool:
+        return await self._records.update_proposal_status(proposal_id, status)  # type: ignore[union-attr]
+
+    async def get_pending_proposals(
+        self,
+        user_id: str | None = None,
+        status: str = "pending",
+    ) -> list[dict[str, Any]]:
+        return await self._records.get_pending_proposals(user_id, status)  # type: ignore[union-attr]
 
     # ── Conversation history (delegates to _ConversationStore) ────
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,6 +17,8 @@ from cordbeat.models import (
     HeartbeatAction,
     HeartbeatDecision,
     MessageType,
+    ProposalStatus,
+    ProposalType,
     SafetyLevel,
     SkillMeta,
     UserSummary,
@@ -1064,3 +1067,270 @@ class TestProposalWorkflow:
         meta = json.loads(records[0]["metadata"])
         assert meta["status"] == "pending"
         assert meta["adapter_id"] == "discord"
+
+
+class TestSkillProposal:
+    """Tests for requires_confirmation skill → proposal flow."""
+
+    async def test_requires_confirmation_creates_proposal(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Skill with requires_confirmation stores a proposal instead of executing."""
+        from types import SimpleNamespace
+
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        execute_fn = MagicMock(return_value={"ok": True})
+        module = SimpleNamespace(execute=execute_fn)
+        skill = Skill(
+            meta=SkillMeta(
+                name="deploy",
+                description="Deploy app",
+                usage="deploy",
+                safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
+            ),
+            module=module,
+        )
+        skills._skills["deploy"] = skill
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="deploy",
+            skill_params={"target": "production"},
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_skill(decision)
+
+        # Skill was NOT executed
+        execute_fn.assert_not_called()
+
+        # Proposal was stored
+        records = await memory.get_certain_records("u1", record_type="proposal")
+        assert len(records) == 1
+        meta = json.loads(records[0]["metadata"])
+        assert meta["proposal_type"] == ProposalType.SKILL_EXECUTION
+        assert meta["skill_name"] == "deploy"
+        assert meta["status"] == ProposalStatus.PENDING
+
+    async def test_skill_proposal_notifies_user(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Skill proposal sends notification with proposal ID."""
+        from types import SimpleNamespace
+
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        module = SimpleNamespace(execute=lambda **kw: {"ok": True})
+        skill = Skill(
+            meta=SkillMeta(
+                name="cleanup",
+                description="Clean up data",
+                usage="cleanup",
+                safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
+            ),
+            module=module,
+        )
+        skills._skills["cleanup"] = skill
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="cleanup",
+            skill_params={},
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_skill(decision)
+
+        mock_gateway.send_to_adapter.assert_called_once()
+        msg = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "cleanup" in msg.content
+        assert "proposal ID:" in msg.content
+
+
+class TestApprovedProposalExecution:
+    """Tests for executing approved proposals on heartbeat tick."""
+
+    async def test_approved_skill_proposal_executed(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+    ) -> None:
+        """An approved skill proposal gets executed and marked as executed."""
+        from types import SimpleNamespace
+
+        execute_fn = MagicMock(return_value={"ok": True})
+        module = SimpleNamespace(execute=execute_fn)
+        skill = Skill(
+            meta=SkillMeta(
+                name="test_skill",
+                description="Test",
+                usage="test",
+                safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
+            ),
+            module=module,
+        )
+        skills._skills["test_skill"] = skill
+
+        # Store a proposal and approve it
+        proposal_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Run test_skill",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "test_skill",
+                "skill_params": {"key": "value"},
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        # Skill was executed with correct params
+        execute_fn.assert_called_once_with(key="value")
+
+        # Proposal marked as executed
+        proposal = await memory.get_proposal(proposal_id)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.EXECUTED
+
+    async def test_approved_missing_skill_marked_expired(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """Approved proposal for missing skill is marked expired."""
+        proposal_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Run unknown_skill",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "nonexistent",
+                "skill_params": {},
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        proposal = await memory.get_proposal(proposal_id)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.EXPIRED
+
+    async def test_pending_proposals_not_executed(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+    ) -> None:
+        """Pending (not approved) proposals are NOT executed."""
+        from types import SimpleNamespace
+
+        execute_fn = MagicMock(return_value={"ok": True})
+        module = SimpleNamespace(execute=execute_fn)
+        skill = Skill(
+            meta=SkillMeta(
+                name="test_skill",
+                description="Test",
+                usage="test",
+            ),
+            module=module,
+        )
+        skills._skills["test_skill"] = skill
+
+        await memory.add_certain_record(
+            user_id="u1",
+            content="Run test_skill",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.PENDING,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "test_skill",
+                "skill_params": {},
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        # Skill was NOT executed
+        execute_fn.assert_not_called()
+
+    async def test_general_proposal_marked_executed(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """General approved proposals are acknowledged and marked executed."""
+        proposal_id = await memory.add_certain_record(
+            user_id="u1",
+            content="General improvement idea",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.GENERAL,
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        proposal = await memory.get_proposal(proposal_id)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.EXECUTED
+
+    async def test_skill_execution_failure_marks_expired(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+    ) -> None:
+        """Failed skill execution marks proposal as expired."""
+        from types import SimpleNamespace
+
+        def boom(**kw: object) -> None:
+            raise RuntimeError("boom")
+
+        module = SimpleNamespace(execute=boom)
+        skill = Skill(
+            meta=SkillMeta(
+                name="failing_skill",
+                description="Fails",
+                usage="fail",
+            ),
+            module=module,
+        )
+        skills._skills["failing_skill"] = skill
+
+        proposal_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Run failing_skill",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "failing_skill",
+                "skill_params": {},
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        proposal = await memory.get_proposal(proposal_id)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.EXPIRED

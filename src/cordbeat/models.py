@@ -92,6 +92,23 @@ class HeartbeatAction(StrEnum):
     NONE = "none"
 
 
+# ── Proposals ─────────────────────────────────────────────────────────
+
+
+class ProposalType(StrEnum):
+    SKILL_EXECUTION = "skill_execution"
+    TRAIT_CHANGE = "trait_change"
+    GENERAL = "general"
+
+
+class ProposalStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXECUTED = "executed"
+    EXPIRED = "expired"
+
+
 @dataclass
 class HeartbeatDecision:
     action: HeartbeatAction

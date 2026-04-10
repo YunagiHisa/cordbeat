@@ -17,6 +17,8 @@ from cordbeat.models import (
     HeartbeatAction,
     HeartbeatDecision,
     MessageType,
+    ProposalStatus,
+    ProposalType,
     SafetyLevel,
     UserSummary,
 )
@@ -179,6 +181,9 @@ class HeartbeatLoop:
 
         # Reset daily flag when we exit quiet hours
         self._sleep_done_today = False
+
+        # ── Execute approved proposals ────────────────────────────────
+        await self._execute_approved_proposals()
 
         # ── Emotion decay ─────────────────────────────────────────────
         self._soul.decay_emotion()
@@ -440,10 +445,7 @@ class HeartbeatLoop:
             return
 
         if skill.meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION:
-            logger.info(
-                "Skill '%s' requires confirmation, skipping autonomous run",
-                decision.skill_name,
-            )
+            await self._store_skill_proposal(decision, skill.meta.name)
             return
 
         try:
@@ -455,14 +457,18 @@ class HeartbeatLoop:
     async def _store_and_notify_proposal(
         self,
         decision: HeartbeatDecision,
-    ) -> None:
+        proposal_type: str = ProposalType.GENERAL,
+    ) -> str:
         """Store an improvement proposal and notify the target user."""
         user_id = decision.target_user_id
         adapter_id = decision.target_adapter_id
         content = decision.content
 
         # Store proposal in memory
-        metadata: dict[str, Any] = {"status": "pending"}
+        metadata: dict[str, Any] = {
+            "status": ProposalStatus.PENDING,
+            "proposal_type": proposal_type,
+        }
         if adapter_id:
             metadata["adapter_id"] = adapter_id
 
@@ -485,13 +491,129 @@ class HeartbeatLoop:
                     type=MessageType.HEARTBEAT_MESSAGE,
                     adapter_id=adapter_id,
                     platform_user_id=platform_user_id,
-                    content=(f"💡 {soul_snap['name']} has a suggestion:\n\n{content}"),
+                    content=(
+                        f"💡 {soul_snap['name']} has a suggestion:\n\n{content}"
+                        f"\n\n(proposal ID: {proposal_id})"
+                    ),
                 )
                 await self._gateway.send_to_adapter(adapter_id, notification)
                 logger.info(
                     "Proposal notification sent to %s via %s",
                     user_id,
                     adapter_id,
+                )
+        return proposal_id
+
+    async def _store_skill_proposal(
+        self,
+        decision: HeartbeatDecision,
+        skill_name: str,
+    ) -> str:
+        """Store a skill execution proposal for user confirmation."""
+        import json as _json
+
+        metadata: dict[str, Any] = {
+            "status": ProposalStatus.PENDING,
+            "proposal_type": ProposalType.SKILL_EXECUTION,
+            "skill_name": skill_name,
+            "skill_params": decision.skill_params,
+        }
+        user_id = decision.target_user_id or "__system__"
+        adapter_id = decision.target_adapter_id
+
+        if adapter_id:
+            metadata["adapter_id"] = adapter_id
+
+        content = (
+            f"Skill '{skill_name}' requires confirmation.\n"
+            f"Parameters: {_json.dumps(decision.skill_params)}"
+        )
+
+        proposal_id = await self._memory.add_certain_record(
+            user_id=user_id,
+            content=content,
+            record_type="proposal",
+            metadata=metadata,
+        )
+        logger.info(
+            "Skill proposal stored (id=%s): %s with params %s",
+            proposal_id,
+            skill_name,
+            decision.skill_params,
+        )
+
+        # Notify user
+        if user_id != "__system__" and adapter_id:
+            platform_user_id = await self._memory.resolve_platform_user(
+                user_id, adapter_id
+            )
+            if platform_user_id:
+                soul_snap = self._soul.get_soul_snapshot()
+                notification = GatewayMessage(
+                    type=MessageType.HEARTBEAT_MESSAGE,
+                    adapter_id=adapter_id,
+                    platform_user_id=platform_user_id,
+                    content=(
+                        f"🔧 {soul_snap['name']} wants to run "
+                        f"skill '{skill_name}'.\n"
+                        f"Parameters: {_json.dumps(decision.skill_params)}\n\n"
+                        f"(proposal ID: {proposal_id})"
+                    ),
+                )
+                await self._gateway.send_to_adapter(adapter_id, notification)
+
+        return proposal_id
+
+    async def _execute_approved_proposals(self) -> None:
+        """Check for approved proposals and execute them."""
+        import json as _json
+
+        proposals = await self._memory.get_pending_proposals(
+            status=ProposalStatus.APPROVED,
+        )
+
+        for proposal in proposals:
+            meta = _json.loads(proposal.get("metadata") or "{}")
+            proposal_type = meta.get("proposal_type", ProposalType.GENERAL)
+            proposal_id = proposal["id"]
+
+            if proposal_type == ProposalType.SKILL_EXECUTION:
+                skill_name = meta.get("skill_name", "")
+                skill_params = meta.get("skill_params", {})
+                skill = self._skills.get(skill_name)
+                if skill is None:
+                    logger.warning(
+                        "Approved skill '%s' not found, marking expired",
+                        skill_name,
+                    )
+                    await self._memory.update_proposal_status(
+                        proposal_id, ProposalStatus.EXPIRED
+                    )
+                    continue
+
+                try:
+                    result = await skill.execute(skill_params)
+                    logger.info(
+                        "Approved skill '%s' executed: %s",
+                        skill_name,
+                        result,
+                    )
+                    await self._memory.update_proposal_status(
+                        proposal_id, ProposalStatus.EXECUTED
+                    )
+                except Exception:
+                    logger.exception("Approved skill '%s' failed", skill_name)
+                    await self._memory.update_proposal_status(
+                        proposal_id, ProposalStatus.EXPIRED
+                    )
+            else:
+                # General proposals are informational — just mark executed
+                logger.info(
+                    "General proposal %s acknowledged",
+                    proposal_id,
+                )
+                await self._memory.update_proposal_status(
+                    proposal_id, ProposalStatus.EXECUTED
                 )
 
     # ── Sleep Phase ───────────────────────────────────────────────────

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+import socket
 from pathlib import Path
 
 import pytest
 
 from cordbeat.models import SafetyLevel
-from cordbeat.skills import SkillRegistry
+from cordbeat.skills import SkillPermissionError, SkillRegistry
 
 
 def _create_skill(
@@ -365,3 +366,194 @@ class TestSkillExecution:
         registry = SkillRegistry(skills_dir)
         registry.load_all()
         assert registry.get("no_yaml") is None
+
+
+class TestSandboxEnforcement:
+    """Tests that sandbox network/filesystem restrictions are actually enforced."""
+
+    async def test_network_blocked_in_sandbox(self, tmp_path: Path) -> None:
+        """Sandboxed skill with network=False cannot create sockets."""
+        code = (
+            "import socket\n"
+            "def execute(**kwargs):\n"
+            "    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+            "    s.close()\n"
+            "    return {'result': 'connected'}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(
+            skills_dir, "net_blocked", sandbox=True, network=False, main_code=code
+        )
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("net_blocked")
+        assert skill is not None
+        with pytest.raises(SkillPermissionError, match="Network access"):
+            await skill.execute({})
+
+    async def test_network_allowed_in_sandbox(self, tmp_path: Path) -> None:
+        """Sandboxed skill with network=True can create sockets."""
+        code = (
+            "import socket\n"
+            "def execute(**kwargs):\n"
+            "    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+            "    s.close()\n"
+            "    return {'result': 'connected'}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(
+            skills_dir, "net_allowed", sandbox=True, network=True, main_code=code
+        )
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("net_allowed")
+        assert skill is not None
+        result = await skill.execute({})
+        assert result["result"] == "connected"
+
+    async def test_filesystem_blocked_outside_workdir(self, tmp_path: Path) -> None:
+        """Sandboxed skill with filesystem=False cannot write outside work_dir."""
+        outside_path = str(tmp_path / "outside.txt").replace("\\", "\\\\")
+        code = (
+            f"def execute(**kwargs):\n"
+            f"    with open('{outside_path}', 'w') as f:\n"
+            f"        f.write('escape')\n"
+            f"    return {{'result': 'wrote'}}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(
+            skills_dir,
+            "fs_blocked",
+            sandbox=True,
+            filesystem=False,
+            main_code=code,
+        )
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("fs_blocked")
+        assert skill is not None
+        with pytest.raises(SkillPermissionError, match="Filesystem access"):
+            await skill.execute({})
+
+    async def test_filesystem_allowed_inside_workdir(self, tmp_path: Path) -> None:
+        """Sandboxed skill with filesystem=False CAN write inside work_dir."""
+        code = (
+            "from pathlib import Path\n"
+            "def execute(context=None, **kwargs):\n"
+            "    out = context.work_dir / 'output.txt'\n"
+            "    with open(str(out), 'w') as f:\n"
+            "        f.write('hello')\n"
+            "    return {'result': 'wrote'}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(
+            skills_dir,
+            "fs_workdir",
+            sandbox=True,
+            filesystem=False,
+            main_code=code,
+        )
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("fs_workdir")
+        assert skill is not None
+        result = await skill.execute({})
+        assert result["result"] == "wrote"
+
+    async def test_filesystem_allowed_when_flag_true(self, tmp_path: Path) -> None:
+        """Sandboxed skill with filesystem=True can write anywhere."""
+        outside = tmp_path / "output.txt"
+        outside_path = str(outside).replace("\\", "\\\\")
+        code = (
+            f"def execute(**kwargs):\n"
+            f"    with open('{outside_path}', 'w') as f:\n"
+            f"        f.write('allowed')\n"
+            f"    return {{'result': 'wrote'}}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(
+            skills_dir,
+            "fs_allowed",
+            sandbox=True,
+            filesystem=True,
+            main_code=code,
+        )
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("fs_allowed")
+        assert skill is not None
+        result = await skill.execute({})
+        assert result["result"] == "wrote"
+        assert outside.read_text() == "allowed"
+
+    async def test_non_sandboxed_not_restricted(self, tmp_path: Path) -> None:
+        """Non-sandboxed skills are not restricted even with network=False."""
+        code = (
+            "import socket\n"
+            "def execute(**kwargs):\n"
+            "    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+            "    s.close()\n"
+            "    return {'result': 'ok'}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(
+            skills_dir, "unrestricted", sandbox=False, network=False, main_code=code
+        )
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("unrestricted")
+        assert skill is not None
+        # Non-sandboxed: enforcement is not applied
+        result = await skill.execute({})
+        assert result["result"] == "ok"
+
+    async def test_network_guard_restores_socket(self, tmp_path: Path) -> None:
+        """After sandbox execution, socket module is restored."""
+        code = (
+            "import socket\n"
+            "def execute(**kwargs):\n"
+            "    try:\n"
+            "        socket.socket()\n"
+            "    except Exception:\n"
+            "        pass\n"
+            "    return {'result': 'done'}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(
+            skills_dir, "guard_test", sandbox=True, network=False, main_code=code
+        )
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("guard_test")
+        assert skill is not None
+
+        # The skill catches the error internally, so it succeeds
+        await skill.execute({})
+
+        # After execution, socket should work normally
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.close()
+
+    async def test_both_network_and_filesystem_blocked(self, tmp_path: Path) -> None:
+        """Both network and filesystem can be blocked simultaneously."""
+        code = (
+            "import socket\n"
+            "def execute(**kwargs):\n"
+            "    socket.socket()\n"
+            "    return {'result': 'fail'}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(
+            skills_dir,
+            "both_blocked",
+            sandbox=True,
+            network=False,
+            filesystem=False,
+            main_code=code,
+        )
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("both_blocked")
+        assert skill is not None
+        with pytest.raises(SkillPermissionError):
+            await skill.execute({})

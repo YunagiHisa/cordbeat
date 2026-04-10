@@ -36,11 +36,11 @@ def _block_network() -> Generator[None, None, None]:
     def _blocked(*args: Any, **kwargs: Any) -> None:  # noqa: ARG001
         raise SkillPermissionError("Network access is not allowed for this skill")
 
-    _socket_module.socket = _blocked  # type: ignore[assignment]
+    setattr(_socket_module, "socket", _blocked)  # noqa: B010
     try:
         yield
     finally:
-        _socket_module.socket = original  # type: ignore[assignment]
+        setattr(_socket_module, "socket", original)  # noqa: B010
 
 
 @contextlib.contextmanager
@@ -69,11 +69,11 @@ def _restrict_filesystem(work_dir: Path) -> Generator[None, None, None]:
             )
         return original_open(file, *args, **kwargs)
 
-    builtins.open = _restricted_open  # type: ignore[assignment]
+    builtins.open = _restricted_open
     try:
         yield
     finally:
-        builtins.open = original_open  # type: ignore[assignment]
+        builtins.open = original_open
 
 
 class Skill:

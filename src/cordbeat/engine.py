@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 
 from cordbeat.ai_backend import AIBackend
+from cordbeat.config import MemoryConfig
 from cordbeat.extraction import MemoryExtractor
 from cordbeat.gateway import GatewayServer
 from cordbeat.memory import MemoryStore
@@ -31,13 +32,15 @@ class CoreEngine:
         memory: MemoryStore,
         skills: SkillRegistry,
         gateway: GatewayServer,
+        memory_config: MemoryConfig | None = None,
     ) -> None:
         self._ai = ai
         self._soul = soul
         self._memory = memory
         self._skills = skills
         self._gateway = gateway
-        self._extractor = MemoryExtractor(ai, soul, memory)
+        self._memory_config = memory_config or MemoryConfig()
+        self._extractor = MemoryExtractor(ai, soul, memory, self._memory_config)
 
     async def handle_message(self, message: GatewayMessage) -> None:
         """Handle a single incoming message from the queue."""
@@ -102,15 +105,21 @@ class CoreEngine:
         """Build prompt, call AI, return response or None on failure."""
         soul_snap = self._soul.get_soul_snapshot()
         profile = await self._memory.get_core_profile(user_id)
-        history = await self._memory.get_recent_messages(user_id, limit=20)
+        history = await self._memory.get_recent_messages(
+            user_id, limit=self._memory_config.conversation_history_limit
+        )
 
         system_prompt = build_soul_system_prompt(soul_snap)
 
         semantic_memories = await self._memory.search_semantic(
-            user_id, message.content, n_results=3
+            user_id,
+            message.content,
+            n_results=self._memory_config.memory_search_results,
         )
         episodic_memories = await self._memory.search_episodic(
-            user_id, message.content, n_results=3
+            user_id,
+            message.content,
+            n_results=self._memory_config.memory_search_results,
         )
 
         context = build_context(

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import builtins
+import contextlib
 import hashlib
 import importlib.util
 import logging
+import socket as _socket_module
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +22,58 @@ logger = logging.getLogger(__name__)
 
 class SkillPermissionError(Exception):
     """Raised when a skill violates its sandbox permissions."""
+
+
+@contextlib.contextmanager
+def _block_network() -> Generator[None, None, None]:
+    """Block all network access by replacing ``socket.socket``.
+
+    While the context manager is active any attempt to create a socket
+    raises :class:`SkillPermissionError`.
+    """
+    original = _socket_module.socket
+
+    def _blocked(*args: Any, **kwargs: Any) -> None:  # noqa: ARG001
+        raise SkillPermissionError("Network access is not allowed for this skill")
+
+    _socket_module.socket = _blocked  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        _socket_module.socket = original  # type: ignore[assignment]
+
+
+@contextlib.contextmanager
+def _restrict_filesystem(work_dir: Path) -> Generator[None, None, None]:
+    """Restrict ``open()`` to paths inside *work_dir*.
+
+    Any call to the built-in ``open`` with a path outside the resolved
+    *work_dir* raises :class:`SkillPermissionError`.
+    """
+    resolved_root = work_dir.resolve()
+    original_open = builtins.open
+
+    def _restricted_open(
+        file: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        try:
+            target = Path(file).resolve()
+        except (TypeError, ValueError):
+            # Non-path argument (e.g. file descriptor int) — pass through
+            return original_open(file, *args, **kwargs)
+        if not target.is_relative_to(resolved_root):
+            raise SkillPermissionError(
+                f"Filesystem access outside work directory is not allowed: {target}"
+            )
+        return original_open(file, *args, **kwargs)
+
+    builtins.open = _restricted_open  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        builtins.open = original_open  # type: ignore[assignment]
 
 
 class Skill:
@@ -59,12 +115,23 @@ class Skill:
         params: dict[str, Any],
         context: SkillContext,
     ) -> dict[str, Any]:
-        """Execute skill in a sandboxed context with a temp work directory."""
+        """Execute skill in a sandboxed context with enforced permissions."""
         with tempfile.TemporaryDirectory(prefix="cordbeat_skill_") as tmpdir:
             context.work_dir = Path(tmpdir)
-            result = fn(**params)
-            if hasattr(result, "__await__"):
-                result = await result
+
+            guards: list[contextlib.AbstractContextManager[None]] = []
+            if not self.meta.network:
+                guards.append(_block_network())
+            if not self.meta.filesystem:
+                guards.append(_restrict_filesystem(context.work_dir))
+
+            with contextlib.ExitStack() as stack:
+                for guard in guards:
+                    stack.enter_context(guard)
+                result = fn(**params)
+                if hasattr(result, "__await__"):
+                    result = await result
+
             if not isinstance(result, dict):
                 return {"result": result}
             return result

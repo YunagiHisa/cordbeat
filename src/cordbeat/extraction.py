@@ -99,7 +99,7 @@ class MemoryExtractor:
                 logger.debug("Flashbulb memory created for %s", user_id)
         except (json.JSONDecodeError, KeyError, ValueError):
             logger.debug("Emotion inference parse failed, skipping")
-        except Exception:
+        except (OSError, RuntimeError, TypeError):
             logger.debug("Emotion inference failed, skipping")
 
     async def extract_and_store_memories(
@@ -122,7 +122,14 @@ class MemoryExtractor:
                 temperature=0.2,
             )
             data = json.loads(raw)
-        except Exception:
+        except (
+            json.JSONDecodeError,
+            KeyError,
+            ValueError,
+            OSError,
+            RuntimeError,
+            TypeError,
+        ):
             logger.debug("Memory extraction failed, skipping")
             return
 

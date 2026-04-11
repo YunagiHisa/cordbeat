@@ -30,9 +30,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Configurable `timeout` and `max_tokens` in `AIBackendConfig`
 - Configurable `conversation_history_limit` and `memory_search_results`
   in `MemoryConfig`
+- Configurable `diary_max_tokens` and `facts_per_message_limit`
+  in `MemoryConfig`
+- Proposal approval system — structured pending/approved/rejected/executed
+  lifecycle for skill executions, trait changes, and general improvements
+- `requires_confirmation` skills now create approval proposals instead of
+  being silently skipped
+- SOUL trait change approval flow — AI can propose personality changes via
+  `propose_trait_change` action; changes only apply after user approval
+- Cross-platform account linking with secure tokens
+  (`secrets.token_urlsafe`, single-use, 10-minute expiry)
+- `LINK_REQUEST` / `LINK_CONFIRM` message handlers in CoreEngine
 - CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, CHANGELOG.md
 - Docker HEALTHCHECK for core container
-- 215+ tests with 80% coverage
+- 311 tests with 85%+ coverage
 
 ### Changed
 - Migrated to aiosqlite for async database operations

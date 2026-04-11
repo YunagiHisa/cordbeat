@@ -188,3 +188,96 @@ class TestExtractAndStoreMemories:
         await extractor.extract_and_store_memories("u1", "Alice", "many facts", "ok")
         results = await memory.search_semantic("u1", "fact", n_results=20)
         assert len(results) <= 5
+
+    @pytest.mark.anyio
+    async def test_stores_emotional_tone_metadata(
+        self,
+        extractor: MemoryExtractor,
+        mock_ai: AsyncMock,
+        memory: MemoryStore,
+    ) -> None:
+        mock_ai.generate = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "topic": "music",
+                    "emotional_tone": "happy",
+                    "facts": ["User plays guitar"],
+                    "episode_summary": "User talked about learning guitar recently.",
+                }
+            )
+        )
+        await memory.get_or_create_user("u1", "Alice")
+        await extractor.extract_and_store_memories(
+            "u1", "Alice", "I play guitar", "Cool!"
+        )
+        semantic = await memory.search_semantic("u1", "guitar", n_results=5)
+        assert len(semantic) > 0
+        assert semantic[0]["metadata"]["emotional_tone"] == "happy"
+
+        episodic = await memory.search_episodic("u1", "guitar", n_results=5)
+        assert len(episodic) > 0
+        assert episodic[0]["metadata"]["emotional_tone"] == "happy"
+
+
+class TestExtractRecallKeywords:
+    @pytest.mark.anyio
+    async def test_extracts_keywords(
+        self, extractor: MemoryExtractor, mock_ai: AsyncMock
+    ) -> None:
+        mock_ai.generate = AsyncMock(
+            return_value='{"keywords": ["Python", "OSS", "tired"]}'
+        )
+        keywords = await extractor.extract_recall_keywords("How are you?")
+        assert keywords == ["Python", "OSS", "tired"]
+
+    @pytest.mark.anyio
+    async def test_includes_history_context(
+        self, extractor: MemoryExtractor, mock_ai: AsyncMock
+    ) -> None:
+        mock_ai.generate = AsyncMock(return_value='{"keywords": ["CordBeat"]}')
+        history = [
+            {"role": "user", "content": "Let's talk about CordBeat"},
+            {"role": "assistant", "content": "Sure!"},
+        ]
+        keywords = await extractor.extract_recall_keywords("Go on", history)
+        assert len(keywords) >= 1
+        # Verify history was passed in the prompt
+        call_prompt = mock_ai.generate.call_args[1]["prompt"]
+        assert "CordBeat" in call_prompt
+
+    @pytest.mark.anyio
+    async def test_caps_at_three_keywords(
+        self, extractor: MemoryExtractor, mock_ai: AsyncMock
+    ) -> None:
+        mock_ai.generate = AsyncMock(
+            return_value='{"keywords": ["a", "bb", "cc", "dd", "ee"]}'
+        )
+        keywords = await extractor.extract_recall_keywords("test")
+        assert len(keywords) <= 3
+
+    @pytest.mark.anyio
+    async def test_filters_short_keywords(
+        self, extractor: MemoryExtractor, mock_ai: AsyncMock
+    ) -> None:
+        mock_ai.generate = AsyncMock(return_value='{"keywords": ["a", "ok", "Python"]}')
+        keywords = await extractor.extract_recall_keywords("test")
+        # "a" is too short (<2 chars), should be filtered
+        assert "a" not in keywords
+        assert "ok" in keywords
+        assert "Python" in keywords
+
+    @pytest.mark.anyio
+    async def test_parse_failure_returns_empty(
+        self, extractor: MemoryExtractor, mock_ai: AsyncMock
+    ) -> None:
+        mock_ai.generate = AsyncMock(return_value="not json")
+        keywords = await extractor.extract_recall_keywords("test")
+        assert keywords == []
+
+    @pytest.mark.anyio
+    async def test_ai_error_returns_empty(
+        self, extractor: MemoryExtractor, mock_ai: AsyncMock
+    ) -> None:
+        mock_ai.generate = AsyncMock(side_effect=RuntimeError("timeout"))
+        keywords = await extractor.extract_recall_keywords("test")
+        assert keywords == []

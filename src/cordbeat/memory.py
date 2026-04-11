@@ -256,6 +256,26 @@ class _VectorMemory:
     ) -> list[dict[str, Any]]:
         return await self._query_collection(self._episodic, user_id, query, n_results)
 
+    async def search_by_emotion(
+        self,
+        user_id: str,
+        emotion: str,
+        query: str,
+        n_results: int = 3,
+    ) -> list[dict[str, Any]]:
+        """Search episodic memories filtered by emotional_tone metadata.
+
+        Queries by user_id via ChromaDB, then post-filters by emotion tag.
+        """
+        candidates = await self._query_collection(
+            self._episodic, user_id, query, n_results * 3
+        )
+        return [
+            r
+            for r in candidates
+            if r.get("metadata", {}).get("emotional_tone") == emotion
+        ][:n_results]
+
     async def add_flashbulb(
         self,
         user_id: str,
@@ -855,6 +875,16 @@ class MemoryStore:
         n_results: int = 5,
     ) -> list[dict[str, Any]]:
         return await self._vectors.search_episodic(user_id, query, n_results)  # type: ignore[union-attr]
+
+    async def search_by_emotion(
+        self,
+        user_id: str,
+        emotion: str,
+        query: str,
+        n_results: int = 3,
+    ) -> list[dict[str, Any]]:
+        """Search episodic memories by emotional_tone metadata."""
+        return await self._vectors.search_by_emotion(user_id, emotion, query, n_results)  # type: ignore[union-attr]
 
     async def add_flashbulb_memory(
         self,

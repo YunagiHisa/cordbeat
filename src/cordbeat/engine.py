@@ -119,6 +119,7 @@ class CoreEngine:
 
         system_prompt = build_soul_system_prompt(soul_snap)
 
+        # Phase 1: Direct keyword search (message.content → ChromaDB)
         semantic_memories = await self._memory.search_semantic(
             user_id,
             message.content,
@@ -129,6 +130,38 @@ class CoreEngine:
             message.content,
             n_results=self._memory_config.memory_search_results,
         )
+
+        # Phase 2: Context inference recall (AI extracts keywords → search)
+        recall_keywords = await self._extractor.extract_recall_keywords(
+            message.content, history or None
+        )
+        seen_ids = {m["id"] for m in semantic_memories + episodic_memories}
+        for keyword in recall_keywords:
+            for mem in await self._memory.search_semantic(
+                user_id, keyword, n_results=2
+            ):
+                if mem["id"] not in seen_ids:
+                    semantic_memories.append(mem)
+                    seen_ids.add(mem["id"])
+            for mem in await self._memory.search_episodic(
+                user_id, keyword, n_results=2
+            ):
+                if mem["id"] not in seen_ids:
+                    episodic_memories.append(mem)
+                    seen_ids.add(mem["id"])
+
+        # Phase 3: Emotion association recall (current emotion → tag search)
+        current_emotion = soul_snap["emotion"]["primary"]
+        if current_emotion and current_emotion != "calm":
+            for mem in await self._memory.search_by_emotion(
+                user_id,
+                current_emotion,
+                message.content,
+                n_results=2,
+            ):
+                if mem["id"] not in seen_ids:
+                    episodic_memories.append(mem)
+                    seen_ids.add(mem["id"])
 
         context = build_context(
             user_display_name=user.display_name,

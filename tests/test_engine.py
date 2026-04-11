@@ -10,7 +10,13 @@ import pytest
 from cordbeat.config import MemoryConfig
 from cordbeat.engine import CoreEngine
 from cordbeat.memory import MemoryStore
-from cordbeat.models import Emotion, GatewayMessage, MessageType
+from cordbeat.models import (
+    Emotion,
+    GatewayMessage,
+    MemoryEntry,
+    MemoryLayer,
+    MessageType,
+)
 from cordbeat.skills import SkillRegistry
 from cordbeat.soul import Soul
 
@@ -38,6 +44,8 @@ def mock_ai() -> AsyncMock:
 
     async def _generate(**kwargs: object) -> str:
         prompt = kwargs.get("prompt", "")
+        if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+            return '{"keywords": []}'
         if isinstance(prompt, str) and "what emotion" in prompt.lower():
             return '{"emotion": "joy", "intensity": 0.7}'
         if isinstance(prompt, str) and "extract memory" in prompt.lower():
@@ -93,8 +101,8 @@ class TestCoreEngine:
             content="Hi!",
         )
         await engine.handle_message(msg)
-        # Called three times: response, emotion inference, memory extraction
-        assert mock_ai.generate.await_count == 3
+        # Called four times: recall keywords, response, emotion, extraction
+        assert mock_ai.generate.await_count == 4
 
     async def test_handle_message_sends_reply(
         self,
@@ -173,8 +181,8 @@ class TestCoreEngine:
             content="What's your name?",
         )
         await engine.handle_message(msg)
-        # First call is the main generate, not the emotion inference
-        system_arg = mock_ai.generate.call_args_list[0][1]["system"]
+        # First call is recall keywords, second is the main generate
+        system_arg = mock_ai.generate.call_args_list[1][1]["system"]
         assert "CordBeat" in system_arg
         assert "Never harm a user" in system_arg
 
@@ -223,6 +231,8 @@ class TestCoreEngine:
 
         async def _bad_infer(**kwargs: object) -> str:
             prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
             if isinstance(prompt, str) and "what emotion" in prompt.lower():
                 return "not valid json!"
             if isinstance(prompt, str) and "extract memory" in prompt.lower():
@@ -276,9 +286,9 @@ class TestCoreEngine:
         await engine.handle_message(msg2)
 
         # The main generate call for the second message
-        # Index 0: msg1 response, 1: msg1 emotion, 2: msg1 extraction,
-        # 3: msg2 response
-        main_call = mock_ai.generate.call_args_list[3]
+        # Index 0: msg1 recall, 1: msg1 response, 2: msg1 emotion,
+        # 3: msg1 extraction, 4: msg2 recall, 5: msg2 response
+        main_call = mock_ai.generate.call_args_list[5]
         prompt_arg = main_call[1].get(
             "prompt",
             main_call[0][0] if main_call[0] else "",
@@ -297,6 +307,8 @@ class TestCoreEngine:
 
         async def _high_emotion(**kwargs: object) -> str:
             prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
             if isinstance(prompt, str) and "what emotion" in prompt.lower():
                 return '{"emotion": "joy", "intensity": 0.9}'
             if isinstance(prompt, str) and "extract memory" in prompt.lower():
@@ -364,8 +376,8 @@ class TestCoreEngine:
             content="Hi!",
         )
         await engine.handle_message(msg)
-        # 3 calls: main generate, emotion inference, memory extraction
-        assert mock_ai.generate.await_count == 3
+        # 4 calls: recall keywords, main generate, emotion, extraction
+        assert mock_ai.generate.await_count == 4
 
     async def test_memory_extraction_stores_facts(
         self,
@@ -379,6 +391,8 @@ class TestCoreEngine:
 
         async def _generate(**kwargs: object) -> str:
             prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
             if isinstance(prompt, str) and "what emotion" in prompt.lower():
                 return '{"emotion": "curiosity", "intensity": 0.5}'
             if isinstance(prompt, str) and "extract memory" in prompt.lower():
@@ -419,6 +433,8 @@ class TestCoreEngine:
 
         async def _generate(**kwargs: object) -> str:
             prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
             if isinstance(prompt, str) and "what emotion" in prompt.lower():
                 return '{"emotion": "warmth", "intensity": 0.6}'
             if isinstance(prompt, str) and "extract memory" in prompt.lower():
@@ -460,6 +476,8 @@ class TestCoreEngine:
 
         async def _generate(**kwargs: object) -> str:
             prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
             if isinstance(prompt, str) and "what emotion" in prompt.lower():
                 return '{"emotion": "calm", "intensity": 0.5}'
             if isinstance(prompt, str) and "extract memory" in prompt.lower():
@@ -500,6 +518,8 @@ class TestCoreEngine:
 
         async def _bad_extract(**kwargs: object) -> str:
             prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
             if isinstance(prompt, str) and "what emotion" in prompt.lower():
                 return '{"emotion": "calm", "intensity": 0.5}'
             if isinstance(prompt, str) and "extract memory" in prompt.lower():
@@ -684,3 +704,234 @@ class TestAccountLinking:
         )
         await engine.handle_message(msg)
         mock_ai.generate.assert_not_awaited()
+
+
+class TestRecallModel:
+    """Tests for the multi-phase recall model (Phase2 + Phase3)."""
+
+    async def test_recall_keywords_expand_memory_search(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Phase2: AI-extracted keywords should find additional memories."""
+        ai = AsyncMock()
+
+        async def _generate(**kwargs: object) -> str:
+            prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+                return '{"keywords": ["Python", "Linux"]}'
+            if isinstance(prompt, str) and "what emotion" in prompt.lower():
+                return '{"emotion": "calm", "intensity": 0.5}'
+            if isinstance(prompt, str) and "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "", "emotional_tone": "",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "I recall that!"
+
+        ai.generate = AsyncMock(side_effect=_generate)
+
+        # Pre-populate a semantic memory that won't match "How are you?"
+        # but will match the recall keyword "Python"
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        entry = MemoryEntry(
+            id="mem_python",
+            user_id="u1",
+            layer=MemoryLayer.SEMANTIC,
+            content="User enjoys Python programming",
+        )
+        await memory.add_semantic_memory(entry)
+
+        eng = CoreEngine(
+            ai=ai, soul=soul, memory=memory, skills=skills, gateway=mock_gateway
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="How are you?",
+        )
+        await eng.handle_message(msg)
+
+        # The prompt should include the recalled memory
+        main_call = ai.generate.call_args_list[1]
+        prompt_arg = main_call[1].get("prompt", "")
+        assert "Python" in prompt_arg
+
+    async def test_recall_keywords_deduplicate(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Phase2: Duplicate memories should not appear twice."""
+        ai = AsyncMock()
+
+        async def _generate(**kwargs: object) -> str:
+            prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+                return '{"keywords": ["cats"]}'
+            if isinstance(prompt, str) and "what emotion" in prompt.lower():
+                return '{"emotion": "calm", "intensity": 0.5}'
+            if isinstance(prompt, str) and "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "", "emotional_tone": "",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "Meow!"
+
+        ai.generate = AsyncMock(side_effect=_generate)
+
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        entry = MemoryEntry(
+            id="mem_cats",
+            user_id="u1",
+            layer=MemoryLayer.SEMANTIC,
+            content="User loves cats",
+        )
+        await memory.add_semantic_memory(entry)
+
+        eng = CoreEngine(
+            ai=ai, soul=soul, memory=memory, skills=skills, gateway=mock_gateway
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="I love cats!",
+        )
+        await eng.handle_message(msg)
+
+        # "cats" should appear only once in the prompt
+        main_call = ai.generate.call_args_list[1]
+        prompt_arg = main_call[1].get("prompt", "")
+        assert prompt_arg.count("User loves cats") == 1
+
+    async def test_recall_keyword_failure_does_not_crash(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Phase2: AI failure in keyword extraction should not crash."""
+        ai = AsyncMock()
+
+        async def _generate(**kwargs: object) -> str:
+            prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+                return "not valid json!"
+            if isinstance(prompt, str) and "what emotion" in prompt.lower():
+                return '{"emotion": "calm", "intensity": 0.5}'
+            if isinstance(prompt, str) and "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "", "emotional_tone": "",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "Hello!"
+
+        ai.generate = AsyncMock(side_effect=_generate)
+        eng = CoreEngine(
+            ai=ai, soul=soul, memory=memory, skills=skills, gateway=mock_gateway
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Hi!",
+        )
+        await eng.handle_message(msg)
+        mock_gateway.send_to_adapter.assert_awaited_once()
+
+    async def test_emotion_recall_finds_matching_memories(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Phase3: Current emotion should trigger emotion-tagged recall."""
+        ai = AsyncMock()
+
+        async def _generate(**kwargs: object) -> str:
+            prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if isinstance(prompt, str) and "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if isinstance(prompt, str) and "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "", "emotional_tone": "",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "I remember that happy time!"
+
+        ai.generate = AsyncMock(side_effect=_generate)
+
+        # Set emotion to joy before the message
+        soul.update_emotion(Emotion.JOY, 0.8)
+
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+
+        # Store episodic memory with joy emotion tag
+        entry = MemoryEntry(
+            id="mem_happy",
+            user_id="u1",
+            layer=MemoryLayer.EPISODIC,
+            content="Had a wonderful birthday party together",
+            metadata={"emotional_tone": "joy"},
+        )
+        await memory.add_episodic_memory(entry)
+
+        eng = CoreEngine(
+            ai=ai, soul=soul, memory=memory, skills=skills, gateway=mock_gateway
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="I feel great today!",
+        )
+        await eng.handle_message(msg)
+
+        # The emotion-matched memory should appear in prompt
+        main_call = ai.generate.call_args_list[1]
+        prompt_arg = main_call[1].get("prompt", "")
+        assert "birthday party" in prompt_arg
+
+    async def test_calm_emotion_skips_emotion_recall(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        soul: Soul,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Phase3: Calm emotion should NOT trigger emotion recall."""
+        assert soul.emotion.primary == Emotion.CALM
+
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+
+        entry = MemoryEntry(
+            id="mem_calm",
+            user_id="u1",
+            layer=MemoryLayer.EPISODIC,
+            content="A calm afternoon reading",
+            metadata={"emotional_tone": "calm"},
+        )
+        await memory.add_episodic_memory(entry)
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Hello",
+        )
+        await engine.handle_message(msg)

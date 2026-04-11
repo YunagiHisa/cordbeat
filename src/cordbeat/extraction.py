@@ -14,6 +14,22 @@ from cordbeat.soul import Soul
 
 logger = logging.getLogger(__name__)
 
+_RECALL_KEYWORD_PROMPT = """\
+Based on the recent conversation context below, extract exactly 3 short \
+recall keywords that would help retrieve relevant memories about this user.
+
+Focus on topics, names, events, or interests the user has mentioned recently.
+Each keyword should be 1-4 words.
+
+Conversation context:
+{context}
+
+Current message: {current_message}
+
+Respond in JSON only:
+{{"keywords": ["keyword1", "keyword2", "keyword3"]}}
+"""
+
 _EMOTION_INFERENCE_PROMPT = """\
 Based on this conversation exchange, what emotion should the AI feel?
 User said: {user_message}
@@ -61,6 +77,47 @@ class MemoryExtractor:
         self._soul = soul
         self._memory = memory
         self._memory_config = memory_config or MemoryConfig()
+
+    async def extract_recall_keywords(
+        self,
+        current_message: str,
+        history: list[dict[str, str]] | None = None,
+    ) -> list[str]:
+        """Extract recall keywords from conversation context via AI.
+
+        Returns up to 3 short keywords for memory search.
+        This is Phase2 of the recall model — context inference recall.
+        """
+        context_parts: list[str] = []
+        if history:
+            for msg in history[-6:]:
+                prefix = "User" if msg["role"] == "user" else "AI"
+                context_parts.append(f"{prefix}: {msg['content'][:200]}")
+        context = "\n".join(context_parts) if context_parts else "(no prior context)"
+
+        prompt = _RECALL_KEYWORD_PROMPT.format(
+            context=context,
+            current_message=current_message[:500],
+        )
+        try:
+            raw = await self._ai.generate(
+                prompt=prompt,
+                system="Respond in valid JSON only.",
+                temperature=0.2,
+            )
+            data = json.loads(raw)
+            keywords = data.get("keywords", [])
+            if isinstance(keywords, list):
+                return [
+                    str(k).strip()[:50]
+                    for k in keywords[:3]
+                    if isinstance(k, str) and len(k.strip()) >= 2
+                ]
+        except (json.JSONDecodeError, KeyError, ValueError):
+            logger.debug("Recall keyword extraction parse failed, skipping")
+        except (OSError, RuntimeError, TypeError):
+            logger.debug("Recall keyword extraction failed, skipping")
+        return []
 
     async def infer_and_update_emotion(
         self, user_id: str, user_message: str, ai_response: str
@@ -155,6 +212,7 @@ class MemoryExtractor:
                     user_id=user_id,
                     layer=MemoryLayer.SEMANTIC,
                     content=fact.strip(),
+                    metadata={"emotional_tone": tone} if tone else {},
                 )
                 await self._memory.add_semantic_memory(entry)
                 logger.debug("Semantic memory stored for %s: %s", user_id, fact)
@@ -167,6 +225,7 @@ class MemoryExtractor:
                 user_id=user_id,
                 layer=MemoryLayer.EPISODIC,
                 content=episode.strip(),
+                metadata={"emotional_tone": tone} if tone else {},
             )
             await self._memory.add_episodic_memory(entry)
             logger.debug("Episodic memory stored for %s", user_id)

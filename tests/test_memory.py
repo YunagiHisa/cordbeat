@@ -332,3 +332,60 @@ class TestLinkTokenOperations:
         )
         result = await memory.verify_link_token(token)
         assert result is None
+
+
+class TestSearchByEmotion:
+    """Tests for emotion-based memory search (Phase3 recall)."""
+
+    async def test_finds_matching_emotion(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        entry = MemoryEntry(
+            id="ep_joy",
+            user_id="u1",
+            layer=MemoryLayer.EPISODIC,
+            content="Celebrated a milestone together",
+            metadata={"emotional_tone": "joy"},
+        )
+        await memory.add_episodic_memory(entry)
+        results = await memory.search_by_emotion("u1", "joy", "celebration")
+        assert len(results) >= 1
+        assert "milestone" in results[0]["content"]
+
+    async def test_filters_non_matching_emotion(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        entry = MemoryEntry(
+            id="ep_sad",
+            user_id="u1",
+            layer=MemoryLayer.EPISODIC,
+            content="Had a tough day at work",
+            metadata={"emotional_tone": "sadness"},
+        )
+        await memory.add_episodic_memory(entry)
+        results = await memory.search_by_emotion("u1", "joy", "tough day")
+        assert len(results) == 0
+
+    async def test_isolates_by_user(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.get_or_create_user("u2", "Bob")
+        entry = MemoryEntry(
+            id="ep_u2",
+            user_id="u2",
+            layer=MemoryLayer.EPISODIC,
+            content="Bob's happy memory",
+            metadata={"emotional_tone": "joy"},
+        )
+        await memory.add_episodic_memory(entry)
+        results = await memory.search_by_emotion("u1", "joy", "happy")
+        assert len(results) == 0
+
+    async def test_no_emotion_tag_not_returned(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        entry = MemoryEntry(
+            id="ep_notag",
+            user_id="u1",
+            layer=MemoryLayer.EPISODIC,
+            content="Memory without emotion tag",
+        )
+        await memory.add_episodic_memory(entry)
+        results = await memory.search_by_emotion("u1", "joy", "memory")
+        assert len(results) == 0

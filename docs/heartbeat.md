@@ -78,5 +78,45 @@ User count doesn't cause context explosion.
 |---|---|
 | `message` | Send a message to the user |
 | `skill` | Execute a skill |
-| `propose_change` | Propose a self-improvement |
-| `skip` | Do nothing (stay quiet) |
+| `propose_improvement` | Propose a self-improvement |
+| `propose_trait_change` | Propose a personality trait change (requires user approval) |
+| `none` | Do nothing (stay quiet) |
+
+---
+
+## Proposal Approval System
+
+Certain actions require user approval before execution. When the AI decides
+to take such an action, a **proposal** is stored with status `pending`.
+The user can approve or reject it, and the next heartbeat tick executes
+approved proposals.
+
+### Proposal Types
+
+| Type | Trigger | On Approval |
+|---|---|---|
+| `skill_execution` | `requires_confirmation` skill invoked | Skill is executed |
+| `trait_change` | AI proposes `propose_trait_change` | `soul.apply_trait_change()` is called |
+| `general` | AI proposes `propose_improvement` | Marked as acknowledged |
+
+### Lifecycle
+
+```
+AI decision → store proposal (pending) → notify user
+                                            ↓
+                               user approves / rejects
+                                            ↓
+              next heartbeat tick → execute or skip
+                                            ↓
+                            mark executed / expired
+```
+
+### Status Values
+
+| Status | Meaning |
+|---|---|
+| `pending` | Awaiting user decision |
+| `approved` | User approved, awaiting execution |
+| `rejected` | User rejected |
+| `executed` | Successfully executed |
+| `expired` | Failed execution or timed out |

@@ -33,7 +33,9 @@ Adapter
 
 ### 1. Message Filtering
 
-Only `MESSAGE` and `LINK_REQUEST` types are processed; all others are
+`LINK_REQUEST` and `LINK_CONFIRM` messages are routed to dedicated
+handlers (see [Account Linking](#account-linking) below). `MESSAGE`
+types proceed through the standard AI pipeline. All other types are
 silently dropped.
 
 ### 2. User Resolution
@@ -112,3 +114,38 @@ These operations are non-blocking — failures are logged and silently skipped.
 | `MemoryExtractor` | Emotion inference and memory extraction (`extraction.py`) |
 | `SkillRegistry` | Available skills (future: tool-use integration) |
 | `GatewayServer` | Message routing to/from adapters |
+
+---
+
+## Account Linking
+
+Users can link their accounts across multiple platforms (e.g. Discord +
+Telegram) using a secure token flow. This bypasses the AI pipeline entirely.
+
+### Flow
+
+```
+New Platform                          Existing Platform
+    │                                       │
+    ├─ LINK_REQUEST ──────→ Engine          │
+    │                        │              │
+    │   ←── ACK (token) ────┘              │
+    │                                       │
+    │   "Send this token from               │
+    │    your other platform"               │
+    │                                       │
+    │                        ├── LINK_CONFIRM (token) ──┤
+    │                        │              │
+    │                        │  verify      │
+    │                        │  link_platform()
+    │                        │              │
+    │                        └── ACK ──────→│
+```
+
+### Security Properties
+
+- Tokens are generated with `secrets.token_urlsafe(16)`
+- Default expiry: 10 minutes
+- Single-use: tokens are marked as used after first verification
+- The confirmer must have an existing linked account
+- No AI inference is triggered during the linking process

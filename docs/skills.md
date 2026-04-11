@@ -61,7 +61,21 @@ safety:
 |---|---|---|
 | `safe` | AI can execute autonomously | Web search, weather, timer |
 | `requires_confirmation` | Requires user approval | File writes, API calls |
-| `dangerous` | Disabled by default, must be explicitly enabled | Shell commands, system ops |
+| `dangerous` | Blocked from HEARTBEAT execution entirely | Shell commands, system ops |
+
+### `requires_confirmation` Flow
+
+When a HEARTBEAT decision attempts to run a `requires_confirmation` skill,
+the system creates a **proposal** instead of executing immediately:
+
+1. A `skill_execution` proposal is stored with `status=pending`
+2. The user is notified with the skill name, parameters, and proposal ID
+3. The user can approve or reject the proposal
+4. On the next heartbeat tick, approved proposals are executed
+5. Executed proposals are marked `executed`; failures are marked `expired`
+
+See [Heartbeat — Proposal Approval System](heartbeat.md#proposal-approval-system)
+for the full lifecycle.
 
 ---
 

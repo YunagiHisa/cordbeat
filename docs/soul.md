@@ -70,3 +70,18 @@ current_emotion:
 | Personality traits | ❌ | ✅ | ✅ |
 | Name/pronoun | ❌ | ❌ | ✅ |
 | Quiet hours | ❌ | ✅ | ✅ |
+
+### Trait Change Approval Flow
+
+When the AI wants to change its personality traits, it uses the
+`propose_trait_change` heartbeat action:
+
+1. AI returns `{"action": "propose_trait_change", "trait_add": [...], "trait_remove": [...]}`
+2. `propose_trait_change()` generates a preview without modifying state
+3. A proposal is stored with `status=pending` and the user is notified
+4. The notification includes a preview of what the traits would look like
+5. If the user approves, the next heartbeat tick calls `apply_trait_change()`
+6. If rejected, the proposals remains recorded but has no effect
+
+This enforces the immutable rule: *"Never take critical actions without
+user approval."*

@@ -518,3 +518,169 @@ class TestCoreEngine:
         )
         await eng.handle_message(msg)
         mock_gateway.send_to_adapter.assert_awaited_once()
+
+
+class TestAccountLinking:
+    """Tests for cross-platform account linking via tokens."""
+
+    async def test_link_request_generates_token(
+        self,
+        engine: CoreEngine,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """LINK_REQUEST should return a token in the reply."""
+        msg = GatewayMessage(
+            type=MessageType.LINK_REQUEST,
+            adapter_id="telegram",
+            platform_user_id="tg_user_1",
+            content="",
+        )
+        await engine.handle_message(msg)
+        mock_gateway.send_to_adapter.assert_awaited_once()
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert reply.type == MessageType.ACK
+        assert "Link token generated:" in reply.content
+
+    async def test_link_confirm_success(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Valid token from an existing user links the new platform."""
+        # Set up existing user on Discord
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_alice")
+
+        # Generate token from Telegram (new platform)
+        token = await memory.store_link_token("telegram", "tg_alice")
+
+        # Confirm from Discord (existing platform)
+        msg = GatewayMessage(
+            type=MessageType.LINK_CONFIRM,
+            adapter_id="discord",
+            platform_user_id="discord_alice",
+            content=token,
+        )
+        await engine.handle_message(msg)
+
+        # Telegram should now be linked to u1
+        user_id = await memory.resolve_user("telegram", "tg_alice")
+        assert user_id == "u1"
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert reply.type == MessageType.ACK
+        assert "linked" in reply.content.lower()
+
+    async def test_link_confirm_invalid_token(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Invalid token returns an error."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_alice")
+
+        msg = GatewayMessage(
+            type=MessageType.LINK_CONFIRM,
+            adapter_id="discord",
+            platform_user_id="discord_alice",
+            content="bogus_token",
+        )
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert reply.type == MessageType.ERROR
+        assert "invalid" in reply.content.lower()
+
+    async def test_link_confirm_no_existing_account(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Confirm from unknown user returns an error."""
+        token = await memory.store_link_token("telegram", "tg_alice")
+
+        msg = GatewayMessage(
+            type=MessageType.LINK_CONFIRM,
+            adapter_id="discord",
+            platform_user_id="unknown_user",
+            content=token,
+        )
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert reply.type == MessageType.ERROR
+        assert "existing account" in reply.content.lower()
+
+    async def test_link_confirm_token_used_twice(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """A token can only be used once."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_alice")
+
+        token = await memory.store_link_token("telegram", "tg_alice")
+
+        # First use — success
+        msg1 = GatewayMessage(
+            type=MessageType.LINK_CONFIRM,
+            adapter_id="discord",
+            platform_user_id="discord_alice",
+            content=token,
+        )
+        await engine.handle_message(msg1)
+        reply1 = mock_gateway.send_to_adapter.call_args[0][1]
+        assert reply1.type == MessageType.ACK
+
+        # Second use — fail
+        msg2 = GatewayMessage(
+            type=MessageType.LINK_CONFIRM,
+            adapter_id="discord",
+            platform_user_id="discord_alice",
+            content=token,
+        )
+        await engine.handle_message(msg2)
+        reply2 = mock_gateway.send_to_adapter.call_args[0][1]
+        assert reply2.type == MessageType.ERROR
+
+    async def test_link_request_does_not_trigger_ai(
+        self,
+        engine: CoreEngine,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """LINK_REQUEST should not call the AI backend."""
+        msg = GatewayMessage(
+            type=MessageType.LINK_REQUEST,
+            adapter_id="telegram",
+            platform_user_id="tg_user_1",
+            content="",
+        )
+        await engine.handle_message(msg)
+        mock_ai.generate.assert_not_awaited()
+
+    async def test_link_confirm_does_not_trigger_ai(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """LINK_CONFIRM should not call the AI backend."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_alice")
+        token = await memory.store_link_token("telegram", "tg_alice")
+
+        msg = GatewayMessage(
+            type=MessageType.LINK_CONFIRM,
+            adapter_id="discord",
+            platform_user_id="discord_alice",
+            content=token,
+        )
+        await engine.handle_message(msg)
+        mock_ai.generate.assert_not_awaited()

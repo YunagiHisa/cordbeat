@@ -44,7 +44,15 @@ class CoreEngine:
 
     async def handle_message(self, message: GatewayMessage) -> None:
         """Handle a single incoming message from the queue."""
-        if message.type not in (MessageType.MESSAGE, MessageType.LINK_REQUEST):
+        if message.type == MessageType.LINK_REQUEST:
+            await self._handle_link_request(message)
+            return
+
+        if message.type == MessageType.LINK_CONFIRM:
+            await self._handle_link_confirm(message)
+            return
+
+        if message.type != MessageType.MESSAGE:
             return
 
         # Phase 1: Resolve user
@@ -146,3 +154,81 @@ class CoreEngine:
             )
             await self._gateway.send_to_adapter(message.adapter_id, error_reply)
             return None
+
+    async def _handle_link_request(self, message: GatewayMessage) -> None:
+        """Generate a link token and send it back to the requester."""
+        token = await self._memory.store_link_token(
+            requester_adapter_id=message.adapter_id,
+            requester_platform_user_id=message.platform_user_id,
+        )
+        reply = GatewayMessage(
+            type=MessageType.ACK,
+            adapter_id=message.adapter_id,
+            platform_user_id=message.platform_user_id,
+            content=(
+                f"Link token generated: {token}\n"
+                "Send this token from your other platform "
+                "using the link confirm command."
+            ),
+        )
+        await self._gateway.send_to_adapter(message.adapter_id, reply)
+        logger.info(
+            "Link token issued for %s on %s",
+            message.platform_user_id,
+            message.adapter_id,
+        )
+
+    async def _handle_link_confirm(self, message: GatewayMessage) -> None:
+        """Verify a link token and merge the requester's platform."""
+        token = message.content.strip()
+        result = await self._memory.verify_link_token(token)
+
+        if result is None:
+            reply = GatewayMessage(
+                type=MessageType.ERROR,
+                adapter_id=message.adapter_id,
+                platform_user_id=message.platform_user_id,
+                content="Invalid or expired link token.",
+            )
+            await self._gateway.send_to_adapter(message.adapter_id, reply)
+            return
+
+        # Resolve the confirmer's user_id (must be an existing user)
+        confirmer_user_id = await self._memory.resolve_user(
+            message.adapter_id, message.platform_user_id
+        )
+        if confirmer_user_id is None:
+            reply = GatewayMessage(
+                type=MessageType.ERROR,
+                adapter_id=message.adapter_id,
+                platform_user_id=message.platform_user_id,
+                content="You must have an existing account to confirm a link.",
+            )
+            await self._gateway.send_to_adapter(message.adapter_id, reply)
+            return
+
+        # Link the requester's platform to the confirmer's user
+        requester_adapter_id = result["requester_adapter_id"]
+        requester_platform_user_id = result["requester_platform_user_id"]
+        await self._memory.link_platform(
+            confirmer_user_id,
+            requester_adapter_id,
+            requester_platform_user_id,
+        )
+
+        reply = GatewayMessage(
+            type=MessageType.ACK,
+            adapter_id=message.adapter_id,
+            platform_user_id=message.platform_user_id,
+            content=(
+                f"Account linked! Platform {requester_adapter_id} "
+                "is now connected to your account."
+            ),
+        )
+        await self._gateway.send_to_adapter(message.adapter_id, reply)
+        logger.info(
+            "Account linked: %s/%s -> user %s",
+            requester_adapter_id,
+            requester_platform_user_id,
+            confirmer_user_id,
+        )

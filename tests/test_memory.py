@@ -293,3 +293,42 @@ class TestProposalOperations:
         u1_pending = await memory.get_pending_proposals(user_id="u1")
         assert len(u1_pending) == 1
         assert u1_pending[0]["content"] == "Pending 1"
+
+
+class TestLinkTokenOperations:
+    """Tests for link token storage and verification."""
+
+    async def test_store_and_verify_token(self, memory: MemoryStore) -> None:
+        token = await memory.store_link_token("telegram", "tg_user_1")
+        assert isinstance(token, str)
+        assert len(token) > 0
+
+        result = await memory.verify_link_token(token)
+        assert result is not None
+        assert result["requester_adapter_id"] == "telegram"
+        assert result["requester_platform_user_id"] == "tg_user_1"
+
+    async def test_verify_invalid_token(self, memory: MemoryStore) -> None:
+        result = await memory.verify_link_token("nonexistent_token")
+        assert result is None
+
+    async def test_token_single_use(self, memory: MemoryStore) -> None:
+        """Tokens can only be verified once."""
+        token = await memory.store_link_token("telegram", "tg_user_1")
+
+        first = await memory.verify_link_token(token)
+        assert first is not None
+
+        second = await memory.verify_link_token(token)
+        assert second is None
+
+    async def test_expired_token(self, memory: MemoryStore) -> None:
+        """Expired tokens cannot be verified."""
+        # Create token with 0-minute expiry (immediately expired)
+        token = await memory.store_link_token(
+            "telegram",
+            "tg_user_1",
+            token_expiry_minutes=0,
+        )
+        result = await memory.verify_link_token(token)
+        assert result is None

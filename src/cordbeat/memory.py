@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -558,6 +559,84 @@ class _RecordStore:
                 results.append(record)
         return results
 
+    async def store_link_token(
+        self,
+        requester_adapter_id: str,
+        requester_platform_user_id: str,
+        token_expiry_minutes: int = 10,
+    ) -> str:
+        """Generate and store a link token for cross-platform account linking.
+
+        Returns the generated token string.
+        """
+        token = secrets.token_urlsafe(16)
+        expiry = (datetime.now() + timedelta(minutes=token_expiry_minutes)).isoformat()
+        metadata = {
+            "requester_adapter_id": requester_adapter_id,
+            "requester_platform_user_id": requester_platform_user_id,
+            "expires_at": expiry,
+            "used": False,
+        }
+        record_id = str(uuid.uuid4())
+        await self._db.execute(
+            "INSERT INTO certain_records "
+            "(id, user_id, content, record_type, created_at, metadata) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                record_id,
+                "__system__",
+                token,
+                "link_token",
+                datetime.now().isoformat(),
+                json.dumps(metadata),
+            ),
+        )
+        await self._db.commit()
+        return token
+
+    async def verify_link_token(
+        self,
+        token: str,
+    ) -> dict[str, str] | None:
+        """Verify a link token and return requester info if valid.
+
+        Returns a dict with ``requester_adapter_id`` and
+        ``requester_platform_user_id`` if the token is valid and not
+        expired. Returns ``None`` otherwise. Marks the token as used.
+        """
+        cursor = await self._db.execute(
+            "SELECT * FROM certain_records "
+            "WHERE record_type = 'link_token' AND content = ?",
+            (token,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+
+        meta = json.loads(row["metadata"]) if row["metadata"] else {}
+
+        # Check if already used
+        if meta.get("used"):
+            return None
+
+        # Check expiry
+        expires_at = meta.get("expires_at", "")
+        if expires_at and datetime.fromisoformat(expires_at) < datetime.now():
+            return None
+
+        # Mark as used
+        meta["used"] = True
+        await self._db.execute(
+            "UPDATE certain_records SET metadata = ? WHERE id = ?",
+            (json.dumps(meta), row["id"]),
+        )
+        await self._db.commit()
+
+        return {
+            "requester_adapter_id": meta["requester_adapter_id"],
+            "requester_platform_user_id": meta["requester_platform_user_id"],
+        }
+
 
 # ── Facade ────────────────────────────────────────────────────────────
 
@@ -652,6 +731,26 @@ class MemoryStore:
         adapter_id: str,
     ) -> str | None:
         return await self._users.resolve_platform_user(user_id, adapter_id)  # type: ignore[union-attr]
+
+    # ── Link tokens (delegates to _RecordStore) ──────────────────
+
+    async def store_link_token(
+        self,
+        requester_adapter_id: str,
+        requester_platform_user_id: str,
+        token_expiry_minutes: int = 10,
+    ) -> str:
+        return await self._records.store_link_token(  # type: ignore[union-attr]
+            requester_adapter_id,
+            requester_platform_user_id,
+            token_expiry_minutes,
+        )
+
+    async def verify_link_token(
+        self,
+        token: str,
+    ) -> dict[str, str] | None:
+        return await self._records.verify_link_token(token)  # type: ignore[union-attr]
 
     # ── Core profiles + certain records (delegates to _RecordStore) ──
 

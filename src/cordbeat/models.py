@@ -89,6 +89,7 @@ class HeartbeatAction(StrEnum):
     MESSAGE = "message"
     SKILL = "skill"
     PROPOSE_IMPROVEMENT = "propose_improvement"
+    PROPOSE_TRAIT_CHANGE = "propose_trait_change"
     NONE = "none"
 
 
@@ -115,6 +116,8 @@ class HeartbeatDecision:
     content: str = ""
     skill_name: str | None = None
     skill_params: dict[str, Any] = field(default_factory=dict)
+    trait_add: list[str] = field(default_factory=list)
+    trait_remove: list[str] = field(default_factory=list)
     target_user_id: str | None = None
     target_adapter_id: str | None = None
     next_heartbeat_minutes: int = 60

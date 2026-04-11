@@ -20,7 +20,13 @@ MAX_RETRIES = 2
 def validate_heartbeat_decision(data: dict[str, Any]) -> ValidationResult:
     """Validate HEARTBEAT decision JSON from AI."""
     errors: list[ValidationError] = []
-    valid_actions = {"message", "skill", "propose_improvement", "none"}
+    valid_actions = {
+        "message",
+        "skill",
+        "propose_improvement",
+        "propose_trait_change",
+        "none",
+    }
 
     action = data.get("action")
     if action not in valid_actions:
@@ -33,12 +39,18 @@ def validate_heartbeat_decision(data: dict[str, Any]) -> ValidationResult:
         )
 
     content = data.get("content", "")
-    if action in ("message", "propose_improvement") and not content:
+    requires_content = (
+        "message",
+        "propose_improvement",
+        "propose_trait_change",
+    )
+    if action in requires_content and not content:
         errors.append(
             ValidationError(
                 field="content",
                 message=(
-                    "content is required when action is message or propose_improvement"
+                    "content is required when action is message, "
+                    "propose_improvement, or propose_trait_change"
                 ),
             )
         )

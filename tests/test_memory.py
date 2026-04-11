@@ -389,3 +389,101 @@ class TestSearchByEmotion:
         await memory.add_episodic_memory(entry)
         results = await memory.search_by_emotion("u1", "joy", "memory")
         assert len(results) == 0
+
+
+class TestGetMessagesOnDate:
+    """Tests for date-based message retrieval."""
+
+    async def test_returns_messages_on_date(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.add_message("u1", "user", "Hello", "discord")
+        await memory.add_message("u1", "assistant", "Hi!", "discord")
+
+        from datetime import datetime
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        messages = await memory.get_messages_on_date("u1", today)
+        assert len(messages) == 2
+        assert messages[0]["content"] == "Hello"
+        assert messages[1]["content"] == "Hi!"
+
+    async def test_empty_for_other_date(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.add_message("u1", "user", "Hello", "discord")
+
+        messages = await memory.get_messages_on_date("u1", "2020-01-01")
+        assert messages == []
+
+    async def test_isolates_by_user(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.get_or_create_user("u2", "Bob")
+        await memory.add_message("u2", "user", "Bob's message", "discord")
+
+        from datetime import datetime
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        messages = await memory.get_messages_on_date("u1", today)
+        assert messages == []
+
+
+class TestRecallHints:
+    """Tests for Phase4 recall hint operations."""
+
+    async def test_store_and_retrieve_hint(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.store_recall_hint(
+            user_id="u1",
+            hint_type="temporal",
+            content="7 days ago talked about OSS",
+            metadata={"original_date": "2025-01-01"},
+        )
+        hints = await memory.get_recall_hints("u1")
+        assert len(hints) == 1
+        assert "OSS" in hints[0]["content"]
+
+    async def test_filter_by_date(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.store_recall_hint(
+            user_id="u1",
+            hint_type="temporal",
+            content="Hint for today",
+        )
+        from datetime import datetime
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        hints = await memory.get_recall_hints("u1", date_str=today)
+        assert len(hints) == 1
+
+        hints_other = await memory.get_recall_hints("u1", date_str="2020-01-01")
+        assert len(hints_other) == 0
+
+    async def test_clear_old_hints(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.store_recall_hint(
+            user_id="u1",
+            hint_type="temporal",
+            content="Old hint",
+        )
+        # Insert with artificially old created_at
+        await memory._conn.execute(
+            "UPDATE certain_records SET created_at = '2020-01-01T00:00:00' "
+            "WHERE record_type = 'recall_hint'"
+        )
+        await memory._conn.commit()
+
+        deleted = await memory.clear_old_recall_hints(keep_days=2)
+        assert deleted == 1
+
+        remaining = await memory.get_recall_hints("u1")
+        assert len(remaining) == 0
+
+    async def test_isolates_by_user(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.get_or_create_user("u2", "Bob")
+        await memory.store_recall_hint(
+            user_id="u2",
+            hint_type="temporal",
+            content="Bob's hint",
+        )
+        hints = await memory.get_recall_hints("u1")
+        assert len(hints) == 0

@@ -163,11 +163,20 @@ class CoreEngine:
                     episodic_memories.append(mem)
                     seen_ids.add(mem["id"])
 
+        # Phase 4: Precomputed recall hints (temporal / chain)
+        hints: list[str] = []
+        try:
+            raw_hints = await self._memory.get_recall_hints(user_id)
+            hints = [h["content"] for h in raw_hints if h.get("content")]
+        except Exception:
+            logger.debug("Recall hints lookup failed for user %s", user_id)
+
         context = build_context(
             user_display_name=user.display_name,
             profile=profile or None,
             semantic_memories=semantic_memories or None,
             episodic_memories=episodic_memories or None,
+            recall_hints=hints or None,
             history=history or None,
             soul_name=soul_snap["name"],
         )

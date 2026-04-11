@@ -756,6 +756,213 @@ class TestSleepPhaseErrors:
         await heartbeat._run_sleep_phase()
 
 
+# ── Sleep phase: memory promotion ─────────────────────────────────────
+
+
+class TestMemoryPromotion:
+    async def test_promotes_episodic_to_semantic(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Sleep phase promotes notable episodic memories to semantic."""
+        from cordbeat.models import MemoryEntry, MemoryLayer
+
+        await memory.get_or_create_user("u1", "Alice")
+        entry = MemoryEntry(
+            id="ep1",
+            user_id="u1",
+            layer=MemoryLayer.EPISODIC,
+            content="Alice mentioned that she loves hiking in the mountains",
+        )
+        await memory.add_episodic_memory(entry)
+
+        # AI returns promoted facts for diary + promotion calls
+        async def _generate(**kwargs: object) -> str:
+            system = kwargs.get("system", "")
+            if isinstance(system, str) and "generalizable" in system.lower():
+                return '{"facts": ["Alice enjoys hiking in the mountains"]}'
+            return "Diary: quiet day."
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+
+        await heartbeat._run_sleep_phase()
+
+        # Check that a semantic memory was created
+        results = await memory.search_semantic("u1", "hiking")
+        promoted = [r for r in results if "hiking" in r["content"]]
+        assert len(promoted) >= 1
+
+    async def test_promotion_caps_at_five_facts(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Promotion should only store up to 5 facts."""
+        from cordbeat.models import MemoryEntry, MemoryLayer
+
+        await memory.get_or_create_user("u1", "Alice")
+        entry = MemoryEntry(
+            id="ep2",
+            user_id="u1",
+            layer=MemoryLayer.EPISODIC,
+            content="Many topics discussed today",
+        )
+        await memory.add_episodic_memory(entry)
+
+        async def _generate(**kwargs: object) -> str:
+            system = kwargs.get("system", "")
+            if isinstance(system, str) and "generalizable" in system.lower():
+                return json.dumps({"facts": [f"Fact {i}" for i in range(10)]})
+            return "Diary"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+
+        await heartbeat._run_sleep_phase()
+
+        results = await memory.search_semantic("u1", "Fact")
+        fact_results = [r for r in results if r["content"].startswith("Fact")]
+        assert len(fact_results) <= 5
+
+    async def test_promotion_failure_does_not_crash(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """AI returning invalid JSON for promotion should not crash."""
+        from cordbeat.models import MemoryEntry, MemoryLayer
+
+        await memory.get_or_create_user("u1", "Alice")
+        entry = MemoryEntry(
+            id="ep3",
+            user_id="u1",
+            layer=MemoryLayer.EPISODIC,
+            content="Some episode",
+        )
+        await memory.add_episodic_memory(entry)
+
+        async def _generate(**kwargs: object) -> str:
+            system = kwargs.get("system", "")
+            if isinstance(system, str) and "generalizable" in system.lower():
+                return "not valid json"
+            return "Diary"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        # Should not raise
+        await heartbeat._run_sleep_phase()
+
+    async def test_skips_user_without_episodic_memories(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Users with no episodic memories should not trigger promotion."""
+        await memory.get_or_create_user("u1", "Silent")
+
+        async def _generate(**kwargs: object) -> str:
+            system = kwargs.get("system", "")
+            if isinstance(system, str) and "generalizable" in system.lower():
+                pytest.fail("Should not call promotion AI for user without episodes")
+            return "Diary"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        await heartbeat._run_sleep_phase()
+
+
+# ── Sleep phase: temporal recall precomputation ───────────────────────
+
+
+class TestTemporalRecall:
+    async def test_stores_temporal_recall_hint(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Sleep phase stores temporal recall hint for 7-day-old messages."""
+        from datetime import datetime, timedelta
+
+        await memory.get_or_create_user("u1", "Alice")
+
+        # Insert a message dated 7 days ago
+        seven_days_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        await memory._conn.execute(
+            "INSERT INTO conversation_messages "
+            "(user_id, role, content, adapter_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("u1", "user", "Let's discuss OSS licensing", "discord", seven_days_ago),
+        )
+        await memory._conn.commit()
+
+        mock_ai.generate = AsyncMock(return_value="Diary entry")
+
+        await heartbeat._run_sleep_phase()
+
+        hints = await memory.get_recall_hints("u1")
+        assert len(hints) >= 1
+        assert any("OSS" in h["content"] for h in hints)
+
+    async def test_no_hint_when_no_old_messages(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """No temporal hint stored when there are no 7-day-old messages."""
+        await memory.get_or_create_user("u1", "Alice")
+
+        mock_ai.generate = AsyncMock(return_value="Diary")
+
+        await heartbeat._run_sleep_phase()
+
+        hints = await memory.get_recall_hints("u1")
+        assert len(hints) == 0
+
+    async def test_temporal_recall_error_does_not_crash(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Temporal recall failure should not crash sleep phase."""
+        await memory.get_or_create_user("u1", "Alice")
+        memory.get_messages_on_date = AsyncMock(side_effect=RuntimeError("DB error"))
+
+        mock_ai.generate = AsyncMock(return_value="Diary")
+        # Should not raise
+        await heartbeat._run_sleep_phase()
+
+    async def test_clears_old_recall_hints(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Sleep phase clears old recall hints."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.store_recall_hint(
+            user_id="u1",
+            hint_type="temporal",
+            content="Old hint",
+        )
+        # Make it old
+        await memory._conn.execute(
+            "UPDATE certain_records SET created_at = '2020-01-01T00:00:00' "
+            "WHERE record_type = 'recall_hint'"
+        )
+        await memory._conn.commit()
+
+        mock_ai.generate = AsyncMock(return_value="Diary")
+        await heartbeat._run_sleep_phase()
+
+        hints = await memory.get_recall_hints("u1")
+        assert len(hints) == 0
+
+
 # ── Two-layer architecture ────────────────────────────────────────────
 
 

@@ -1334,3 +1334,209 @@ class TestApprovedProposalExecution:
         assert proposal is not None
         meta = json.loads(proposal["metadata"])
         assert meta["status"] == ProposalStatus.EXPIRED
+
+
+class TestTraitChangeProposal:
+    """Tests for propose_trait_change -> approval -> application flow."""
+
+    async def test_trait_proposal_stored(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        soul: Soul,
+    ) -> None:
+        """propose_trait_change action stores a TRAIT_CHANGE proposal."""
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.PROPOSE_TRAIT_CHANGE,
+            content="I want to become more playful",
+            trait_add=["playful"],
+            trait_remove=[],
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._store_trait_proposal(decision)
+
+        records = await memory.get_certain_records("u1", record_type="proposal")
+        assert len(records) == 1
+        meta = json.loads(records[0]["metadata"])
+        assert meta["proposal_type"] == ProposalType.TRAIT_CHANGE
+        assert meta["status"] == ProposalStatus.PENDING
+        assert meta["trait_add"] == ["playful"]
+        assert meta["trait_remove"] == []
+        assert "playful" in meta["trait_preview"]
+
+    async def test_trait_proposal_does_not_apply(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        soul: Soul,
+    ) -> None:
+        """Storing a trait proposal does NOT modify soul traits."""
+        original_traits = soul.traits[:]
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.PROPOSE_TRAIT_CHANGE,
+            content="Add boldness",
+            trait_add=["bold"],
+            trait_remove=[],
+        )
+        await heartbeat._store_trait_proposal(decision)
+
+        assert soul.traits == original_traits
+        assert "bold" not in soul.traits
+
+    async def test_trait_proposal_notifies_user(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Trait proposal sends notification with preview."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.PROPOSE_TRAIT_CHANGE,
+            content="Become more playful",
+            trait_add=["playful"],
+            trait_remove=[],
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._store_trait_proposal(decision)
+
+        mock_gateway.send_to_adapter.assert_called_once()
+        msg = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "proposal ID:" in msg.content
+        assert "playful" in msg.content
+
+    async def test_execute_decision_dispatches_trait_change(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """_execute_decision routes propose_trait_change correctly."""
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.PROPOSE_TRAIT_CHANGE,
+            content="Add empathetic trait",
+            trait_add=["empathetic"],
+            trait_remove=[],
+        )
+        await heartbeat._execute_decision(decision)
+
+        records = await memory.get_certain_records("__system__", record_type="proposal")
+        assert len(records) == 1
+        meta = json.loads(records[0]["metadata"])
+        assert meta["proposal_type"] == ProposalType.TRAIT_CHANGE
+
+    async def test_trait_proposal_with_remove(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        soul: Soul,
+    ) -> None:
+        """Trait proposal can include removals and preview reflects them."""
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.PROPOSE_TRAIT_CHANGE,
+            content="Replace curious with adventurous",
+            trait_add=["adventurous"],
+            trait_remove=["curious"],
+        )
+        await heartbeat._store_trait_proposal(decision)
+
+        records = await memory.get_certain_records("__system__", record_type="proposal")
+        assert len(records) == 1
+        meta = json.loads(records[0]["metadata"])
+        assert "adventurous" in meta["trait_preview"]
+        assert "curious" not in meta["trait_preview"]
+
+
+class TestApprovedTraitExecution:
+    """Tests for executing approved trait change proposals."""
+
+    async def test_approved_trait_change_applied(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        soul: Soul,
+    ) -> None:
+        """Approved trait change proposal applies traits to soul."""
+        assert "playful" not in soul.traits
+
+        proposal_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Add playful trait",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.TRAIT_CHANGE,
+                "trait_add": ["playful"],
+                "trait_remove": [],
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        # Trait was applied
+        assert "playful" in soul.traits
+
+        # Proposal marked as executed
+        proposal = await memory.get_proposal(proposal_id)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.EXECUTED
+
+    async def test_approved_trait_remove(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        soul: Soul,
+    ) -> None:
+        """Approved trait change can remove traits."""
+        assert "curious" in soul.traits
+
+        proposal_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Remove curious",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.TRAIT_CHANGE,
+                "trait_add": [],
+                "trait_remove": ["curious"],
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        assert "curious" not in soul.traits
+
+        proposal = await memory.get_proposal(proposal_id)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.EXECUTED
+
+    async def test_pending_trait_change_not_applied(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        soul: Soul,
+    ) -> None:
+        """Pending trait change proposals are NOT applied."""
+        original = soul.traits[:]
+
+        await memory.add_certain_record(
+            user_id="u1",
+            content="Add bold",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.PENDING,
+                "proposal_type": ProposalType.TRAIT_CHANGE,
+                "trait_add": ["bold"],
+                "trait_remove": [],
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        assert soul.traits == original
+        assert "bold" not in soul.traits

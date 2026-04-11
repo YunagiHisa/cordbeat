@@ -74,10 +74,12 @@ decide what action to take for this specific user.
 
 You MUST respond in valid JSON:
 {{
-  "action": "message|skill|propose_improvement|none",
-  "content": "message text or skill description (empty for action=none)",
+  "action": "message|skill|propose_improvement|propose_trait_change|none",
+  "content": "message text or proposal description (empty for action=none)",
   "skill_name": "skill name (only when action=skill)",
   "skill_params": {{}},
+  "trait_add": ["traits to add (only when action=propose_trait_change)"],
+  "trait_remove": ["traits to remove (only when action=propose_trait_change)"],
   "target_user_id": "{target_user_id}",
   "target_adapter_id": "{target_adapter_id}",
   "next_heartbeat_minutes": 60
@@ -340,6 +342,8 @@ class HeartbeatLoop:
             content=decision_data.get("content", ""),
             skill_name=decision_data.get("skill_name"),
             skill_params=decision_data.get("skill_params", {}),
+            trait_add=decision_data.get("trait_add", []),
+            trait_remove=decision_data.get("trait_remove", []),
             target_user_id=decision_data.get("target_user_id", user.user_id),
             target_adapter_id=decision_data.get(
                 "target_adapter_id", user.last_platform
@@ -386,6 +390,8 @@ class HeartbeatLoop:
                 await self._execute_skill(decision)
             case HeartbeatAction.PROPOSE_IMPROVEMENT:
                 await self._store_and_notify_proposal(decision)
+            case HeartbeatAction.PROPOSE_TRAIT_CHANGE:
+                await self._store_trait_proposal(decision)
             case HeartbeatAction.NONE:
                 logger.debug("HEARTBEAT decided: do nothing")
 
@@ -564,6 +570,71 @@ class HeartbeatLoop:
 
         return proposal_id
 
+    async def _store_trait_proposal(
+        self,
+        decision: HeartbeatDecision,
+    ) -> str:
+        """Store a trait change proposal for user approval."""
+        add = decision.trait_add
+        remove = decision.trait_remove
+
+        # Preview what the traits would look like after the change
+        preview = self._soul.propose_trait_change(add=add, remove=remove)
+
+        metadata: dict[str, Any] = {
+            "status": ProposalStatus.PENDING,
+            "proposal_type": ProposalType.TRAIT_CHANGE,
+            "trait_add": add,
+            "trait_remove": remove,
+            "trait_preview": preview["preview"],
+        }
+        user_id = decision.target_user_id or "__system__"
+        adapter_id = decision.target_adapter_id
+
+        if adapter_id:
+            metadata["adapter_id"] = adapter_id
+
+        content = decision.content or (
+            f"Trait change proposal: add {add}, remove {remove}"
+        )
+
+        proposal_id = await self._memory.add_certain_record(
+            user_id=user_id,
+            content=content,
+            record_type="proposal",
+            metadata=metadata,
+        )
+        logger.info(
+            "Trait proposal stored (id=%s): add=%s remove=%s preview=%s",
+            proposal_id,
+            add,
+            remove,
+            preview["preview"],
+        )
+
+        # Notify user
+        if user_id != "__system__" and adapter_id:
+            platform_user_id = await self._memory.resolve_platform_user(
+                user_id, adapter_id
+            )
+            if platform_user_id:
+                soul_snap = self._soul.get_soul_snapshot()
+                traits_display = ", ".join(preview["preview"])
+                notification = GatewayMessage(
+                    type=MessageType.HEARTBEAT_MESSAGE,
+                    adapter_id=adapter_id,
+                    platform_user_id=platform_user_id,
+                    content=(
+                        f"🎭 {soul_snap['name']} wants to change personality traits.\n"
+                        f"{content}\n\n"
+                        f"Preview: [{traits_display}]\n\n"
+                        f"(proposal ID: {proposal_id})"
+                    ),
+                )
+                await self._gateway.send_to_adapter(adapter_id, notification)
+
+        return proposal_id
+
     async def _execute_approved_proposals(self) -> None:
         """Check for approved proposals and execute them."""
         import json as _json
@@ -603,6 +674,24 @@ class HeartbeatLoop:
                     )
                 except Exception:
                     logger.exception("Approved skill '%s' failed", skill_name)
+                    await self._memory.update_proposal_status(
+                        proposal_id, ProposalStatus.EXPIRED
+                    )
+            elif proposal_type == ProposalType.TRAIT_CHANGE:
+                trait_add = meta.get("trait_add", [])
+                trait_remove = meta.get("trait_remove", [])
+                try:
+                    self._soul.apply_trait_change(add=trait_add, remove=trait_remove)
+                    logger.info(
+                        "Approved trait change applied: add=%s remove=%s",
+                        trait_add,
+                        trait_remove,
+                    )
+                    await self._memory.update_proposal_status(
+                        proposal_id, ProposalStatus.EXECUTED
+                    )
+                except Exception:
+                    logger.exception("Trait change failed")
                     await self._memory.update_proposal_status(
                         proposal_id, ProposalStatus.EXPIRED
                     )

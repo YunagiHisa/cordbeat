@@ -53,6 +53,26 @@ class TestHeartbeatValidation:
         )
         assert not r.valid
 
+    def test_valid_propose_trait_change(self) -> None:
+        r = validate_heartbeat_decision(
+            {
+                "action": "propose_trait_change",
+                "content": "I want to become more playful",
+                "trait_add": ["playful"],
+                "next_heartbeat_minutes": 60,
+            }
+        )
+        assert r.valid
+
+    def test_propose_trait_change_requires_content(self) -> None:
+        r = validate_heartbeat_decision(
+            {
+                "action": "propose_trait_change",
+                "content": "",
+            }
+        )
+        assert not r.valid
+
 
 class TestUserSummaryValidation:
     def test_valid(self) -> None:

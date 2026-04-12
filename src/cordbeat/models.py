@@ -123,6 +123,19 @@ class HeartbeatDecision:
     next_heartbeat_minutes: int = 60
 
 
+# ── SOUL permissions ──────────────────────────────────────────────────
+
+
+class SoulCaller(StrEnum):
+    SYSTEM = "system"  # Approved proposal executor (heartbeat)
+    AI = "ai"  # Autonomous AI decision (emotion inference)
+    USER = "user"  # Direct user command
+
+
+class SoulPermissionError(Exception):
+    """Raised when a caller lacks permission for a SOUL mutation."""
+
+
 # ── SKILL ─────────────────────────────────────────────────────────────
 
 

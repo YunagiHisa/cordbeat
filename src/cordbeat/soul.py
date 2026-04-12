@@ -6,11 +6,12 @@ import copy
 import logging
 from datetime import datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import yaml
 
-from cordbeat.models import Emotion, EmotionState
+from cordbeat.models import Emotion, EmotionState, SoulCaller, SoulPermissionError
 
 logger = logging.getLogger(__name__)
 
@@ -68,13 +69,37 @@ Free-form notes about this character's personality nuances.
 Write anything here: speech patterns, favorite phrases, tone preferences, etc.
 """
 
+# ── Permission matrix (from 設計書/SOUL.md) ──────────────────────────
+# Maps each mutable field to the set of callers allowed to change it.
+# Fields NOT listed (immutable_rules, emotion_states) cannot be changed
+# by anyone at runtime.
+
+_PERMISSIONS: dict[str, frozenset[SoulCaller]] = {
+    "emotion": frozenset({SoulCaller.AI, SoulCaller.SYSTEM}),
+    "traits": frozenset({SoulCaller.SYSTEM}),
+    "name": frozenset({SoulCaller.USER}),
+    "quiet_hours": frozenset({SoulCaller.SYSTEM, SoulCaller.USER}),
+    "notes": frozenset({SoulCaller.SYSTEM, SoulCaller.USER}),
+}
+
+
+def _check_permission(field: str, caller: SoulCaller) -> None:
+    """Raise SoulPermissionError if caller is not allowed to modify field."""
+    allowed = _PERMISSIONS.get(field, frozenset())
+    if caller not in allowed:
+        msg = (
+            f"{caller.value!r} is not allowed to modify {field!r}. "
+            f"Allowed: {sorted(c.value for c in allowed)}"
+        )
+        raise SoulPermissionError(msg)
+
 
 class Soul:
     """Manages the agent's identity, personality, and emotional state."""
 
     def __init__(self, soul_dir: str | Path) -> None:
         self._soul_dir = Path(soul_dir)
-        self._core: dict[str, Any] = {}
+        self._core: MappingProxyType[str, Any] = MappingProxyType({})
         self._soul: dict[str, Any] = {}
         self._notes: str = ""
         self._load()
@@ -127,6 +152,7 @@ class Soul:
         *,
         secondary: Emotion | None = None,
         secondary_intensity: float | None = None,
+        caller: SoulCaller = SoulCaller.AI,
     ) -> None:
         """Update emotion with automatic transition logic.
 
@@ -134,6 +160,7 @@ class Soul:
         secondary (with its intensity halved) unless an explicit secondary
         is provided.
         """
+        _check_permission("emotion", caller)
         intensity = max(0.0, min(1.0, intensity))
         emo = self._soul.setdefault("current_emotion", {})
 
@@ -210,13 +237,20 @@ class Soul:
         if len(history) > 50:
             self._soul["emotion_history"] = history[-50:]
 
-    def update_name(self, name: str) -> None:
+    def update_name(self, name: str, *, caller: SoulCaller = SoulCaller.USER) -> None:
+        _check_permission("name", caller)
         self._soul.setdefault("identity", {})
         self._soul["identity"]["name"] = name
         self._save_soul()
 
-    def update_notes(self, notes: str) -> None:
+    def update_notes(
+        self,
+        notes: str,
+        *,
+        caller: SoulCaller = SoulCaller.USER,
+    ) -> None:
         """Update soul_notes.md content."""
+        _check_permission("notes", caller)
         self._notes = notes
         self._save_notes()
 
@@ -238,8 +272,11 @@ class Soul:
         self,
         add: list[str] | None = None,
         remove: list[str] | None = None,
+        *,
+        caller: SoulCaller = SoulCaller.SYSTEM,
     ) -> None:
         """Apply an approved trait change."""
+        _check_permission("traits", caller)
         traits = self.traits
         for t in remove or []:
             if t in traits:
@@ -249,6 +286,19 @@ class Soul:
                 traits.append(t)
         self._soul.setdefault("personality", {})
         self._soul["personality"]["traits"] = traits
+        self._save_soul()
+
+    def update_quiet_hours(
+        self,
+        start: str,
+        end: str,
+        *,
+        caller: SoulCaller = SoulCaller.USER,
+    ) -> None:
+        """Update heartbeat quiet-hours window."""
+        _check_permission("quiet_hours", caller)
+        hb = self._soul.setdefault("heartbeat", {})
+        hb["quiet_hours"] = {"start": start, "end": end}
         self._save_soul()
 
     def get_soul_snapshot(self) -> dict[str, Any]:
@@ -280,10 +330,14 @@ class Soul:
 
         if core_path.exists():
             with core_path.open(encoding="utf-8") as f:
-                self._core = yaml.safe_load(f) or {}
+                raw_core = yaml.safe_load(f) or {}
         else:
-            self._core = copy.deepcopy(_DEFAULT_SOUL_CORE)
-            self._save_core()
+            raw_core = copy.deepcopy(_DEFAULT_SOUL_CORE)
+            with core_path.open("w", encoding="utf-8") as f:
+                yaml.dump(raw_core, f, allow_unicode=True, default_flow_style=False)
+
+        # Freeze core data — immutable at runtime
+        self._core = MappingProxyType(raw_core)
 
         if soul_path.exists():
             with soul_path.open(encoding="utf-8") as f:
@@ -297,16 +351,6 @@ class Soul:
         else:
             self._notes = _DEFAULT_SOUL_NOTES
             self._save_notes()
-
-    def _save_core(self) -> None:
-        core_path = self._soul_dir / "soul_core.yaml"
-        with core_path.open("w", encoding="utf-8") as f:
-            yaml.dump(
-                self._core,
-                f,
-                allow_unicode=True,
-                default_flow_style=False,
-            )
 
     def _save_soul(self) -> None:
         soul_path = self._soul_dir / "soul.yaml"

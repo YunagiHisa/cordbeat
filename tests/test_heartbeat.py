@@ -906,13 +906,72 @@ class TestTemporalRecall:
         assert len(hints) >= 1
         assert any("OSS" in h["content"] for h in hints)
 
+    async def test_multiple_lookback_windows(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Temporal recall should check 1/7/30/365 day windows."""
+        from datetime import datetime, timedelta
+
+        await memory.get_or_create_user("u1", "Alice")
+
+        # Insert messages at 1-day and 30-day marks
+        for days_ago, topic in [(1, "Yesterday topic"), (30, "Monthly topic")]:
+            target_date = (datetime.now() - timedelta(days=days_ago)).strftime(
+                "%Y-%m-%d"
+            )
+            await memory._conn.execute(
+                "INSERT INTO conversation_messages "
+                "(user_id, role, content, adapter_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("u1", "user", topic, "discord", target_date),
+            )
+        await memory._conn.commit()
+
+        mock_ai.generate = AsyncMock(return_value="Diary")
+
+        await heartbeat._run_sleep_phase()
+
+        hints = await memory.get_recall_hints("u1")
+        contents = [h["content"] for h in hints]
+        assert any("Yesterday topic" in c for c in contents)
+        assert any("Monthly topic" in c for c in contents)
+
+    async def test_hint_label_matches_window(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Temporal recall hints should use human-readable labels."""
+        from datetime import datetime, timedelta
+
+        await memory.get_or_create_user("u1", "Alice")
+
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        await memory._conn.execute(
+            "INSERT INTO conversation_messages "
+            "(user_id, role, content, adapter_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("u1", "user", "Discussed Python typing", "discord", yesterday),
+        )
+        await memory._conn.commit()
+
+        mock_ai.generate = AsyncMock(return_value="Diary")
+        await heartbeat._run_sleep_phase()
+
+        hints = await memory.get_recall_hints("u1")
+        assert any("yesterday" in h["content"] for h in hints)
+
     async def test_no_hint_when_no_old_messages(
         self,
         heartbeat: HeartbeatLoop,
         memory: MemoryStore,
         mock_ai: AsyncMock,
     ) -> None:
-        """No temporal hint stored when there are no 7-day-old messages."""
+        """No temporal hint stored when there are no matching old messages."""
         await memory.get_or_create_user("u1", "Alice")
 
         mock_ai.generate = AsyncMock(return_value="Diary")

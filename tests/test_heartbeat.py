@@ -1022,6 +1022,102 @@ class TestTemporalRecall:
         assert len(hints) == 0
 
 
+# ── Sleep phase: chain recall precomputation ──────────────────────────
+
+
+class TestChainRecallPrecomputation:
+    async def test_stores_chain_links_for_related_memories(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Sleep phase should store chain links between related memories."""
+        from cordbeat.models import MemoryEntry, MemoryLayer
+
+        await memory.get_or_create_user("u1", "Alice")
+
+        # Store related episodic and semantic memories
+        ep_entry = MemoryEntry(
+            id="ep_python",
+            user_id="u1",
+            layer=MemoryLayer.EPISODIC,
+            content="Alice discussed Python 3.12 new features",
+        )
+        sem_entry = MemoryEntry(
+            id="sem_python",
+            user_id="u1",
+            layer=MemoryLayer.SEMANTIC,
+            content="Alice prefers Python over JavaScript",
+        )
+        await memory.add_episodic_memory(ep_entry)
+        await memory.add_semantic_memory(sem_entry)
+
+        mock_ai.generate = AsyncMock(return_value="Diary")
+
+        await heartbeat._run_sleep_phase()
+
+        # Chain links should have been created
+        links = await memory.get_chain_links("u1", ["ep_python"])
+        assert len(links) >= 1
+        assert any("Python" in link for link in links)
+
+    async def test_no_chain_links_without_memories(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """No chain links if user has no episodic memories."""
+        await memory.get_or_create_user("u1", "Alice")
+        mock_ai.generate = AsyncMock(return_value="Diary")
+
+        await heartbeat._run_sleep_phase()
+
+        # Should not crash, and no chain_link records
+        records = await memory.get_certain_records("u1", record_type="chain_link")
+        assert len(records) == 0
+
+    async def test_chain_precomputation_error_does_not_crash(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Chain link failure should not crash sleep phase."""
+        await memory.get_or_create_user("u1", "Alice")
+        memory.search_episodic = AsyncMock(side_effect=RuntimeError("Vector DB error"))
+        mock_ai.generate = AsyncMock(return_value="Diary")
+
+        # Should not raise
+        await heartbeat._run_sleep_phase()
+
+    async def test_clears_old_chain_links(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Sleep phase clears old chain links."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_old",
+            linked_content="Old chain link",
+        )
+        await memory._conn.execute(
+            "UPDATE certain_records SET created_at = '2020-01-01T00:00:00' "
+            "WHERE record_type = 'chain_link'"
+        )
+        await memory._conn.commit()
+
+        mock_ai.generate = AsyncMock(return_value="Diary")
+        await heartbeat._run_sleep_phase()
+
+        links = await memory.get_chain_links("u1", ["mem_old"])
+        assert len(links) == 0
+
+
 # ── Two-layer architecture ────────────────────────────────────────────
 
 

@@ -1013,3 +1013,88 @@ class TestRecallModel:
 
         # Restore
         memory.get_recall_hints = original
+
+    async def test_phase4_chain_recall_adds_linked_memories(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Phase4: Chain recall should add pre-linked memories to context."""
+        ai = AsyncMock()
+
+        async def _generate(**kwargs: object) -> str:
+            prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if isinstance(prompt, str) and "what emotion" in prompt.lower():
+                return '{"emotion": "calm", "intensity": 0.5}'
+            if isinstance(prompt, str) and "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "", "emotional_tone": "",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "I remember the chain!"
+
+        ai.generate = AsyncMock(side_effect=_generate)
+
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+
+        # Store a semantic memory and a pre-linked chain
+        entry = MemoryEntry(
+            id="mem_cats",
+            user_id="u1",
+            layer=MemoryLayer.SEMANTIC,
+            content="User loves cats",
+        )
+        await memory.add_semantic_memory(entry)
+
+        # Pre-link: when "mem_cats" is recalled, also surface this
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_cats",
+            linked_content="User adopted a kitten last month",
+            linked_memory_id="mem_kitten",
+        )
+
+        eng = CoreEngine(
+            ai=ai, soul=soul, memory=memory, skills=skills, gateway=mock_gateway
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="I love cats!",
+        )
+        await eng.handle_message(msg)
+
+        # The chain-linked memory should appear in the prompt
+        main_call = ai.generate.call_args_list[1]
+        prompt_arg = main_call[1].get("prompt", "")
+        assert "kitten" in prompt_arg
+
+    async def test_phase4_chain_recall_failure_graceful(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Phase4: If chain recall fails, response still works."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+
+        original = memory.get_chain_links
+        memory.get_chain_links = AsyncMock(side_effect=RuntimeError("DB error"))
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Hello",
+        )
+        await engine.handle_message(msg)
+        mock_ai.generate.assert_called()
+
+        memory.get_chain_links = original

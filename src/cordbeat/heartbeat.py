@@ -783,6 +783,10 @@ class HeartbeatLoop:
         for user in users:
             await self._precompute_temporal_recall(user)
 
+        # 3b. Phase4: Chain recall (芋づる想起 — precompute memory links)
+        for user in users:
+            await self._precompute_chain_links(user.user_id)
+
         # 4. Decay and archive weak memories
         try:
             stats = await self._memory.decay_and_archive_memories()
@@ -811,6 +815,11 @@ class HeartbeatLoop:
             await self._memory.clear_old_recall_hints(keep_days=2)
         except Exception:
             logger.exception("Failed to clear old recall hints")
+
+        try:
+            await self._memory.clear_old_chain_links(keep_days=2)
+        except Exception:
+            logger.exception("Failed to clear old chain links")
 
         logger.info("Sleep phase completed")
 
@@ -902,3 +911,58 @@ class HeartbeatLoop:
                     label,
                     user.user_id,
                 )
+
+    async def _precompute_chain_links(self, user_id: str) -> None:
+        """Precompute chain-recall links between related memories.
+
+        For each of today's episodic memories, find related older memories
+        via vector search and store the linkage for runtime chain recall.
+        """
+        try:
+            recent_episodes = await self._memory.search_episodic(
+                user_id, "today", n_results=5
+            )
+            if not recent_episodes:
+                return
+
+            for episode in recent_episodes:
+                ep_id = episode.get("id", "")
+                ep_content = episode.get("content", "")
+                if not ep_content:
+                    continue
+
+                # Search for related semantic memories
+                related = await self._memory.search_semantic(
+                    user_id, ep_content, n_results=3
+                )
+                for mem in related:
+                    mem_id = mem.get("id", "")
+                    mem_content = mem.get("content", "")
+                    if mem_id == ep_id or not mem_content:
+                        continue
+                    await self._memory.store_chain_link(
+                        user_id=user_id,
+                        source_memory_id=ep_id,
+                        linked_content=mem_content,
+                        linked_memory_id=mem_id,
+                    )
+
+                # Search for related episodic memories
+                related_ep = await self._memory.search_episodic(
+                    user_id, ep_content, n_results=3
+                )
+                for mem in related_ep:
+                    mem_id = mem.get("id", "")
+                    mem_content = mem.get("content", "")
+                    if mem_id == ep_id or not mem_content:
+                        continue
+                    await self._memory.store_chain_link(
+                        user_id=user_id,
+                        source_memory_id=ep_id,
+                        linked_content=mem_content,
+                        linked_memory_id=mem_id,
+                    )
+
+            logger.debug("Chain links computed for user %s", user_id)
+        except Exception:
+            logger.exception("Chain link precomputation failed for user %s", user_id)

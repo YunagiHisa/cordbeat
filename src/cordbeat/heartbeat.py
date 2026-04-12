@@ -1010,6 +1010,7 @@ class HeartbeatLoop:
                         source_memory_id=ep_id,
                         linked_content=mem_content,
                         linked_memory_id=mem_id,
+                        distance=mem.get("distance"),
                     )
 
                 # Search for related episodic memories
@@ -1026,6 +1027,7 @@ class HeartbeatLoop:
                         source_memory_id=ep_id,
                         linked_content=mem_content,
                         linked_memory_id=mem_id,
+                        distance=mem.get("distance"),
                     )
 
             logger.debug("Chain links computed for user %s", user_id)

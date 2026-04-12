@@ -1038,13 +1038,16 @@ class MemoryStore:
         source_memory_id: str,
         linked_content: str,
         linked_memory_id: str = "",
+        distance: float | None = None,
     ) -> str:
         """Store a precomputed chain-recall link between memories."""
-        meta = {
+        meta: dict[str, Any] = {
             "source_memory_id": source_memory_id,
             "linked_memory_id": linked_memory_id,
             "date": datetime.now().strftime("%Y-%m-%d"),
         }
+        if distance is not None:
+            meta["distance"] = distance
         return await self._records.add_certain_record(  # type: ignore[union-attr]
             user_id=user_id,
             content=linked_content,
@@ -1056,22 +1059,53 @@ class MemoryStore:
         self,
         user_id: str,
         source_memory_ids: list[str],
+        *,
+        max_depth: int = 1,
+        max_results: int = 10,
     ) -> list[str]:
-        """Get linked memory contents for the given source memory IDs."""
+        """Get linked memory contents for the given source memory IDs.
+
+        With max_depth > 1, follows chain links transitively (multi-hop).
+        Results are sorted by vector distance (closest first) when available.
+        """
         if not source_memory_ids:
             return []
         all_links = await self._records.get_certain_records(  # type: ignore[union-attr]
-            user_id, record_type="chain_link", limit=50
+            user_id, record_type="chain_link", limit=100
         )
-        results: list[str] = []
-        source_set = set(source_memory_ids)
-        for link in all_links:
-            meta = json.loads(link.get("metadata") or "{}")
-            if meta.get("source_memory_id") in source_set:
+
+        scored: list[tuple[float, str]] = []
+        seen_contents: set[str] = set()
+        visited_sources: set[str] = set()
+        current_sources = set(source_memory_ids)
+
+        for depth in range(max_depth):
+            next_sources: set[str] = set()
+            for link in all_links:
+                meta = json.loads(link.get("metadata") or "{}")
+                if meta.get("source_memory_id") not in current_sources:
+                    continue
                 content = link.get("content", "")
-                if content and content not in results:
-                    results.append(content)
-        return results
+                if not content or content in seen_contents:
+                    continue
+
+                # Distance increases with depth to prefer direct links
+                base_distance = meta.get("distance", 1.0)
+                adjusted = base_distance + depth * 0.5
+                scored.append((adjusted, content))
+                seen_contents.add(content)
+
+                linked_id = meta.get("linked_memory_id", "")
+                if linked_id:
+                    next_sources.add(linked_id)
+
+            visited_sources |= current_sources
+            current_sources = next_sources - visited_sources
+            if not current_sources:
+                break
+
+        scored.sort(key=lambda x: x[0])
+        return [content for _, content in scored[:max_results]]
 
     async def clear_old_chain_links(self, keep_days: int = 2) -> int:
         """Remove chain links older than keep_days."""

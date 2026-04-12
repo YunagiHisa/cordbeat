@@ -38,7 +38,7 @@ def build_soul_system_prompt(soul_snap: dict[str, Any]) -> str:
             f"(intensity: {soul_snap['emotion']['secondary_intensity']})"
         )
 
-    return (
+    prompt = (
         f"You are {soul_snap['name']}. "
         f"Personality: {', '.join(soul_snap['traits'])}. "
         f"{emotion_desc}. "
@@ -47,6 +47,12 @@ def build_soul_system_prompt(soul_snap: dict[str, Any]) -> str:
         + "\n\nRespond naturally to the user's message. "
         "Keep your response concise."
     )
+
+    notes = soul_snap.get("notes", "").strip()
+    if notes:
+        prompt += f"\n\nCharacter notes:\n{notes}"
+
+    return prompt
 
 
 def build_context(

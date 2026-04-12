@@ -561,3 +561,111 @@ class TestChainLinks:
         )
         results = await memory.get_chain_links("u1", ["mem_A"])
         assert results == []
+
+
+class TestProposalStatusTransitions:
+    """Tests for proposal status validation and expiry."""
+
+    async def test_valid_transition_pending_to_approved(
+        self, memory: MemoryStore
+    ) -> None:
+        pid = await memory.add_certain_record(
+            "u1", "Test", record_type="proposal", metadata={"status": "pending"}
+        )
+        result = await memory.update_proposal_status(pid, "approved")
+        assert result is True
+
+    async def test_valid_transition_pending_to_rejected(
+        self, memory: MemoryStore
+    ) -> None:
+        pid = await memory.add_certain_record(
+            "u1", "Test", record_type="proposal", metadata={"status": "pending"}
+        )
+        result = await memory.update_proposal_status(pid, "rejected")
+        assert result is True
+
+    async def test_valid_transition_approved_to_executed(
+        self, memory: MemoryStore
+    ) -> None:
+        pid = await memory.add_certain_record(
+            "u1", "Test", record_type="proposal", metadata={"status": "pending"}
+        )
+        await memory.update_proposal_status(pid, "approved")
+        result = await memory.update_proposal_status(pid, "executed")
+        assert result is True
+
+    async def test_invalid_transition_rejected_to_approved(
+        self, memory: MemoryStore
+    ) -> None:
+        pid = await memory.add_certain_record(
+            "u1", "Test", record_type="proposal", metadata={"status": "pending"}
+        )
+        await memory.update_proposal_status(pid, "rejected")
+        with pytest.raises(ValueError, match="Invalid proposal transition"):
+            await memory.update_proposal_status(pid, "approved")
+
+    async def test_invalid_transition_executed_to_pending(
+        self, memory: MemoryStore
+    ) -> None:
+        pid = await memory.add_certain_record(
+            "u1", "Test", record_type="proposal", metadata={"status": "pending"}
+        )
+        await memory.update_proposal_status(pid, "approved")
+        await memory.update_proposal_status(pid, "executed")
+        with pytest.raises(ValueError, match="Invalid proposal transition"):
+            await memory.update_proposal_status(pid, "pending")
+
+    async def test_expire_old_proposals(self, memory: MemoryStore) -> None:
+        """Pending proposals older than max_age_days are expired."""
+        pid = await memory.add_certain_record(
+            "u1",
+            "Old proposal",
+            record_type="proposal",
+            metadata={"status": "pending"},
+        )
+        # Backdate the record
+        await memory._conn.execute(
+            "UPDATE certain_records SET created_at = '2020-01-01T00:00:00' "
+            "WHERE id = ?",
+            (pid,),
+        )
+        await memory._conn.commit()
+
+        expired = await memory.expire_old_proposals(max_age_days=7)
+        assert expired == 1
+
+        proposal = await memory.get_proposal(pid)
+        import json
+
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == "expired"
+
+    async def test_expire_does_not_touch_approved(self, memory: MemoryStore) -> None:
+        """Only pending proposals are expired, not approved ones."""
+        pid = await memory.add_certain_record(
+            "u1",
+            "Approved",
+            record_type="proposal",
+            metadata={"status": "pending"},
+        )
+        await memory.update_proposal_status(pid, "approved")
+        await memory._conn.execute(
+            "UPDATE certain_records SET created_at = '2020-01-01T00:00:00' "
+            "WHERE id = ?",
+            (pid,),
+        )
+        await memory._conn.commit()
+
+        expired = await memory.expire_old_proposals(max_age_days=7)
+        assert expired == 0
+
+    async def test_expire_recent_proposals_untouched(self, memory: MemoryStore) -> None:
+        """Recent pending proposals are not expired."""
+        await memory.add_certain_record(
+            "u1",
+            "Fresh",
+            record_type="proposal",
+            metadata={"status": "pending"},
+        )
+        expired = await memory.expire_old_proposals(max_age_days=7)
+        assert expired == 0

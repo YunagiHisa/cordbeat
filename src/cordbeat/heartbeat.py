@@ -821,6 +821,14 @@ class HeartbeatLoop:
         except Exception:
             logger.exception("Failed to clear old chain links")
 
+        # 6. Expire stale pending proposals (older than 7 days)
+        try:
+            expired = await self._memory.expire_old_proposals(max_age_days=7)
+            if expired > 0:
+                logger.info("Expired %d stale proposals", expired)
+        except Exception:
+            logger.exception("Failed to expire old proposals")
+
         logger.info("Sleep phase completed")
 
     async def _promote_episodic_memories(self, user_id: str) -> None:

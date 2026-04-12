@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -16,6 +17,7 @@ from cordbeat.models import (
     MemoryEntry,
     MemoryLayer,
     MessageType,
+    ProposalStatus,
 )
 from cordbeat.skills import SkillRegistry
 from cordbeat.soul import Soul
@@ -1098,3 +1100,241 @@ class TestRecallModel:
         mock_ai.generate.assert_called()
 
         memory.get_chain_links = original
+
+
+class TestProposalCommands:
+    """Tests for /approve, /reject, /proposals slash commands."""
+
+    async def _create_proposal(
+        self,
+        memory: MemoryStore,
+        user_id: str,
+        content: str = "Test proposal",
+    ) -> str:
+        """Helper to create a pending proposal."""
+        return await memory.add_certain_record(
+            user_id=user_id,
+            content=content,
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.PENDING,
+                "proposal_type": "general",
+            },
+        )
+
+    async def test_approve_proposal(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Users can approve their own pending proposals."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        pid = await self._create_proposal(memory, "u1", "Add emoji reactions")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content=f"/approve {pid}",
+        )
+        await engine.handle_message(msg)
+
+        # Verify proposal status changed
+        proposal = await memory.get_proposal(pid)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.APPROVED
+
+        # Verify reply was sent
+        reply_call = mock_gateway.send_to_adapter.call_args
+        assert "approved" in reply_call[0][1].content.lower()
+
+    async def test_reject_proposal(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Users can reject their own pending proposals."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        pid = await self._create_proposal(memory, "u1", "Change personality")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content=f"/reject {pid}",
+        )
+        await engine.handle_message(msg)
+
+        proposal = await memory.get_proposal(pid)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.REJECTED
+
+        reply_call = mock_gateway.send_to_adapter.call_args
+        assert "rejected" in reply_call[0][1].content.lower()
+
+    async def test_approve_nonexistent_proposal(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Approving a nonexistent proposal returns error."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/approve fake-id-123",
+        )
+        await engine.handle_message(msg)
+
+        reply_call = mock_gateway.send_to_adapter.call_args
+        assert "not found" in reply_call[0][1].content.lower()
+
+    async def test_approve_other_users_proposal(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Users cannot approve proposals belonging to other users."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        await memory.get_or_create_user("u2", "Bob")
+        await memory.link_platform("u2", "test", "user2")
+
+        pid = await self._create_proposal(memory, "u2", "Bob's proposal")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content=f"/approve {pid}",
+        )
+        await engine.handle_message(msg)
+
+        # Should not approve — ownership check fails
+        proposal = await memory.get_proposal(pid)
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.PENDING
+
+        reply_call = mock_gateway.send_to_adapter.call_args
+        assert "not found" in reply_call[0][1].content.lower()
+
+    async def test_approve_already_approved(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Approving an already approved proposal returns error."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        pid = await self._create_proposal(memory, "u1")
+        await memory.update_proposal_status(pid, ProposalStatus.APPROVED)
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content=f"/approve {pid}",
+        )
+        await engine.handle_message(msg)
+
+        reply_call = mock_gateway.send_to_adapter.call_args
+        assert "cannot approve" in reply_call[0][1].content.lower()
+
+    async def test_approve_no_id(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Approve without proposal ID shows usage."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/approve",
+        )
+        await engine.handle_message(msg)
+
+        reply_call = mock_gateway.send_to_adapter.call_args
+        assert "usage" in reply_call[0][1].content.lower()
+
+    async def test_list_proposals(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Users can list their pending proposals."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        await self._create_proposal(memory, "u1", "Proposal A")
+        await self._create_proposal(memory, "u1", "Proposal B")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/proposals",
+        )
+        await engine.handle_message(msg)
+
+        reply_call = mock_gateway.send_to_adapter.call_args
+        response = reply_call[0][1].content
+        assert "Proposal A" in response
+        assert "Proposal B" in response
+
+    async def test_list_proposals_empty(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Listing with no pending proposals returns none message."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/proposals",
+        )
+        await engine.handle_message(msg)
+
+        reply_call = mock_gateway.send_to_adapter.call_args
+        assert "no pending" in reply_call[0][1].content.lower()
+
+    async def test_unknown_command_falls_through(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Unknown slash commands are processed as normal messages."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/unknown_command",
+        )
+        await engine.handle_message(msg)
+        # Should fall through to normal AI processing
+        mock_ai.generate.assert_called()

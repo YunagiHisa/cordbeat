@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 
@@ -13,6 +14,7 @@ from cordbeat.memory import MemoryStore
 from cordbeat.models import (
     GatewayMessage,
     MessageType,
+    ProposalStatus,
     UserSummary,
 )
 from cordbeat.prompt import build_context, build_soul_system_prompt, sanitize
@@ -54,6 +56,13 @@ class CoreEngine:
 
         if message.type != MessageType.MESSAGE:
             return
+
+        # ── Command routing ───────────────────────────────────────────
+        text = message.content.strip()
+        if text.startswith("/"):
+            handled = await self._handle_command(message, text)
+            if handled:
+                return
 
         # Phase 1: Resolve user
         user_id, user = await self._resolve_user(message)
@@ -290,3 +299,133 @@ class CoreEngine:
             requester_platform_user_id,
             confirmer_user_id,
         )
+
+    # ── Slash Commands ────────────────────────────────────────────────
+
+    async def _handle_command(self, message: GatewayMessage, text: str) -> bool:
+        """Route slash commands. Returns True if the command was handled."""
+        parts = text.split(maxsplit=1)
+        cmd = parts[0].lower()
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if cmd == "/approve":
+            await self._cmd_approve(message, arg)
+            return True
+        if cmd == "/reject":
+            await self._cmd_reject(message, arg)
+            return True
+        if cmd == "/proposals":
+            await self._cmd_proposals(message)
+            return True
+
+        # Unknown slash command — fall through to normal processing
+        return False
+
+    async def _cmd_approve(self, message: GatewayMessage, proposal_id: str) -> None:
+        """Approve a pending proposal."""
+        if not proposal_id:
+            await self._send_reply(message, "Usage: /approve <proposal_id>")
+            return
+
+        user_id = await self._memory.resolve_user(
+            message.adapter_id, message.platform_user_id
+        )
+        if user_id is None:
+            await self._send_reply(message, "User not found.")
+            return
+
+        proposal = await self._memory.get_proposal(proposal_id)
+        if proposal is None:
+            await self._send_reply(message, "Proposal not found.")
+            return
+
+        # Verify ownership: proposal must belong to this user
+        if proposal["user_id"] != user_id:
+            await self._send_reply(message, "Proposal not found.")
+            return
+
+        meta = json.loads(proposal.get("metadata") or "{}")
+        status = meta.get("status", "")
+        if status != ProposalStatus.PENDING:
+            await self._send_reply(
+                message,
+                f"Cannot approve: proposal status is '{status}'.",
+            )
+            return
+
+        await self._memory.update_proposal_status(proposal_id, ProposalStatus.APPROVED)
+        await self._send_reply(
+            message,
+            f"✅ Proposal approved: {proposal['content'][:80]}",
+        )
+        logger.info("Proposal %s approved by user %s", proposal_id, user_id)
+
+    async def _cmd_reject(self, message: GatewayMessage, proposal_id: str) -> None:
+        """Reject a pending proposal."""
+        if not proposal_id:
+            await self._send_reply(message, "Usage: /reject <proposal_id>")
+            return
+
+        user_id = await self._memory.resolve_user(
+            message.adapter_id, message.platform_user_id
+        )
+        if user_id is None:
+            await self._send_reply(message, "User not found.")
+            return
+
+        proposal = await self._memory.get_proposal(proposal_id)
+        if proposal is None:
+            await self._send_reply(message, "Proposal not found.")
+            return
+
+        if proposal["user_id"] != user_id:
+            await self._send_reply(message, "Proposal not found.")
+            return
+
+        meta = json.loads(proposal.get("metadata") or "{}")
+        status = meta.get("status", "")
+        if status != ProposalStatus.PENDING:
+            await self._send_reply(
+                message,
+                f"Cannot reject: proposal status is '{status}'.",
+            )
+            return
+
+        await self._memory.update_proposal_status(proposal_id, ProposalStatus.REJECTED)
+        await self._send_reply(
+            message,
+            f"❌ Proposal rejected: {proposal['content'][:80]}",
+        )
+        logger.info("Proposal %s rejected by user %s", proposal_id, user_id)
+
+    async def _cmd_proposals(self, message: GatewayMessage) -> None:
+        """List pending proposals for the current user."""
+        user_id = await self._memory.resolve_user(
+            message.adapter_id, message.platform_user_id
+        )
+        if user_id is None:
+            await self._send_reply(message, "User not found.")
+            return
+
+        proposals = await self._memory.get_pending_proposals(
+            user_id=user_id, status=ProposalStatus.PENDING
+        )
+        if not proposals:
+            await self._send_reply(message, "No pending proposals.")
+            return
+
+        lines = ["📋 Pending proposals:\n"]
+        for p in proposals:
+            content = p["content"][:60]
+            lines.append(f"  • {p['id'][:8]}… — {content}")
+        await self._send_reply(message, "\n".join(lines))
+
+    async def _send_reply(self, message: GatewayMessage, content: str) -> None:
+        """Send a reply message back to the user."""
+        reply = GatewayMessage(
+            type=MessageType.ACK,
+            adapter_id=message.adapter_id,
+            platform_user_id=message.platform_user_id,
+            content=content,
+        )
+        await self._gateway.send_to_adapter(message.adapter_id, reply)

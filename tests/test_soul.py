@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from cordbeat.models import Emotion
+from cordbeat.models import Emotion, SoulCaller, SoulPermissionError
 from cordbeat.soul import _BASELINE_INTENSITY, _DECAY_RATE, Soul
 
 
@@ -267,3 +267,93 @@ class TestSoulNotes:
         assert soul.notes == ""
         snap = soul.get_soul_snapshot()
         assert snap["notes"] == ""
+
+
+class TestPermissionMatrix:
+    """Tests for SOUL permission matrix enforcement."""
+
+    def test_ai_can_update_emotion(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        soul.update_emotion(Emotion.JOY, 0.8, caller=SoulCaller.AI)
+        assert soul.emotion.primary == Emotion.JOY
+
+    def test_system_can_update_emotion(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        soul.update_emotion(Emotion.JOY, 0.8, caller=SoulCaller.SYSTEM)
+        assert soul.emotion.primary == Emotion.JOY
+
+    def test_user_cannot_update_emotion(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        with pytest.raises(SoulPermissionError):
+            soul.update_emotion(Emotion.JOY, 0.8, caller=SoulCaller.USER)
+
+    def test_system_can_apply_trait_change(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        soul.apply_trait_change(add=["bold"], caller=SoulCaller.SYSTEM)
+        assert "bold" in soul.traits
+
+    def test_ai_cannot_apply_trait_change(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        with pytest.raises(SoulPermissionError):
+            soul.apply_trait_change(add=["bold"], caller=SoulCaller.AI)
+
+    def test_user_cannot_apply_trait_change(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        with pytest.raises(SoulPermissionError):
+            soul.apply_trait_change(add=["bold"], caller=SoulCaller.USER)
+
+    def test_user_can_update_name(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        soul.update_name("Athena", caller=SoulCaller.USER)
+        assert soul.name == "Athena"
+
+    def test_ai_cannot_update_name(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        with pytest.raises(SoulPermissionError):
+            soul.update_name("Hacked", caller=SoulCaller.AI)
+
+    def test_system_cannot_update_name(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        with pytest.raises(SoulPermissionError):
+            soul.update_name("Override", caller=SoulCaller.SYSTEM)
+
+    def test_user_can_update_notes(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        soul.update_notes("User notes", caller=SoulCaller.USER)
+        assert soul.notes == "User notes"
+
+    def test_system_can_update_notes(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        soul.update_notes("Approved notes", caller=SoulCaller.SYSTEM)
+        assert soul.notes == "Approved notes"
+
+    def test_ai_cannot_update_notes(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        with pytest.raises(SoulPermissionError):
+            soul.update_notes("Hacked notes", caller=SoulCaller.AI)
+
+    def test_user_can_update_quiet_hours(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        soul.update_quiet_hours("23:00", "06:00", caller=SoulCaller.USER)
+        assert soul.quiet_hours == ("23:00", "06:00")
+
+    def test_system_can_update_quiet_hours(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        soul.update_quiet_hours("02:00", "08:00", caller=SoulCaller.SYSTEM)
+        assert soul.quiet_hours == ("02:00", "08:00")
+
+    def test_ai_cannot_update_quiet_hours(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        with pytest.raises(SoulPermissionError):
+            soul.update_quiet_hours("00:00", "00:00", caller=SoulCaller.AI)
+
+    def test_core_is_frozen(self, tmp_path: Path) -> None:
+        """soul_core data cannot be modified at runtime."""
+        soul = Soul(tmp_path / "soul")
+        with pytest.raises(TypeError):
+            soul._core["immutable_rules"] = []  # type: ignore[index]
+
+    def test_permission_error_message(self, tmp_path: Path) -> None:
+        soul = Soul(tmp_path / "soul")
+        with pytest.raises(SoulPermissionError, match="ai.*not allowed.*name"):
+            soul.update_name("Bad", caller=SoulCaller.AI)

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import socket
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -557,3 +559,362 @@ class TestSandboxEnforcement:
         assert skill is not None
         with pytest.raises(SkillPermissionError):
             await skill.execute({})
+
+
+# ── Memory Injection ──────────────────────────────────────────────────
+
+
+class TestMemoryInjection:
+    """Tests for memory parameter injection into SkillContext."""
+
+    async def test_memory_passed_to_context(self, tmp_path: Path) -> None:
+        """Memory object is accessible via context.memory inside the skill."""
+        code = (
+            "def execute(context=None, **kwargs):\n"
+            "    return {'has_memory': context.memory is not None,\n"
+            "            'memory_type': type(context.memory).__name__}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "mem_skill", main_code=code)
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("mem_skill")
+        assert skill is not None
+
+        mock_memory = MagicMock()
+        result = await skill.execute({}, memory=mock_memory)
+        assert result["has_memory"] is True
+        assert result["memory_type"] == "MagicMock"
+
+    async def test_memory_none_by_default(self, tmp_path: Path) -> None:
+        """When memory is not passed, context.memory is None."""
+        code = (
+            "def execute(context=None, **kwargs):\n"
+            "    return {'memory_is_none': context.memory is None}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "no_mem", main_code=code)
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("no_mem")
+        assert skill is not None
+
+        result = await skill.execute({})
+        assert result["memory_is_none"] is True
+
+    async def test_memory_in_sandboxed_skill(self, tmp_path: Path) -> None:
+        """Memory is accessible even in sandboxed skills."""
+        code = (
+            "def execute(context=None, **kwargs):\n"
+            "    return {'has_memory': context.memory is not None}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "sb_mem", sandbox=True, main_code=code)
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("sb_mem")
+        assert skill is not None
+
+        mock_memory = MagicMock()
+        result = await skill.execute({}, memory=mock_memory)
+        assert result["has_memory"] is True
+
+
+# ── Built-in Skills ──────────────────────────────────────────────────
+
+# Path to project-level skills directory
+_BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
+
+
+def _copy_builtin_skill(dest_dir: Path, name: str) -> None:
+    """Copy a real built-in skill to a temporary skills directory."""
+    src = _BUILTIN_SKILLS_DIR / name
+    dst = dest_dir / name
+    shutil.copytree(src, dst)
+
+
+class TestReadDiarySkill:
+    async def test_read_diary_returns_entries(self, tmp_path: Path) -> None:
+        """read_diary skill fetches records from memory."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "read_diary")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("read_diary")
+        assert skill is not None
+
+        mock_memory = AsyncMock()
+        mock_memory.get_certain_records.return_value = [
+            {"content": "Today was good", "created_at": "2025-01-01T00:00:00"},
+            {"content": "Rainy day", "created_at": "2025-01-02T00:00:00"},
+        ]
+
+        result = await skill.execute(
+            {"user_id": "u1", "record_type": "diary", "limit": 5},
+            memory=mock_memory,
+        )
+        assert result["count"] == 2
+        assert result["user_id"] == "u1"
+        assert result["record_type"] == "diary"
+        assert result["entries"][0]["content"] == "Today was good"
+        mock_memory.get_certain_records.assert_awaited_once_with(
+            "u1", record_type="diary", limit=5
+        )
+
+    async def test_read_diary_no_memory(self, tmp_path: Path) -> None:
+        """read_diary returns error when memory is not available."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "read_diary")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("read_diary")
+        assert skill is not None
+
+        result = await skill.execute({"user_id": "u1"})
+        assert "error" in result
+
+    async def test_read_diary_empty_records(self, tmp_path: Path) -> None:
+        """read_diary handles empty records list."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "read_diary")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("read_diary")
+        assert skill is not None
+
+        mock_memory = AsyncMock()
+        mock_memory.get_certain_records.return_value = []
+
+        result = await skill.execute(
+            {"user_id": "u1"},
+            memory=mock_memory,
+        )
+        assert result["count"] == 0
+        assert result["entries"] == []
+
+
+class TestTimerSkill:
+    async def test_timer_schedules_reminder(self, tmp_path: Path) -> None:
+        """timer skill stores a reminder and returns schedule info."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "timer")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("timer")
+        assert skill is not None
+
+        mock_memory = AsyncMock()
+        mock_memory.add_certain_record.return_value = "rec-001"
+
+        result = await skill.execute(
+            {"user_id": "u1", "message": "Check oven", "minutes": 15},
+            memory=mock_memory,
+        )
+        assert result["status"] == "scheduled"
+        assert result["record_id"] == "rec-001"
+        assert result["message"] == "Check oven"
+        assert "remind_at" in result
+
+        # Verify memory was called correctly
+        mock_memory.add_certain_record.assert_awaited_once()
+        call_kwargs = mock_memory.add_certain_record.call_args.kwargs
+        assert call_kwargs["user_id"] == "u1"
+        assert call_kwargs["content"] == "Check oven"
+        assert call_kwargs["record_type"] == "reminder"
+        assert call_kwargs["metadata"]["status"] == "pending"
+        assert "remind_at" in call_kwargs["metadata"]
+
+    async def test_timer_no_memory(self, tmp_path: Path) -> None:
+        """timer returns error when memory is not available."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "timer")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("timer")
+        assert skill is not None
+
+        result = await skill.execute({"user_id": "u1", "message": "test"})
+        assert "error" in result
+
+
+class TestFileReadSkill:
+    async def test_file_read_returns_content(self, tmp_path: Path) -> None:
+        """file_read skill reads a file and returns its content."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "file_read")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("file_read")
+        assert skill is not None
+
+        # Create a test file inside work_dir (sandbox)
+        test_file = tmp_path / "sandbox" / "data.txt"
+        test_file.parent.mkdir()
+        test_file.write_text("line1\nline2\nline3\n", encoding="utf-8")
+
+        # file_read is sandboxed with filesystem=true, so the sandbox will
+        # restrict open() to work_dir. We pass the path as a param.
+        # The sandbox work_dir is a tempdir created by the executor, so
+        # we need to place the file inside it. Instead, call in non-sandboxed
+        # mode by loading a version without sandbox for unit testing.
+        # Actually, file_read IS sandboxed — let's test the function directly.
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_read",
+            str(_BUILTIN_SKILLS_DIR / "file_read" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        result = mod.execute(path=str(test_file), max_lines=100)
+        assert result["lines"] == 3
+        assert result["truncated"] is False
+        assert "line1" in result["content"]
+
+    async def test_file_read_truncation(self, tmp_path: Path) -> None:
+        """file_read truncates output when exceeding max_lines."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_read_trunc",
+            str(_BUILTIN_SKILLS_DIR / "file_read" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        test_file = tmp_path / "big.txt"
+        test_file.write_text("\n".join(f"line{i}" for i in range(50)), encoding="utf-8")
+
+        result = mod.execute(path=str(test_file), max_lines=10)
+        assert result["lines"] == 10
+        assert result["total_lines"] == 50
+        assert result["truncated"] is True
+
+    async def test_file_read_missing_file(self, tmp_path: Path) -> None:
+        """file_read returns error for missing files."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_read_missing",
+            str(_BUILTIN_SKILLS_DIR / "file_read" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        result = mod.execute(path=str(tmp_path / "nonexistent.txt"))
+        assert "error" in result
+
+    async def test_file_read_sandbox_enforced(self, tmp_path: Path) -> None:
+        """file_read skill is loaded with sandbox=True."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "file_read")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        meta = registry.available_skills["file_read"]
+        assert meta.sandbox is True
+        assert meta.filesystem is True
+        assert meta.network is False
+
+
+class TestShellExecSkill:
+    def test_shell_exec_disabled_by_default(self, tmp_path: Path) -> None:
+        """shell_exec is loaded as dangerous and disabled."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "shell_exec")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        meta = registry.available_skills["shell_exec"]
+        assert meta.safety_level == SafetyLevel.DANGEROUS
+        assert meta.enabled is False
+
+    def test_shell_exec_excluded_from_prompt(self, tmp_path: Path) -> None:
+        """Disabled shell_exec should not appear in prompt descriptions."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "shell_exec")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        desc = registry.get_skill_descriptions_for_prompt()
+        assert "shell_exec" not in desc
+
+    async def test_shell_exec_runs_command(self, tmp_path: Path) -> None:
+        """shell_exec can execute commands when loaded."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_shell_exec",
+            str(_BUILTIN_SKILLS_DIR / "shell_exec" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        result = await mod.execute(command="echo hello", timeout=10)
+        assert result["returncode"] == 0
+        assert "hello" in result["stdout"]
+
+
+class TestBuiltinSkillRegistry:
+    """Test loading all built-in skills together."""
+
+    def test_load_all_builtins(self, tmp_path: Path) -> None:
+        """All 4 built-in skills can be loaded at once."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        for name in ("read_diary", "timer", "file_read", "shell_exec"):
+            _copy_builtin_skill(skills_dir, name)
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        assert len(registry.available_skills) == 4
+
+    def test_enabled_builtins(self, tmp_path: Path) -> None:
+        """Only safe skills are enabled by default."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        for name in ("read_diary", "timer", "file_read", "shell_exec"):
+            _copy_builtin_skill(skills_dir, name)
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        enabled = registry.enabled_skill_names
+        assert "read_diary" in enabled
+        assert "timer" in enabled
+        assert "file_read" in enabled
+        assert "shell_exec" not in enabled
+
+    def test_prompt_includes_safe_builtins(self, tmp_path: Path) -> None:
+        """Prompt descriptions include enabled built-in skills."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        for name in ("read_diary", "timer", "file_read", "shell_exec"):
+            _copy_builtin_skill(skills_dir, name)
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        desc = registry.get_skill_descriptions_for_prompt()
+        assert "read_diary" in desc
+        assert "timer" in desc
+        assert "file_read" in desc
+        assert "shell_exec" not in desc

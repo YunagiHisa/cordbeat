@@ -1,0 +1,24 @@
+name: file_read
+description: "指定されたファイルの内容を読み込む"
+version: "1.0.0"
+author: "cordbeat"
+
+usage: |
+  ファイルの内容を確認したいときに使う。
+  サンドボックス内のファイルのみ読み取り可能。
+
+parameters:
+  - name: path
+    type: string
+    required: true
+    description: "読み込むファイルパス"
+  - name: max_lines
+    type: integer
+    required: false
+    description: "読み込む最大行数（デフォルト: 100）"
+
+safety:
+  level: safe
+  sandbox: true
+  network: false
+  filesystem: true

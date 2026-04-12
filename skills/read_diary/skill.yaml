@@ -1,0 +1,28 @@
+name: read_diary
+description: "日記・ログを参照し、過去の記録を返す"
+version: "1.0.0"
+author: "cordbeat"
+
+usage: |
+  過去の日記やログを振り返りたいときに使う。
+  ユーザーとの過去の会話の振り返りに有効。
+
+parameters:
+  - name: user_id
+    type: string
+    required: true
+    description: "取得対象のユーザーID"
+  - name: record_type
+    type: string
+    required: false
+    description: "取得するレコード種別 (diary / proposal / recall_hint)"
+  - name: limit
+    type: integer
+    required: false
+    description: "取得件数上限"
+
+safety:
+  level: safe
+  sandbox: false
+  network: false
+  filesystem: false

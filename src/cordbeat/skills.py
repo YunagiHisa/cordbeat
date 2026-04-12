@@ -83,14 +83,16 @@ class Skill:
         self.meta = meta
         self._module = module
 
-    async def execute(self, params: dict[str, Any]) -> dict[str, Any]:
+    async def execute(
+        self, params: dict[str, Any], memory: Any = None
+    ) -> dict[str, Any]:
         """Execute the skill's main function with permission context."""
         fn = getattr(self._module, "execute", None)
         if fn is None:
             msg = f"Skill '{self.meta.name}' has no execute() function"
             raise RuntimeError(msg)
 
-        context = self._build_context()
+        context = self._build_context(memory=memory)
 
         # Inject context if the skill accepts it
         import inspect
@@ -136,11 +138,12 @@ class Skill:
                 return {"result": result}
             return result
 
-    def _build_context(self) -> SkillContext:
+    def _build_context(self, memory: Any = None) -> SkillContext:
         return SkillContext(
             sandbox=self.meta.sandbox,
             network=self.meta.network,
             filesystem=self.meta.filesystem,
+            memory=memory,
         )
 
 

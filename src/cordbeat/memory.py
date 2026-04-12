@@ -542,6 +542,12 @@ class _RecordStore:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
+    # Valid proposal status transitions
+    _VALID_TRANSITIONS: dict[str, set[str]] = {
+        "pending": {"approved", "rejected", "expired"},
+        "approved": {"executed", "expired"},
+    }
+
     async def update_proposal_status(
         self,
         proposal_id: str,
@@ -550,6 +556,7 @@ class _RecordStore:
         """Update the status field inside a proposal's metadata.
 
         Returns True if the proposal was found and updated.
+        Raises ValueError on invalid status transitions.
         """
         row_cursor = await self._db.execute(
             "SELECT metadata FROM certain_records "
@@ -561,6 +568,15 @@ class _RecordStore:
             return False
 
         meta = json.loads(row["metadata"]) if row["metadata"] else {}
+        current = meta.get("status", "pending")
+        allowed = self._VALID_TRANSITIONS.get(current, set())
+        if status not in allowed:
+            msg = (
+                f"Invalid proposal transition: '{current}' → '{status}' "
+                f"(allowed: {allowed})"
+            )
+            raise ValueError(msg)
+
         meta["status"] = status
         await self._db.execute(
             "UPDATE certain_records SET metadata = ? WHERE id = ?",
@@ -596,6 +612,32 @@ class _RecordStore:
             if meta.get("status") == status:
                 results.append(record)
         return results
+
+    async def expire_old_proposals(self, max_age_days: int = 7) -> int:
+        """Expire PENDING proposals older than max_age_days.
+
+        Returns the number of proposals expired.
+        """
+        cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+        cursor = await self._db.execute(
+            "SELECT id, metadata FROM certain_records "
+            "WHERE record_type = 'proposal' AND created_at < ?",
+            (cutoff,),
+        )
+        rows = await cursor.fetchall()
+        count = 0
+        for row in rows:
+            meta = json.loads(row["metadata"]) if row["metadata"] else {}
+            if meta.get("status") == "pending":
+                meta["status"] = "expired"
+                await self._db.execute(
+                    "UPDATE certain_records SET metadata = ? WHERE id = ?",
+                    (json.dumps(meta), row["id"]),
+                )
+                count += 1
+        if count > 0:
+            await self._db.commit()
+        return count
 
     async def store_link_token(
         self,
@@ -838,6 +880,9 @@ class MemoryStore:
         status: str = "pending",
     ) -> list[dict[str, Any]]:
         return await self._records.get_pending_proposals(user_id, status)  # type: ignore[union-attr]
+
+    async def expire_old_proposals(self, max_age_days: int = 7) -> int:
+        return await self._records.expire_old_proposals(max_age_days)  # type: ignore[union-attr]
 
     # ── Conversation history (delegates to _ConversationStore) ────
 

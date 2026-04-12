@@ -562,6 +562,113 @@ class TestChainLinks:
         results = await memory.get_chain_links("u1", ["mem_A"])
         assert results == []
 
+    async def test_multi_hop_traversal(self, memory: MemoryStore) -> None:
+        """Chain links follow multi-hop: A → B → C."""
+        await memory.get_or_create_user("u1", "Alice")
+        # A links to B
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_A",
+            linked_content="Memory B content",
+            linked_memory_id="mem_B",
+        )
+        # B links to C
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_B",
+            linked_content="Memory C content",
+            linked_memory_id="mem_C",
+        )
+        # Single hop: only B
+        results_1 = await memory.get_chain_links("u1", ["mem_A"], max_depth=1)
+        assert len(results_1) == 1
+        assert "Memory B" in results_1[0]
+
+        # Multi-hop: B and C
+        results_2 = await memory.get_chain_links("u1", ["mem_A"], max_depth=2)
+        assert len(results_2) == 2
+        contents = set(results_2)
+        assert "Memory B content" in contents
+        assert "Memory C content" in contents
+
+    async def test_multi_hop_cycle_prevention(self, memory: MemoryStore) -> None:
+        """Circular chain links don't cause infinite loops."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_A",
+            linked_content="Memory B",
+            linked_memory_id="mem_B",
+        )
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_B",
+            linked_content="Memory A again",
+            linked_memory_id="mem_A",
+        )
+        results = await memory.get_chain_links("u1", ["mem_A"], max_depth=3)
+        # Should not loop — mem_A already visited
+        assert len(results) <= 2
+
+    async def test_distance_sorting(self, memory: MemoryStore) -> None:
+        """Chain links are sorted by distance (closer first)."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_A",
+            linked_content="Far memory",
+            linked_memory_id="mem_far",
+            distance=0.9,
+        )
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_A",
+            linked_content="Close memory",
+            linked_memory_id="mem_close",
+            distance=0.1,
+        )
+        results = await memory.get_chain_links("u1", ["mem_A"])
+        assert results[0] == "Close memory"
+        assert results[1] == "Far memory"
+
+    async def test_max_results_limit(self, memory: MemoryStore) -> None:
+        """Results are capped at max_results."""
+        await memory.get_or_create_user("u1", "Alice")
+        for i in range(5):
+            await memory.store_chain_link(
+                user_id="u1",
+                source_memory_id="mem_A",
+                linked_content=f"Link {i}",
+                linked_memory_id=f"mem_{i}",
+                distance=float(i) * 0.1,
+            )
+        results = await memory.get_chain_links("u1", ["mem_A"], max_results=3)
+        assert len(results) == 3
+
+    async def test_hop_distance_penalty(self, memory: MemoryStore) -> None:
+        """Second-hop links are ranked lower than first-hop links."""
+        await memory.get_or_create_user("u1", "Alice")
+        # Hop 1: A → B (close)
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_A",
+            linked_content="Direct link",
+            linked_memory_id="mem_B",
+            distance=0.5,
+        )
+        # Hop 2: B → C (close to B but further by depth penalty)
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_B",
+            linked_content="Indirect link",
+            linked_memory_id="mem_C",
+            distance=0.1,
+        )
+        results = await memory.get_chain_links("u1", ["mem_A"], max_depth=2)
+        # Direct link (0.5) should come before indirect (0.1 + 0.5 penalty = 0.6)
+        assert results[0] == "Direct link"
+        assert results[1] == "Indirect link"
+
 
 class TestProposalStatusTransitions:
     """Tests for proposal status validation and expiry."""

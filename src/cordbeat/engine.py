@@ -175,7 +175,9 @@ class CoreEngine:
         # Phase 4a: Chain recall (芋づる想起 — precomputed links)
         try:
             recalled_ids = list(seen_ids)
-            chain_contents = await self._memory.get_chain_links(user_id, recalled_ids)
+            chain_contents = await self._memory.get_chain_links(
+                user_id, recalled_ids, max_depth=2
+            )
             existing_contents = {
                 m["content"] for m in semantic_memories + episodic_memories
             }

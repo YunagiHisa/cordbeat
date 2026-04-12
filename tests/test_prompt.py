@@ -58,6 +58,39 @@ class TestBuildSoulSystemPrompt:
         result = build_soul_system_prompt(snap)
         assert "secondary: curiosity" in result
 
+    def test_includes_soul_notes(self) -> None:
+        snap = {
+            "name": "TestBot",
+            "traits": ["curious"],
+            "emotion": {"primary": "calm", "intensity": 0.5},
+            "immutable_rules": [],
+            "notes": "Speak casually with emoji",
+        }
+        result = build_soul_system_prompt(snap)
+        assert "Character notes:" in result
+        assert "Speak casually with emoji" in result
+
+    def test_empty_notes_excluded(self) -> None:
+        snap = {
+            "name": "TestBot",
+            "traits": ["curious"],
+            "emotion": {"primary": "calm", "intensity": 0.5},
+            "immutable_rules": [],
+            "notes": "",
+        }
+        result = build_soul_system_prompt(snap)
+        assert "Character notes:" not in result
+
+    def test_no_notes_key_excluded(self) -> None:
+        snap = {
+            "name": "TestBot",
+            "traits": ["curious"],
+            "emotion": {"primary": "calm", "intensity": 0.5},
+            "immutable_rules": [],
+        }
+        result = build_soul_system_prompt(snap)
+        assert "Character notes:" not in result
+
 
 class TestBuildContext:
     def test_minimal_context(self) -> None:

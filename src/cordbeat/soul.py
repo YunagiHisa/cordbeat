@@ -61,6 +61,14 @@ _DEFAULT_SOUL: dict[str, Any] = {
 }
 
 
+_DEFAULT_SOUL_NOTES = """\
+# Soul Notes
+
+Free-form notes about this character's personality nuances.
+Write anything here: speech patterns, favorite phrases, tone preferences, etc.
+"""
+
+
 class Soul:
     """Manages the agent's identity, personality, and emotional state."""
 
@@ -68,6 +76,7 @@ class Soul:
         self._soul_dir = Path(soul_dir)
         self._core: dict[str, Any] = {}
         self._soul: dict[str, Any] = {}
+        self._notes: str = ""
         self._load()
 
     # ── properties ────────────────────────────────────────────────────
@@ -87,6 +96,10 @@ class Soul:
     @property
     def traits(self) -> list[str]:
         return list(self._soul.get("personality", {}).get("traits", []))
+
+    @property
+    def notes(self) -> str:
+        return self._notes
 
     @property
     def emotion(self) -> EmotionState:
@@ -202,6 +215,11 @@ class Soul:
         self._soul["identity"]["name"] = name
         self._save_soul()
 
+    def update_notes(self, notes: str) -> None:
+        """Update soul_notes.md content."""
+        self._notes = notes
+        self._save_notes()
+
     def propose_trait_change(
         self,
         add: list[str] | None = None,
@@ -249,6 +267,7 @@ class Soul:
             "traits": self.traits,
             "emotion": emotion_data,
             "immutable_rules": self.immutable_rules,
+            "notes": self._notes,
         }
 
     # ── persistence ───────────────────────────────────────────────────
@@ -257,6 +276,7 @@ class Soul:
         self._soul_dir.mkdir(parents=True, exist_ok=True)
         core_path = self._soul_dir / "soul_core.yaml"
         soul_path = self._soul_dir / "soul.yaml"
+        notes_path = self._soul_dir / "soul_notes.md"
 
         if core_path.exists():
             with core_path.open(encoding="utf-8") as f:
@@ -271,6 +291,12 @@ class Soul:
         else:
             self._soul = copy.deepcopy(_DEFAULT_SOUL)
             self._save_soul()
+
+        if notes_path.exists():
+            self._notes = notes_path.read_text(encoding="utf-8")
+        else:
+            self._notes = _DEFAULT_SOUL_NOTES
+            self._save_notes()
 
     def _save_core(self) -> None:
         core_path = self._soul_dir / "soul_core.yaml"
@@ -291,3 +317,7 @@ class Soul:
                 allow_unicode=True,
                 default_flow_style=False,
             )
+
+    def _save_notes(self) -> None:
+        notes_path = self._soul_dir / "soul_notes.md"
+        notes_path.write_text(self._notes, encoding="utf-8")

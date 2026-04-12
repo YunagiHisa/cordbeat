@@ -214,3 +214,56 @@ class TestDefaultSecondaryEmotion:
         assert "secondary" in snap["emotion"]
         assert snap["emotion"]["secondary"] == "curiosity"
         assert snap["emotion"]["secondary_intensity"] == pytest.approx(0.3)
+
+
+class TestSoulNotes:
+    """Tests for soul_notes.md loading and management."""
+
+    def test_default_notes_created(self, tmp_path: Path) -> None:
+        """Default soul_notes.md is created if it doesn't exist."""
+        soul_dir = tmp_path / "soul"
+        soul = Soul(soul_dir)
+        notes_path = soul_dir / "soul_notes.md"
+        assert notes_path.exists()
+        assert "Soul Notes" in soul.notes
+
+    def test_notes_loaded_from_file(self, tmp_path: Path) -> None:
+        """Existing soul_notes.md is loaded correctly."""
+        soul_dir = tmp_path / "soul"
+        soul_dir.mkdir(parents=True)
+        notes_path = soul_dir / "soul_notes.md"
+        notes_path.write_text("Custom tone: casual and warm", encoding="utf-8")
+
+        soul = Soul(soul_dir)
+        assert soul.notes == "Custom tone: casual and warm"
+
+    def test_update_notes(self, tmp_path: Path) -> None:
+        """update_notes() saves content to soul_notes.md."""
+        soul_dir = tmp_path / "soul"
+        soul = Soul(soul_dir)
+        soul.update_notes("Speak casually with lots of emoji")
+
+        assert soul.notes == "Speak casually with lots of emoji"
+        # Verify persistence
+        soul2 = Soul(soul_dir)
+        assert soul2.notes == "Speak casually with lots of emoji"
+
+    def test_snapshot_includes_notes(self, tmp_path: Path) -> None:
+        """get_soul_snapshot() includes notes field."""
+        soul_dir = tmp_path / "soul"
+        soul = Soul(soul_dir)
+        soul.update_notes("Be friendly and supportive")
+
+        snap = soul.get_soul_snapshot()
+        assert "notes" in snap
+        assert "friendly and supportive" in snap["notes"]
+
+    def test_empty_notes(self, tmp_path: Path) -> None:
+        """Empty notes do not cause errors."""
+        soul_dir = tmp_path / "soul"
+        soul = Soul(soul_dir)
+        soul.update_notes("")
+
+        assert soul.notes == ""
+        snap = soul.get_soul_snapshot()
+        assert snap["notes"] == ""

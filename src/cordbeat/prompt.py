@@ -55,6 +55,7 @@ def build_context(
     profile: dict[str, str] | None = None,
     semantic_memories: list[dict[str, Any]] | None = None,
     episodic_memories: list[dict[str, Any]] | None = None,
+    recall_hints: list[str] | None = None,
     history: list[dict[str, str]] | None = None,
     soul_name: str = "",
 ) -> str:
@@ -74,6 +75,11 @@ def build_context(
         parts.append("\nRelated past moments:")
         for mem in episodic_memories:
             parts.append(f"  - {mem['content']}")
+
+    if recall_hints:
+        parts.append("\nRecall hints:")
+        for hint in recall_hints:
+            parts.append(f"  - {hint}")
 
     if history:
         parts.append("\nConversation history:")

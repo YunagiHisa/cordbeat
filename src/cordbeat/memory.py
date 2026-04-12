@@ -422,6 +422,24 @@ class _ConversationStore:
         rows = await cursor.fetchall()
         return [{"role": row["role"], "content": row["content"]} for row in rows]
 
+    async def get_messages_on_date(
+        self,
+        user_id: str,
+        date_str: str,
+    ) -> list[dict[str, str]]:
+        """Get all messages on a specific date (YYYY-MM-DD)."""
+        next_day = (datetime.fromisoformat(date_str) + timedelta(days=1)).strftime(
+            "%Y-%m-%d"
+        )
+        cursor = await self._db.execute(
+            "SELECT role, content FROM conversation_messages "
+            "WHERE user_id = ? AND created_at >= ? AND created_at < ? "
+            "ORDER BY created_at ASC",
+            (user_id, date_str, next_day),
+        )
+        rows = await cursor.fetchall()
+        return [{"role": row["role"], "content": row["content"]} for row in rows]
+
     async def trim_old_messages(
         self,
         user_id: str,
@@ -845,6 +863,13 @@ class MemoryStore:
     ) -> list[dict[str, str]]:
         return await self._conversations.get_todays_messages(user_id)  # type: ignore[union-attr]
 
+    async def get_messages_on_date(
+        self,
+        user_id: str,
+        date_str: str,
+    ) -> list[dict[str, str]]:
+        return await self._conversations.get_messages_on_date(user_id, date_str)  # type: ignore[union-attr]
+
     async def trim_old_messages(
         self,
         user_id: str,
@@ -908,3 +933,54 @@ class MemoryStore:
 
     async def decay_and_archive_memories(self) -> dict[str, int]:
         return await self._vectors.decay_and_archive(self._config)  # type: ignore[union-attr]
+
+    # ── Recall hints (Phase4 precomputation) ──────────────────────
+
+    async def store_recall_hint(
+        self,
+        user_id: str,
+        hint_type: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Store a precomputed recall hint."""
+        meta = {
+            "hint_type": hint_type,
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            **(metadata or {}),
+        }
+        return await self._records.add_certain_record(  # type: ignore[union-attr]
+            user_id=user_id,
+            content=content,
+            record_type="recall_hint",
+            metadata=meta,
+        )
+
+    async def get_recall_hints(
+        self,
+        user_id: str,
+        date_str: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Get precomputed recall hints for a user, optionally by date."""
+        all_hints = await self._records.get_certain_records(  # type: ignore[union-attr]
+            user_id, record_type="recall_hint", limit=20
+        )
+        if date_str is None:
+            return all_hints
+        result = []
+        for hint in all_hints:
+            meta = json.loads(hint.get("metadata") or "{}")
+            if meta.get("date") == date_str:
+                result.append(hint)
+        return result
+
+    async def clear_old_recall_hints(self, keep_days: int = 2) -> int:
+        """Remove recall hints older than keep_days."""
+        cutoff = (datetime.now() - timedelta(days=keep_days)).isoformat()
+        cursor = await self._conn.execute(  # type: ignore[union-attr]
+            "DELETE FROM certain_records "
+            "WHERE record_type = 'recall_hint' AND created_at < ?",
+            (cutoff,),
+        )
+        await self._conn.commit()  # type: ignore[union-attr]
+        return cursor.rowcount

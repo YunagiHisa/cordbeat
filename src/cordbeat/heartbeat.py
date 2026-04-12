@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import uuid
 import zoneinfo
-from datetime import UTC, datetime, time, tzinfo
+from datetime import UTC, datetime, time, timedelta, tzinfo
 from typing import Any
 
 from cordbeat.ai_backend import AIBackend
@@ -16,6 +18,8 @@ from cordbeat.models import (
     GatewayMessage,
     HeartbeatAction,
     HeartbeatDecision,
+    MemoryEntry,
+    MemoryLayer,
     MessageType,
     ProposalStatus,
     ProposalType,
@@ -92,6 +96,22 @@ Write a brief, reflective diary entry summarizing what happened today.
 Note key topics, emotional moments, and anything worth remembering.
 Keep it concise (3-5 sentences). Write in first person.
 Respond with ONLY the diary text, no JSON.
+"""
+
+_PROMOTION_SYSTEM_PROMPT = """\
+You are reviewing today's episodic memories to extract general facts.
+For each episode, decide if it contains a general fact or preference about
+the user that should be remembered long-term (e.g., "likes Python",
+"works as a developer", "enjoys hiking").
+
+Episodes:
+{episodes}
+
+Respond in JSON only:
+{{"facts": ["general fact 1", "general fact 2"]}}
+
+Only include genuinely general facts. Do NOT include specific events,
+timestamps, or one-time occurrences. Empty list if nothing is generalizable.
 """
 
 
@@ -710,9 +730,11 @@ class HeartbeatLoop:
     async def _run_sleep_phase(self) -> None:
         """Memory consolidation during quiet hours.
 
-        1. For each user, review today's conversations and generate a diary entry.
-        2. Apply forgetting curve and archive decayed memories.
-        3. Trim old conversation messages.
+        1. For each user, review today's conversations and generate a diary.
+        2. Promote notable episodic memories to semantic facts.
+        3. Precompute Phase4 temporal recall hints (7 days ago).
+        4. Apply forgetting curve and archive decayed memories.
+        5. Trim old conversation messages and recall hints.
         """
         logger.info("Sleep phase started — consolidating memories")
 
@@ -753,7 +775,15 @@ class HeartbeatLoop:
             except Exception:
                 logger.exception("Failed to write diary for user %s", user.user_id)
 
-        # 2. Decay and archive weak memories
+        # 2. Promote notable episodic memories to semantic facts
+        for user in users:
+            await self._promote_episodic_memories(user.user_id)
+
+        # 3. Phase4: Temporal recall (check 7 days ago)
+        for user in users:
+            await self._precompute_temporal_recall(user)
+
+        # 4. Decay and archive weak memories
         try:
             stats = await self._memory.decay_and_archive_memories()
             logger.info(
@@ -764,7 +794,7 @@ class HeartbeatLoop:
         except Exception:
             logger.exception("Memory decay/archive failed")
 
-        # 3. Trim old conversation messages per user
+        # 5. Trim old conversation messages and recall hints
         for user in users:
             try:
                 deleted = await self._memory.trim_old_messages(user.user_id)
@@ -777,4 +807,83 @@ class HeartbeatLoop:
             except Exception:
                 logger.exception("Failed to trim messages for user %s", user.user_id)
 
+        try:
+            await self._memory.clear_old_recall_hints(keep_days=2)
+        except Exception:
+            logger.exception("Failed to clear old recall hints")
+
         logger.info("Sleep phase completed")
+
+    async def _promote_episodic_memories(self, user_id: str) -> None:
+        """AI reviews today's episodic memories and promotes general facts."""
+        try:
+            episodic = await self._memory.search_episodic(
+                user_id, "today", n_results=10
+            )
+            if not episodic:
+                return
+
+            episodes_text = "\n".join(f"- {m['content']}" for m in episodic)
+            system = _PROMOTION_SYSTEM_PROMPT.format(episodes=episodes_text)
+
+            raw = await self._ai.generate(
+                prompt="Extract generalizable facts from the episodes above.",
+                system=system,
+                temperature=0.2,
+            )
+            data = json.loads(raw)
+            facts = data.get("facts", [])
+            if not isinstance(facts, list):
+                return
+
+            for fact in facts[:5]:
+                if not isinstance(fact, str) or len(fact.strip()) < 3:
+                    continue
+                entry = MemoryEntry(
+                    id=str(uuid.uuid4()),
+                    user_id=user_id,
+                    layer=MemoryLayer.SEMANTIC,
+                    content=fact.strip(),
+                    metadata={"source": "sleep_promotion"},
+                )
+                await self._memory.add_semantic_memory(entry)
+                logger.debug("Promoted episodic → semantic for %s: %s", user_id, fact)
+        except Exception:
+            logger.exception("Episodic promotion failed for user %s", user_id)
+
+    async def _precompute_temporal_recall(self, user: UserSummary) -> None:
+        """Precompute temporal recall hints: what happened 7 days ago."""
+        try:
+            seven_days_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+            messages = await self._memory.get_messages_on_date(
+                user.user_id, seven_days_ago
+            )
+            if not messages:
+                return
+
+            # Summarize what happened 7 days ago
+            topics: list[str] = []
+            for msg in messages:
+                if msg["role"] == "user" and len(msg["content"]) > 10:
+                    topics.append(msg["content"][:100])
+            if not topics:
+                return
+
+            summary = "; ".join(topics[:3])
+            content = (
+                f"7 days ago ({seven_days_ago}), "
+                f"{user.display_name} talked about: {summary}"
+            )
+            await self._memory.store_recall_hint(
+                user_id=user.user_id,
+                hint_type="temporal",
+                content=content,
+                metadata={"original_date": seven_days_ago},
+            )
+            logger.debug(
+                "Temporal recall hint stored for %s: %s",
+                user.user_id,
+                content[:80],
+            )
+        except Exception:
+            logger.exception("Temporal recall failed for user %s", user.user_id)

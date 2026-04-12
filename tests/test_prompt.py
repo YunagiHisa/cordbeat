@@ -83,6 +83,21 @@ class TestBuildContext:
         assert "Related past moments:" in result
         assert "Got a new job" in result
 
+    def test_with_recall_hints(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            recall_hints=["7 days ago Alice talked about: OSS design"],
+        )
+        assert "Recall hints:" in result
+        assert "OSS design" in result
+
+    def test_recall_hints_none_omitted(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            recall_hints=None,
+        )
+        assert "Recall hints:" not in result
+
     def test_with_history(self) -> None:
         result = build_context(
             user_display_name="Alice",

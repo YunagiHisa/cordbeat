@@ -1902,3 +1902,209 @@ class TestApprovedTraitExecution:
 
         assert soul.traits == original
         assert "bold" not in soul.traits
+
+
+class TestProposalExecutionNotification:
+    """Tests for user notification after proposal execution."""
+
+    async def test_skill_success_notifies_user(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Successful skill execution sends success notification."""
+        from types import SimpleNamespace
+
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        execute_fn = MagicMock(return_value={"result": "data fetched"})
+        module = SimpleNamespace(execute=execute_fn)
+        skill = Skill(
+            meta=SkillMeta(
+                name="test_skill",
+                description="Test",
+                usage="test",
+            ),
+            module=module,
+        )
+        skills._skills["test_skill"] = skill
+
+        await memory.add_certain_record(
+            user_id="u1",
+            content="Run test_skill",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "test_skill",
+                "skill_params": {},
+                "adapter_id": "discord",
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        mock_gateway.send_to_adapter.assert_called_once()
+        msg = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "✅" in msg.content
+        assert "test_skill" in msg.content
+
+    async def test_skill_failure_notifies_user(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Failed skill execution sends failure notification."""
+        from types import SimpleNamespace
+
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        def boom(**kw: object) -> None:
+            raise RuntimeError("boom")
+
+        module = SimpleNamespace(execute=boom)
+        skill = Skill(
+            meta=SkillMeta(
+                name="bad_skill",
+                description="Fails",
+                usage="fail",
+            ),
+            module=module,
+        )
+        skills._skills["bad_skill"] = skill
+
+        await memory.add_certain_record(
+            user_id="u1",
+            content="Run bad_skill",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "bad_skill",
+                "skill_params": {},
+                "adapter_id": "discord",
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        mock_gateway.send_to_adapter.assert_called_once()
+        msg = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "❌" in msg.content
+        assert "bad_skill" in msg.content
+
+    async def test_missing_skill_notifies_user(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Missing skill sends warning notification."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        await memory.add_certain_record(
+            user_id="u1",
+            content="Run nonexistent",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "nonexistent",
+                "skill_params": {},
+                "adapter_id": "discord",
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        mock_gateway.send_to_adapter.assert_called_once()
+        msg = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "⚠️" in msg.content
+        assert "nonexistent" in msg.content
+
+    async def test_trait_change_notifies_user(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        soul: Soul,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Successful trait change sends notification with details."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        await memory.add_certain_record(
+            user_id="u1",
+            content="Add playful trait",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.TRAIT_CHANGE,
+                "trait_add": ["playful"],
+                "trait_remove": [],
+                "adapter_id": "discord",
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        mock_gateway.send_to_adapter.assert_called_once()
+        msg = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "✅" in msg.content
+        assert "playful" in msg.content
+
+    async def test_general_proposal_notifies_user(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """General proposal execution sends acknowledgment."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        await memory.add_certain_record(
+            user_id="u1",
+            content="General idea",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.GENERAL,
+                "adapter_id": "discord",
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        mock_gateway.send_to_adapter.assert_called_once()
+        msg = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "✅" in msg.content
+
+    async def test_no_adapter_id_skips_notification(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Proposals without adapter_id skip notification gracefully."""
+        await memory.add_certain_record(
+            user_id="u1",
+            content="No adapter proposal",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.GENERAL,
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        # Proposal still executed but no notification
+        mock_gateway.send_to_adapter.assert_not_called()

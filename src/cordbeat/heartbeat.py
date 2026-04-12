@@ -680,6 +680,10 @@ class HeartbeatLoop:
                     await self._memory.update_proposal_status(
                         proposal_id, ProposalStatus.EXPIRED
                     )
+                    await self._notify_proposal_result(
+                        proposal,
+                        f"⚠️ Skill '{skill_name}' not found — proposal expired.",
+                    )
                     continue
 
                 try:
@@ -692,10 +696,19 @@ class HeartbeatLoop:
                     await self._memory.update_proposal_status(
                         proposal_id, ProposalStatus.EXECUTED
                     )
+                    summary = str(result.get("result", "done"))[:200]
+                    await self._notify_proposal_result(
+                        proposal,
+                        f"✅ Skill '{skill_name}' executed successfully.\n{summary}",
+                    )
                 except Exception:
                     logger.exception("Approved skill '%s' failed", skill_name)
                     await self._memory.update_proposal_status(
                         proposal_id, ProposalStatus.EXPIRED
+                    )
+                    await self._notify_proposal_result(
+                        proposal,
+                        f"❌ Skill '{skill_name}' failed — proposal expired.",
                     )
             elif proposal_type == ProposalType.TRAIT_CHANGE:
                 trait_add = meta.get("trait_add", [])
@@ -710,10 +723,23 @@ class HeartbeatLoop:
                     await self._memory.update_proposal_status(
                         proposal_id, ProposalStatus.EXECUTED
                     )
+                    parts: list[str] = []
+                    if trait_add:
+                        parts.append(f"added: {', '.join(trait_add)}")
+                    if trait_remove:
+                        parts.append(f"removed: {', '.join(trait_remove)}")
+                    await self._notify_proposal_result(
+                        proposal,
+                        f"✅ Personality updated — {'; '.join(parts)}.",
+                    )
                 except Exception:
                     logger.exception("Trait change failed")
                     await self._memory.update_proposal_status(
                         proposal_id, ProposalStatus.EXPIRED
+                    )
+                    await self._notify_proposal_result(
+                        proposal,
+                        "❌ Personality change failed — proposal expired.",
                     )
             else:
                 # General proposals are informational — just mark executed
@@ -724,6 +750,37 @@ class HeartbeatLoop:
                 await self._memory.update_proposal_status(
                     proposal_id, ProposalStatus.EXECUTED
                 )
+                await self._notify_proposal_result(
+                    proposal,
+                    "✅ Proposal acknowledged.",
+                )
+
+    async def _notify_proposal_result(
+        self,
+        proposal: dict[str, Any],
+        message: str,
+    ) -> None:
+        """Send execution result notification to the proposal owner."""
+        import json as _json
+
+        meta = _json.loads(proposal.get("metadata") or "{}")
+        adapter_id = meta.get("adapter_id")
+        user_id = proposal.get("user_id")
+
+        if not adapter_id or not user_id:
+            return
+
+        platform_user_id = await self._memory.resolve_platform_user(user_id, adapter_id)
+        if not platform_user_id:
+            return
+
+        notification = GatewayMessage(
+            type=MessageType.HEARTBEAT_MESSAGE,
+            adapter_id=adapter_id,
+            platform_user_id=platform_user_id,
+            content=message,
+        )
+        await self._gateway.send_to_adapter(adapter_id, notification)
 
     # ── Sleep Phase ───────────────────────────────────────────────────
 

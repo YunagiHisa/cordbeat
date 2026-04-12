@@ -779,7 +779,7 @@ class HeartbeatLoop:
         for user in users:
             await self._promote_episodic_memories(user.user_id)
 
-        # 3. Phase4: Temporal recall (check 7 days ago)
+        # 3. Phase4: Temporal recall (check multiple lookback windows)
         for user in users:
             await self._precompute_temporal_recall(user)
 
@@ -851,39 +851,54 @@ class HeartbeatLoop:
         except Exception:
             logger.exception("Episodic promotion failed for user %s", user_id)
 
+    # Temporal recall lookback windows: (days_ago, human_label)
+    _TEMPORAL_WINDOWS: list[tuple[int, str]] = [
+        (1, "yesterday"),
+        (7, "1 week ago"),
+        (30, "1 month ago"),
+        (365, "1 year ago"),
+    ]
+
     async def _precompute_temporal_recall(self, user: UserSummary) -> None:
-        """Precompute temporal recall hints: what happened 7 days ago."""
-        try:
-            seven_days_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-            messages = await self._memory.get_messages_on_date(
-                user.user_id, seven_days_ago
-            )
-            if not messages:
-                return
+        """Precompute temporal recall hints for multiple lookback windows."""
+        for days_ago, label in self._TEMPORAL_WINDOWS:
+            try:
+                target_date = (datetime.now() - timedelta(days=days_ago)).strftime(
+                    "%Y-%m-%d"
+                )
+                messages = await self._memory.get_messages_on_date(
+                    user.user_id, target_date
+                )
+                if not messages:
+                    continue
 
-            # Summarize what happened 7 days ago
-            topics: list[str] = []
-            for msg in messages:
-                if msg["role"] == "user" and len(msg["content"]) > 10:
-                    topics.append(msg["content"][:100])
-            if not topics:
-                return
+                topics: list[str] = []
+                for msg in messages:
+                    if msg["role"] == "user" and len(msg["content"]) > 10:
+                        topics.append(msg["content"][:100])
+                if not topics:
+                    continue
 
-            summary = "; ".join(topics[:3])
-            content = (
-                f"7 days ago ({seven_days_ago}), "
-                f"{user.display_name} talked about: {summary}"
-            )
-            await self._memory.store_recall_hint(
-                user_id=user.user_id,
-                hint_type="temporal",
-                content=content,
-                metadata={"original_date": seven_days_ago},
-            )
-            logger.debug(
-                "Temporal recall hint stored for %s: %s",
-                user.user_id,
-                content[:80],
-            )
-        except Exception:
-            logger.exception("Temporal recall failed for user %s", user.user_id)
+                summary = "; ".join(topics[:3])
+                content = (
+                    f"{label} ({target_date}), "
+                    f"{user.display_name} talked about: {summary}"
+                )
+                await self._memory.store_recall_hint(
+                    user_id=user.user_id,
+                    hint_type="temporal",
+                    content=content,
+                    metadata={"original_date": target_date, "days_ago": days_ago},
+                )
+                logger.debug(
+                    "Temporal recall hint stored for %s (%s): %s",
+                    user.user_id,
+                    label,
+                    content[:80],
+                )
+            except Exception:
+                logger.exception(
+                    "Temporal recall (%s) failed for user %s",
+                    label,
+                    user.user_id,
+                )

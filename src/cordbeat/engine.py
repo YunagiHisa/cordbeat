@@ -163,7 +163,23 @@ class CoreEngine:
                     episodic_memories.append(mem)
                     seen_ids.add(mem["id"])
 
-        # Phase 4: Precomputed recall hints (temporal / chain)
+        # Phase 4a: Chain recall (芋づる想起 — precomputed links)
+        try:
+            recalled_ids = list(seen_ids)
+            chain_contents = await self._memory.get_chain_links(user_id, recalled_ids)
+            existing_contents = {
+                m["content"] for m in semantic_memories + episodic_memories
+            }
+            for chain_text in chain_contents:
+                if chain_text not in existing_contents:
+                    episodic_memories.append(
+                        {"id": f"chain_{hash(chain_text)}", "content": chain_text}
+                    )
+                    existing_contents.add(chain_text)
+        except Exception:
+            logger.debug("Chain recall failed for user %s", user_id)
+
+        # Phase 4b: Precomputed temporal recall hints
         hints: list[str] = []
         try:
             raw_hints = await self._memory.get_recall_hints(user_id)

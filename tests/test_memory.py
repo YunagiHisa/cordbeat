@@ -487,3 +487,77 @@ class TestRecallHints:
         )
         hints = await memory.get_recall_hints("u1")
         assert len(hints) == 0
+
+
+class TestChainLinks:
+    """Tests for Phase4 chain-recall link operations."""
+
+    async def test_store_and_retrieve_chain_link(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_A",
+            linked_content="Related fact about Python",
+            linked_memory_id="mem_B",
+        )
+        results = await memory.get_chain_links("u1", ["mem_A"])
+        assert len(results) == 1
+        assert "Python" in results[0]
+
+    async def test_no_match_returns_empty(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_A",
+            linked_content="Some content",
+        )
+        results = await memory.get_chain_links("u1", ["mem_X"])
+        assert results == []
+
+    async def test_empty_source_ids_returns_empty(self, memory: MemoryStore) -> None:
+        results = await memory.get_chain_links("u1", [])
+        assert results == []
+
+    async def test_deduplicates_linked_content(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_A",
+            linked_content="Same content",
+        )
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_A",
+            linked_content="Same content",
+        )
+        results = await memory.get_chain_links("u1", ["mem_A"])
+        assert len(results) == 1
+
+    async def test_clear_old_chain_links(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_A",
+            linked_content="Old link",
+        )
+        await memory._conn.execute(
+            "UPDATE certain_records SET created_at = '2020-01-01T00:00:00' "
+            "WHERE record_type = 'chain_link'"
+        )
+        await memory._conn.commit()
+
+        deleted = await memory.clear_old_chain_links(keep_days=2)
+        assert deleted == 1
+        results = await memory.get_chain_links("u1", ["mem_A"])
+        assert results == []
+
+    async def test_isolates_by_user(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.get_or_create_user("u2", "Bob")
+        await memory.store_chain_link(
+            user_id="u2",
+            source_memory_id="mem_A",
+            linked_content="Bob's linked memory",
+        )
+        results = await memory.get_chain_links("u1", ["mem_A"])
+        assert results == []

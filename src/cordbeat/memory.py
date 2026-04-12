@@ -984,3 +984,57 @@ class MemoryStore:
         )
         await self._conn.commit()  # type: ignore[union-attr]
         return cursor.rowcount
+
+    # ── Chain links (Phase4 芋づる想起) ───────────────────────────
+
+    async def store_chain_link(
+        self,
+        user_id: str,
+        source_memory_id: str,
+        linked_content: str,
+        linked_memory_id: str = "",
+    ) -> str:
+        """Store a precomputed chain-recall link between memories."""
+        meta = {
+            "source_memory_id": source_memory_id,
+            "linked_memory_id": linked_memory_id,
+            "date": datetime.now().strftime("%Y-%m-%d"),
+        }
+        return await self._records.add_certain_record(  # type: ignore[union-attr]
+            user_id=user_id,
+            content=linked_content,
+            record_type="chain_link",
+            metadata=meta,
+        )
+
+    async def get_chain_links(
+        self,
+        user_id: str,
+        source_memory_ids: list[str],
+    ) -> list[str]:
+        """Get linked memory contents for the given source memory IDs."""
+        if not source_memory_ids:
+            return []
+        all_links = await self._records.get_certain_records(  # type: ignore[union-attr]
+            user_id, record_type="chain_link", limit=50
+        )
+        results: list[str] = []
+        source_set = set(source_memory_ids)
+        for link in all_links:
+            meta = json.loads(link.get("metadata") or "{}")
+            if meta.get("source_memory_id") in source_set:
+                content = link.get("content", "")
+                if content and content not in results:
+                    results.append(content)
+        return results
+
+    async def clear_old_chain_links(self, keep_days: int = 2) -> int:
+        """Remove chain links older than keep_days."""
+        cutoff = (datetime.now() - timedelta(days=keep_days)).isoformat()
+        cursor = await self._conn.execute(  # type: ignore[union-attr]
+            "DELETE FROM certain_records "
+            "WHERE record_type = 'chain_link' AND created_at < ?",
+            (cutoff,),
+        )
+        await self._conn.commit()  # type: ignore[union-attr]
+        return cursor.rowcount

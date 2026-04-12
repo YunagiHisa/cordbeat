@@ -1,0 +1,26 @@
+name: shell_exec
+description: "シェルコマンドを実行する"
+version: "1.0.0"
+author: "cordbeat"
+enabled: false
+
+usage: |
+  シェルコマンドを直接実行する。
+  システム操作が必要なときに使う。
+  デフォルト無効。ユーザーが明示的に有効化する必要がある。
+
+parameters:
+  - name: command
+    type: string
+    required: true
+    description: "実行するコマンド"
+  - name: timeout
+    type: integer
+    required: false
+    description: "タイムアウト秒数（デフォルト: 30）"
+
+safety:
+  level: dangerous
+  sandbox: false
+  network: true
+  filesystem: true

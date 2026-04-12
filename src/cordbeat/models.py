@@ -161,6 +161,7 @@ class SkillContext:
     network: bool = False
     filesystem: bool = False
     work_dir: Path | None = None
+    memory: Any | None = None
 
 
 # ── MEMORY ────────────────────────────────────────────────────────────

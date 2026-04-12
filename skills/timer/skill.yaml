@@ -1,0 +1,28 @@
+name: timer
+description: "リマインダー・タイマーを設定する"
+version: "1.0.0"
+author: "cordbeat"
+
+usage: |
+  指定分数後にリマインドが必要なときに使う。
+  HEARTBEATがリマインド時刻をチェックし、対象ユーザーに通知する。
+
+parameters:
+  - name: user_id
+    type: string
+    required: true
+    description: "リマインド対象のユーザーID"
+  - name: message
+    type: string
+    required: true
+    description: "リマインドメッセージ"
+  - name: minutes
+    type: integer
+    required: false
+    description: "何分後にリマインドするか（デフォルト: 30）"
+
+safety:
+  level: safe
+  sandbox: false
+  network: false
+  filesystem: false

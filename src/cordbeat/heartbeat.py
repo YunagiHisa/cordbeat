@@ -475,7 +475,7 @@ class HeartbeatLoop:
             return
 
         try:
-            result = await skill.execute(decision.skill_params)
+            result = await skill.execute(decision.skill_params, memory=self._memory)
             logger.info("Skill '%s' result: %s", decision.skill_name, result)
         except Exception:
             logger.exception("Skill '%s' failed", decision.skill_name)
@@ -683,7 +683,7 @@ class HeartbeatLoop:
                     continue
 
                 try:
-                    result = await skill.execute(skill_params)
+                    result = await skill.execute(skill_params, memory=self._memory)
                     logger.info(
                         "Approved skill '%s' executed: %s",
                         skill_name,

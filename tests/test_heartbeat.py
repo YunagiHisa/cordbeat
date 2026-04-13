@@ -2108,3 +2108,301 @@ class TestProposalExecutionNotification:
 
         # Proposal still executed but no notification
         mock_gateway.send_to_adapter.assert_not_called()
+
+
+class TestSkillCreationProposal:
+    """Tests for AI-generated skill proposal feature."""
+
+    async def test_store_skill_creation_proposal(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Skill creation proposal is stored with proposed_skill metadata."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.PROPOSE_SKILL,
+            content="Create a translation skill",
+            proposed_skill={
+                "name": "translate",
+                "description": "Translate text",
+                "usage": "When translation is needed",
+                "parameters": [
+                    {
+                        "name": "text",
+                        "type": "string",
+                        "required": True,
+                        "description": "Text to translate",
+                    }
+                ],
+                "code": (
+                    "async def execute(*, text, **_kw):\n    return {'result': text}\n"
+                ),
+            },
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_decision(decision)
+
+        records = await memory.get_certain_records("u1", record_type="proposal")
+        assert len(records) == 1
+        meta = json.loads(records[0]["metadata"])
+        assert meta["proposal_type"] == ProposalType.SKILL_PROPOSAL
+        assert meta["proposed_skill"]["name"] == "translate"
+
+    async def test_skill_creation_notification(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """User is notified about skill creation proposal."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.PROPOSE_SKILL,
+            content="Create translate skill",
+            proposed_skill={
+                "name": "translate",
+                "description": "Translate text",
+                "parameters": [],
+                "code": "def execute(**kw):\n    return {}\n",
+            },
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._store_skill_creation_proposal(decision)
+
+        mock_gateway.send_to_adapter.assert_called_once()
+        msg = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "translate" in msg.content
+        assert "proposal ID:" in msg.content
+
+    async def test_install_proposed_skill(
+        self,
+        heartbeat: HeartbeatLoop,
+        tmp_path: Path,
+    ) -> None:
+        """Approved skill proposal writes files and reloads registry."""
+        skills_dir = heartbeat._skills.skills_dir
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        proposed = {
+            "name": "greet",
+            "description": "Greet the user",
+            "usage": "When greeting is needed",
+            "parameters": [
+                {
+                    "name": "name",
+                    "type": "string",
+                    "required": True,
+                    "description": "User name",
+                }
+            ],
+            "code": (
+                "def execute(*, name, **_kw):\n"
+                "    return {'greeting': f'Hello {name}'}\n"
+            ),
+        }
+        await heartbeat._install_proposed_skill(proposed)
+
+        # Files written
+        skill_dir = skills_dir / "greet"
+        assert (skill_dir / "skill.yaml").exists()
+        assert (skill_dir / "main.py").exists()
+
+        # Skill loaded in registry
+        skill = heartbeat._skills.get("greet")
+        assert skill is not None
+        assert skill.meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION
+
+    async def test_install_rejects_invalid_name(
+        self,
+        heartbeat: HeartbeatLoop,
+    ) -> None:
+        """Invalid skill names are rejected."""
+        proposed = {
+            "name": "Bad-Name!",
+            "description": "test",
+            "code": "def execute(**kw):\n    pass\n",
+        }
+        with pytest.raises(ValueError, match="Invalid skill name"):
+            await heartbeat._install_proposed_skill(proposed)
+
+    async def test_install_rejects_existing_skill(
+        self,
+        heartbeat: HeartbeatLoop,
+        tmp_path: Path,
+    ) -> None:
+        """Cannot overwrite an existing skill."""
+        skills_dir = heartbeat._skills.skills_dir
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        # Install first
+        proposed = {
+            "name": "myskill",
+            "description": "test",
+            "parameters": [],
+            "code": "def execute(**kw):\n    return {}\n",
+        }
+        await heartbeat._install_proposed_skill(proposed)
+
+        # Try again
+        with pytest.raises(ValueError, match="already exists"):
+            await heartbeat._install_proposed_skill(proposed)
+
+    async def test_install_rejects_dangerous_code(
+        self,
+        heartbeat: HeartbeatLoop,
+    ) -> None:
+        """Code with dangerous patterns is rejected."""
+        skills_dir = heartbeat._skills.skills_dir
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        proposed = {
+            "name": "evil",
+            "description": "test",
+            "parameters": [],
+            "code": "import subprocess\ndef execute(**kw):\n    pass\n",
+        }
+        with pytest.raises(ValueError, match="blocked pattern"):
+            await heartbeat._install_proposed_skill(proposed)
+
+    async def test_install_rejects_invalid_syntax(
+        self,
+        heartbeat: HeartbeatLoop,
+    ) -> None:
+        """Code with syntax errors is rejected."""
+        skills_dir = heartbeat._skills.skills_dir
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        proposed = {
+            "name": "broken",
+            "description": "test",
+            "parameters": [],
+            "code": "def execute(**kw)\n    pass\n",  # missing colon
+        }
+        with pytest.raises(SyntaxError):
+            await heartbeat._install_proposed_skill(proposed)
+
+    async def test_install_rejects_empty_code(
+        self,
+        heartbeat: HeartbeatLoop,
+    ) -> None:
+        """Empty code is rejected."""
+        skills_dir = heartbeat._skills.skills_dir
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        proposed = {
+            "name": "empty",
+            "description": "test",
+            "parameters": [],
+            "code": "",
+        }
+        with pytest.raises(ValueError, match="empty"):
+            await heartbeat._install_proposed_skill(proposed)
+
+    async def test_execute_approved_skill_proposal(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Approved skill proposal is installed via _execute_approved_proposals."""
+        skills_dir = heartbeat._skills.skills_dir
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        await memory.add_certain_record(
+            user_id="u1",
+            content="New skill: hello",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_PROPOSAL,
+                "adapter_id": "discord",
+                "proposed_skill": {
+                    "name": "hello",
+                    "description": "Say hello",
+                    "usage": "Greeting",
+                    "parameters": [],
+                    "code": ("def execute(**kw):\n    return {'msg': 'hello'}\n"),
+                },
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        # Skill installed
+        skill = heartbeat._skills.get("hello")
+        assert skill is not None
+
+        # Notification sent
+        mock_gateway.send_to_adapter.assert_called_once()
+        msg = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "✅" in msg.content
+        assert "hello" in msg.content
+
+    async def test_execute_failed_skill_proposal(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Failed skill proposal is marked expired."""
+        skills_dir = heartbeat._skills.skills_dir
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        await memory.add_certain_record(
+            user_id="u1",
+            content="Bad skill",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_PROPOSAL,
+                "adapter_id": "discord",
+                "proposed_skill": {
+                    "name": "Bad!Name",
+                    "description": "Invalid",
+                    "code": "def execute(**kw): pass",
+                },
+            },
+        )
+
+        await heartbeat._execute_approved_proposals()
+
+        mock_gateway.send_to_adapter.assert_called_once()
+        msg = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "❌" in msg.content
+
+    async def test_forced_safety_level(
+        self,
+        heartbeat: HeartbeatLoop,
+    ) -> None:
+        """AI-generated skills always get requires_confirmation level."""
+        skills_dir = heartbeat._skills.skills_dir
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        proposed = {
+            "name": "safeskill",
+            "description": "test",
+            "parameters": [],
+            "code": "def execute(**kw):\n    return {}\n",
+        }
+        await heartbeat._install_proposed_skill(proposed)
+
+        yaml_content = (skills_dir / "safeskill" / "skill.yaml").read_text(
+            encoding="utf-8"
+        )
+        assert "requires_confirmation" in yaml_content
+        # AI cannot set dangerous level
+        assert "dangerous" not in yaml_content

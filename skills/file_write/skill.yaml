@@ -1,0 +1,29 @@
+name: file_write
+description: "指定されたパスにファイルを書き込む"
+version: "1.0.0"
+author: "cordbeat"
+
+usage: |
+  ファイルにテキストを書き込みたいときに使う。
+  サンドボックス内のファイルのみ書き込み可能。
+  ユーザーの承認が必要。
+
+parameters:
+  - name: path
+    type: string
+    required: true
+    description: "書き込み先のファイルパス"
+  - name: content
+    type: string
+    required: true
+    description: "書き込む内容"
+  - name: mode
+    type: string
+    required: false
+    description: "書き込みモード: write（上書き）/ append（追記）（デフォルト: write）"
+
+safety:
+  level: requires_confirmation
+  sandbox: true
+  network: false
+  filesystem: true

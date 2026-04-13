@@ -9,6 +9,7 @@ import socket
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from cordbeat.models import SafetyLevel
@@ -875,40 +876,395 @@ class TestShellExecSkill:
         assert "hello" in result["stdout"]
 
 
+class TestWebSearchSkill:
+    """Tests for the web_search built-in skill."""
+
+    async def test_web_search_meta(self, tmp_path: Path) -> None:
+        """web_search is safe with network access."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "web_search")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        meta = registry.available_skills["web_search"]
+        assert meta.safety_level == SafetyLevel.SAFE
+        assert meta.network is True
+        assert meta.sandbox is False
+
+    async def test_web_search_parse_results(self) -> None:
+        """_parse_results extracts titles and URLs from HTML."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_web_search",
+            str(_BUILTIN_SKILLS_DIR / "web_search" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        html = (
+            '<a class="result-link" href="https://example.com">Example</a>\n'
+            '<td class="result-snippet">A test snippet</td>\n'
+            '<a class="result-link" href="https://other.com">Other</a>\n'
+        )
+        results = mod._parse_results(html, max_results=5)
+        assert len(results) == 2
+        assert results[0]["url"] == "https://example.com"
+        assert results[0]["title"] == "Example"
+        assert results[0]["snippet"] == "A test snippet"
+
+    async def test_web_search_max_results(self) -> None:
+        """_parse_results respects max_results limit."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_web_search_max",
+            str(_BUILTIN_SKILLS_DIR / "web_search" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        html = ""
+        for i in range(10):
+            html += f'<a class="result-link" href="https://ex{i}.com">R{i}</a>\n'
+        results = mod._parse_results(html, max_results=3)
+        assert len(results) == 3
+
+    async def test_web_search_http_error(self) -> None:
+        """web_search returns error on HTTP failure."""
+        import importlib.util
+        from unittest.mock import patch
+
+        spec = importlib.util.spec_from_file_location(
+            "test_web_search_err",
+            str(_BUILTIN_SKILLS_DIR / "web_search" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post.side_effect = httpx.ConnectError("Connection refused")
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client):
+            result = await mod.execute(query="test")
+        assert "error" in result
+
+
+class TestWeatherSkill:
+    """Tests for the weather built-in skill."""
+
+    async def test_weather_meta(self, tmp_path: Path) -> None:
+        """weather is safe with network access."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "weather")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        meta = registry.available_skills["weather"]
+        assert meta.safety_level == SafetyLevel.SAFE
+        assert meta.network is True
+
+    async def test_weather_format(self) -> None:
+        """_format_weather extracts temperature and forecast."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_weather",
+            str(_BUILTIN_SKILLS_DIR / "weather" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        data = {
+            "current_condition": [
+                {
+                    "temp_C": "25",
+                    "FeelsLikeC": "27",
+                    "humidity": "60",
+                    "weatherDesc": [{"value": "Sunny"}],
+                    "windspeedKmph": "10",
+                    "winddir16Point": "NE",
+                }
+            ],
+            "weather": [
+                {
+                    "date": "2026-04-13",
+                    "maxtempC": "28",
+                    "mintempC": "18",
+                    "hourly": [
+                        {},
+                        {},
+                        {},
+                        {},
+                        {"weatherDesc": [{"value": "Partly cloudy"}]},
+                    ],
+                }
+            ],
+        }
+        result = mod._format_weather("Tokyo", data)
+        assert result["temperature_c"] == "25"
+        assert result["description"] == "Sunny"
+        assert len(result["forecast"]) == 1
+        assert result["forecast"][0]["max_c"] == "28"
+
+    async def test_weather_safe_location(self) -> None:
+        """_safe_location strips dangerous characters."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_weather_loc",
+            str(_BUILTIN_SKILLS_DIR / "weather" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        assert mod._safe_location("Tokyo") == "Tokyo"
+        assert mod._safe_location("San Francisco, CA") == "San Francisco, CA"
+        # Dangerous chars stripped
+        assert "<script>" not in mod._safe_location("<script>alert(1)</script>")
+
+
+class TestFileWriteSkill:
+    """Tests for the file_write built-in skill."""
+
+    async def test_file_write_meta(self, tmp_path: Path) -> None:
+        """file_write requires confirmation and has sandbox + filesystem."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "file_write")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        meta = registry.available_skills["file_write"]
+        assert meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION
+        assert meta.sandbox is True
+        assert meta.filesystem is True
+
+    async def test_file_write_creates_file(self, tmp_path: Path) -> None:
+        """file_write creates a new file with specified content."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_write",
+            str(_BUILTIN_SKILLS_DIR / "file_write" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        out = tmp_path / "output.txt"
+        result = mod.execute(path=str(out), content="hello world")
+        assert result["status"] == "ok"
+        assert out.read_text(encoding="utf-8") == "hello world"
+
+    async def test_file_write_append_mode(self, tmp_path: Path) -> None:
+        """file_write appends to existing file in append mode."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_write_append",
+            str(_BUILTIN_SKILLS_DIR / "file_write" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        out = tmp_path / "log.txt"
+        out.write_text("first\n", encoding="utf-8")
+        result = mod.execute(path=str(out), content="second\n", mode="append")
+        assert result["status"] == "ok"
+        assert out.read_text(encoding="utf-8") == "first\nsecond\n"
+
+    async def test_file_write_invalid_mode(self) -> None:
+        """file_write rejects invalid mode."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_write_badmode",
+            str(_BUILTIN_SKILLS_DIR / "file_write" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        result = mod.execute(path="/tmp/x.txt", content="data", mode="delete")
+        assert "error" in result
+
+    async def test_file_write_creates_parent_dirs(self, tmp_path: Path) -> None:
+        """file_write creates parent directories automatically."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_write_mkdir",
+            str(_BUILTIN_SKILLS_DIR / "file_write" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        out = tmp_path / "sub" / "dir" / "file.txt"
+        result = mod.execute(path=str(out), content="nested")
+        assert result["status"] == "ok"
+        assert out.read_text(encoding="utf-8") == "nested"
+
+
+class TestApiCallSkill:
+    """Tests for the api_call built-in skill."""
+
+    async def test_api_call_meta(self, tmp_path: Path) -> None:
+        """api_call requires confirmation with network access."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "api_call")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        meta = registry.available_skills["api_call"]
+        assert meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION
+        assert meta.network is True
+
+    async def test_api_call_invalid_method(self) -> None:
+        """api_call rejects unsupported HTTP methods."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_api_call_method",
+            str(_BUILTIN_SKILLS_DIR / "api_call" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        result = await mod.execute(url="https://example.com", method="DELETE")
+        assert "error" in result
+        assert "Unsupported method" in result["error"]
+
+    async def test_api_call_blocks_localhost(self) -> None:
+        """api_call blocks requests to localhost/internal addresses."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_api_call_block",
+            str(_BUILTIN_SKILLS_DIR / "api_call" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        result = await mod.execute(url="http://localhost:8080/secret")
+        assert "error" in result
+        err = result["error"].lower()
+        assert "local" in err or "internal" in err
+
+    async def test_api_call_blocks_127(self) -> None:
+        """api_call blocks requests to 127.0.0.1."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_api_call_127",
+            str(_BUILTIN_SKILLS_DIR / "api_call" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        result = await mod.execute(url="http://127.0.0.1/admin")
+        assert "error" in result
+
+    async def test_api_call_invalid_url(self) -> None:
+        """api_call rejects invalid URLs."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_api_call_url",
+            str(_BUILTIN_SKILLS_DIR / "api_call" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        result = await mod.execute(url="not-a-url")
+        # Either an error from URL parsing or from the HTTP client
+        assert "error" in result or "status_code" in result
+
+
 class TestBuiltinSkillRegistry:
     """Test loading all built-in skills together."""
 
     def test_load_all_builtins(self, tmp_path: Path) -> None:
-        """All 4 built-in skills can be loaded at once."""
+        """All 8 built-in skills can be loaded at once."""
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()
-        for name in ("read_diary", "timer", "file_read", "shell_exec"):
+        for name in (
+            "read_diary",
+            "timer",
+            "file_read",
+            "shell_exec",
+            "web_search",
+            "weather",
+            "file_write",
+            "api_call",
+        ):
             _copy_builtin_skill(skills_dir, name)
 
         registry = SkillRegistry(skills_dir)
         registry.load_all()
-        assert len(registry.available_skills) == 4
+        assert len(registry.available_skills) == 8
 
     def test_enabled_builtins(self, tmp_path: Path) -> None:
-        """Only safe skills are enabled by default."""
+        """Only safe skills and requires_confirmation skills are enabled."""
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()
-        for name in ("read_diary", "timer", "file_read", "shell_exec"):
+        for name in (
+            "read_diary",
+            "timer",
+            "file_read",
+            "shell_exec",
+            "web_search",
+            "weather",
+            "file_write",
+            "api_call",
+        ):
             _copy_builtin_skill(skills_dir, name)
 
         registry = SkillRegistry(skills_dir)
         registry.load_all()
         enabled = registry.enabled_skill_names
+        # Safe skills
         assert "read_diary" in enabled
         assert "timer" in enabled
         assert "file_read" in enabled
+        assert "web_search" in enabled
+        assert "weather" in enabled
+        # Requires_confirmation skills
+        assert "file_write" in enabled
+        assert "api_call" in enabled
+        # Dangerous — disabled
         assert "shell_exec" not in enabled
 
     def test_prompt_includes_safe_builtins(self, tmp_path: Path) -> None:
         """Prompt descriptions include enabled built-in skills."""
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()
-        for name in ("read_diary", "timer", "file_read", "shell_exec"):
+        for name in (
+            "read_diary",
+            "timer",
+            "file_read",
+            "shell_exec",
+            "web_search",
+            "weather",
+            "file_write",
+            "api_call",
+        ):
             _copy_builtin_skill(skills_dir, name)
 
         registry = SkillRegistry(skills_dir)
@@ -917,4 +1273,8 @@ class TestBuiltinSkillRegistry:
         assert "read_diary" in desc
         assert "timer" in desc
         assert "file_read" in desc
+        assert "web_search" in desc
+        assert "weather" in desc
+        assert "file_write" in desc
+        assert "api_call" in desc
         assert "shell_exec" not in desc

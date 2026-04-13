@@ -1,0 +1,24 @@
+name: web_search
+description: "Web検索を行い結果を返す"
+version: "1.0.0"
+author: "cordbeat"
+
+usage: |
+  ウェブ上の情報を検索したいときに使う。
+  最新情報・ニュース・一般的な知識の確認に有効。
+
+parameters:
+  - name: query
+    type: string
+    required: true
+    description: "検索クエリ"
+  - name: max_results
+    type: integer
+    required: false
+    description: "取得する最大件数（デフォルト: 5）"
+
+safety:
+  level: safe
+  sandbox: false
+  network: true
+  filesystem: false

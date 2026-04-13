@@ -1,0 +1,37 @@
+name: api_call
+description: "外部APIにHTTPリクエストを送信する"
+version: "1.0.0"
+author: "cordbeat"
+
+usage: |
+  外部のREST APIを呼び出したいときに使う。
+  GET/POSTメソッドに対応。
+  ユーザーの承認が必要。
+
+parameters:
+  - name: url
+    type: string
+    required: true
+    description: "リクエスト先のURL"
+  - name: method
+    type: string
+    required: false
+    description: "HTTPメソッド: GET / POST（デフォルト: GET）"
+  - name: headers
+    type: object
+    required: false
+    description: "追加のHTTPヘッダー（辞書形式）"
+  - name: body
+    type: object
+    required: false
+    description: "リクエストボディ（POST時のJSON）"
+  - name: timeout
+    type: integer
+    required: false
+    description: "タイムアウト秒数（デフォルト: 15）"
+
+safety:
+  level: requires_confirmation
+  sandbox: false
+  network: true
+  filesystem: false

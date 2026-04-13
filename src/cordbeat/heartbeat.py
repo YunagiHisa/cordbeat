@@ -1026,7 +1026,7 @@ class HeartbeatLoop:
                 diary_text = await self._ai.generate(
                     prompt=prompt,
                     system=system,
-                    temperature=0.5,
+                    temperature=self._memory_config.diary_temperature,
                     max_tokens=self._memory_config.diary_max_tokens,
                 )
 
@@ -1100,7 +1100,9 @@ class HeartbeatLoop:
         """AI reviews today's episodic memories and promotes general facts."""
         try:
             episodic = await self._memory.search_episodic(
-                user_id, "today", n_results=10
+                user_id,
+                "today",
+                n_results=self._memory_config.consolidation_episode_results,
             )
             if not episodic:
                 return
@@ -1111,14 +1113,14 @@ class HeartbeatLoop:
             raw = await self._ai.generate(
                 prompt="Extract generalizable facts from the episodes above.",
                 system=system,
-                temperature=0.2,
+                temperature=self._memory_config.consolidation_temperature,
             )
             data = json.loads(raw)
             facts = data.get("facts", [])
             if not isinstance(facts, list):
                 return
 
-            for fact in facts[:5]:
+            for fact in facts[: self._memory_config.consolidation_facts_limit]:
                 if not isinstance(fact, str) or len(fact.strip()) < 3:
                     continue
                 entry = MemoryEntry(
@@ -1193,7 +1195,9 @@ class HeartbeatLoop:
         """
         try:
             recent_episodes = await self._memory.search_episodic(
-                user_id, "today", n_results=5
+                user_id,
+                "today",
+                n_results=self._memory_config.chain_link_episode_results,
             )
             if not recent_episodes:
                 return
@@ -1206,7 +1210,9 @@ class HeartbeatLoop:
 
                 # Search for related semantic memories
                 related = await self._memory.search_semantic(
-                    user_id, ep_content, n_results=3
+                    user_id,
+                    ep_content,
+                    n_results=self._memory_config.chain_link_related_results,
                 )
                 for mem in related:
                     mem_id = mem.get("id", "")
@@ -1223,7 +1229,9 @@ class HeartbeatLoop:
 
                 # Search for related episodic memories
                 related_ep = await self._memory.search_episodic(
-                    user_id, ep_content, n_results=3
+                    user_id,
+                    ep_content,
+                    n_results=self._memory_config.chain_link_related_results,
                 )
                 for mem in related_ep:
                     mem_id = mem.get("id", "")

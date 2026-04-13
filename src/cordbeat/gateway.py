@@ -78,7 +78,7 @@ class RetryableConnection:
                     backoff,
                 )
                 await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, _MAX_BACKOFF)
+                backoff = min(backoff * 2, getattr(self, "_max_backoff", _MAX_BACKOFF))
 
     async def _listen_core(self) -> None:
         try:

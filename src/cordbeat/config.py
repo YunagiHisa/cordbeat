@@ -23,6 +23,7 @@ class GatewayConfig:
 class AdapterConfig:
     core_ws_url: str = "ws://localhost:8765"
     enabled: bool = True
+    reconnect_max_backoff: int = 60
     options: dict[str, Any] = field(default_factory=dict)
 
 
@@ -49,6 +50,16 @@ class MemoryConfig:
     extraction_temperature: float = 0.2
     flashbulb_intensity_threshold: float = 0.8
     max_user_input_len: int = 2000
+    diary_temperature: float = 0.5
+    consolidation_temperature: float = 0.2
+    consolidation_episode_results: int = 10
+    consolidation_facts_limit: int = 5
+    chain_link_episode_results: int = 5
+    chain_link_related_results: int = 3
+    recall_keyword_search_results: int = 2
+    emotion_recall_search_results: int = 2
+    chain_recall_max_depth: int = 2
+    recall_hints_limit: int = 20
 
 
 @dataclass

@@ -1008,7 +1008,9 @@ class MemoryStore:
     ) -> list[dict[str, Any]]:
         """Get precomputed recall hints for a user, optionally by date."""
         all_hints = await self._records.get_certain_records(  # type: ignore[union-attr]
-            user_id, record_type="recall_hint", limit=20
+            user_id,
+            record_type="recall_hint",
+            limit=self._config.recall_hints_limit,
         )
         if date_str is None:
             return all_hints

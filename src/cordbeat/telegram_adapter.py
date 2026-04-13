@@ -28,6 +28,7 @@ class TelegramAdapter(RetryableConnection):
         self._app: Any = None
         self._ws: Any = None
         self._running = False
+        self._max_backoff = config.reconnect_max_backoff
         # Map platform_user_id → chat_id for reply routing
         self._chat_map: dict[str, int] = {}
 

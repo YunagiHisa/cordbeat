@@ -155,6 +155,10 @@ class SkillRegistry:
         self._skills: dict[str, Skill] = {}
 
     @property
+    def skills_dir(self) -> Path:
+        return self._skills_dir
+
+    @property
     def available_skills(self) -> dict[str, SkillMeta]:
         return {name: skill.meta for name, skill in self._skills.items()}
 
@@ -196,7 +200,7 @@ class SkillRegistry:
             raw: dict[str, Any] = yaml.safe_load(f) or {}
 
         safety_raw = raw.get("safety", {})
-        params_raw = raw.get("parameters", [])
+        params_raw = raw.get("parameters") or []
         parameters = [
             SkillParam(
                 name=p["name"],

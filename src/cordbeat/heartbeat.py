@@ -78,12 +78,22 @@ decide what action to take for this specific user.
 
 You MUST respond in valid JSON:
 {{
-  "action": "message|skill|propose_improvement|propose_trait_change|none",
+  "action": "message|skill|propose_improvement|propose_trait_change|propose_skill|none",
   "content": "message text or proposal description (empty for action=none)",
   "skill_name": "skill name (only when action=skill)",
   "skill_params": {{}},
   "trait_add": ["traits to add (only when action=propose_trait_change)"],
   "trait_remove": ["traits to remove (only when action=propose_trait_change)"],
+  "proposed_skill": {{
+    "name": "snake_case skill name (only when action=propose_skill)",
+    "description": "short description",
+    "usage": "when and how to use",
+    "parameters": [
+      {{"name": "param", "type": "string",
+       "required": true, "description": "..."}}
+    ],
+    "code": "async def execute(*, param, **_kw):\\n ..."
+  }},
   "target_user_id": "{target_user_id}",
   "target_adapter_id": "{target_adapter_id}",
   "next_heartbeat_minutes": 60
@@ -412,6 +422,8 @@ class HeartbeatLoop:
                 await self._store_and_notify_proposal(decision)
             case HeartbeatAction.PROPOSE_TRAIT_CHANGE:
                 await self._store_trait_proposal(decision)
+            case HeartbeatAction.PROPOSE_SKILL:
+                await self._store_skill_creation_proposal(decision)
             case HeartbeatAction.NONE:
                 logger.debug("HEARTBEAT decided: do nothing")
 
@@ -655,6 +667,167 @@ class HeartbeatLoop:
 
         return proposal_id
 
+    async def _store_skill_creation_proposal(
+        self,
+        decision: HeartbeatDecision,
+    ) -> str:
+        """Store a skill creation proposal for user approval."""
+        proposed = decision.proposed_skill
+        skill_name = proposed.get("name", "unnamed_skill")
+
+        metadata: dict[str, Any] = {
+            "status": ProposalStatus.PENDING,
+            "proposal_type": ProposalType.SKILL_PROPOSAL,
+            "proposed_skill": proposed,
+        }
+        user_id = decision.target_user_id or "__system__"
+        adapter_id = decision.target_adapter_id
+
+        if adapter_id:
+            metadata["adapter_id"] = adapter_id
+
+        content = decision.content or (
+            f"New skill proposal: {skill_name}\n"
+            f"Description: {proposed.get('description', '')}"
+        )
+
+        proposal_id = await self._memory.add_certain_record(
+            user_id=user_id,
+            content=content,
+            record_type="proposal",
+            metadata=metadata,
+        )
+        logger.info(
+            "Skill creation proposal stored (id=%s): %s",
+            proposal_id,
+            skill_name,
+        )
+
+        # Notify user
+        if user_id != "__system__" and adapter_id:
+            platform_user_id = await self._memory.resolve_platform_user(
+                user_id, adapter_id
+            )
+            if platform_user_id:
+                soul_snap = self._soul.get_soul_snapshot()
+                params_desc = ", ".join(
+                    p.get("name", "?") for p in proposed.get("parameters", [])
+                )
+                notification = GatewayMessage(
+                    type=MessageType.HEARTBEAT_MESSAGE,
+                    adapter_id=adapter_id,
+                    platform_user_id=platform_user_id,
+                    content=(
+                        f"🛠️ {soul_snap['name']} wants to create "
+                        f"a new skill: '{skill_name}'\n"
+                        f"Description: {proposed.get('description', '')}\n"
+                        f"Parameters: ({params_desc})\n\n"
+                        f"(proposal ID: {proposal_id})"
+                    ),
+                )
+                await self._gateway.send_to_adapter(adapter_id, notification)
+
+        return proposal_id
+
+    async def _install_proposed_skill(
+        self,
+        proposed: dict[str, Any],
+    ) -> None:
+        """Validate and write a proposed skill to the skills directory."""
+        import re
+
+        name = proposed.get("name", "")
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,49}", name):
+            raise ValueError(
+                f"Invalid skill name: {name!r}. "
+                "Must be lowercase alphanumeric with underscores."
+            )
+
+        # Block overwriting existing skills
+        if self._skills.get(name) is not None:
+            raise ValueError(f"Skill '{name}' already exists.")
+
+        code = proposed.get("code", "")
+        if not code.strip():
+            raise ValueError("Skill code is empty.")
+
+        # Validate Python syntax
+        compile(code, f"skills/{name}/main.py", "exec")
+
+        # Block dangerous patterns in generated code
+        dangerous_patterns = {
+            r"\bsubprocess\b",
+            r"\bos\.system\b",
+            r"\b__import__\b",
+            r"\beval\s*\(",
+            r"\bexec\s*\(",
+            r"\bopen\s*\(.*/etc/",
+            r"\bshutil\.rmtree\b",
+        }
+        for pattern in dangerous_patterns:
+            if re.search(pattern, code):
+                raise ValueError(f"Skill code contains blocked pattern: {pattern}")
+
+        # Build skill.yaml — force safety to requires_confirmation
+        description = proposed.get("description", "AI-generated skill")
+        usage = proposed.get("usage", "")
+        parameters = proposed.get("parameters", [])
+
+        yaml_lines = [
+            f"name: {name}",
+            f'description: "{description}"',
+            'version: "1.0.0"',
+            'author: "cordbeat-ai"',
+            "",
+            f"usage: |\n  {usage}",
+            "",
+        ]
+        if parameters:
+            yaml_lines.append("parameters:")
+        else:
+            yaml_lines.append("parameters: []")
+        for param in parameters:
+            yaml_lines.append(f"  - name: {param.get('name', 'arg')}")
+            yaml_lines.append(f"    type: {param.get('type', 'string')}")
+            yaml_lines.append(
+                f"    required: {str(param.get('required', True)).lower()}"
+            )
+            desc = param.get("description", "")
+            if desc:
+                yaml_lines.append(f'    description: "{desc}"')
+        yaml_lines.extend(
+            [
+                "",
+                "safety:",
+                "  level: requires_confirmation",
+                "  sandbox: false",
+                "  network: false",
+                "  filesystem: false",
+            ]
+        )
+        yaml_content = "\n".join(yaml_lines) + "\n"
+
+        # Prepend standard header to code
+        code_header = (
+            f'"""AI-generated skill: {name}."""\n\n'
+            "from __future__ import annotations\n\n"
+            "from typing import Any\n\n\n"
+        )
+        if "from __future__" not in code:
+            full_code = code_header + code + "\n"
+        else:
+            full_code = code + "\n"
+
+        # Write to disk
+        skill_dir = self._skills.skills_dir / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "skill.yaml").write_text(yaml_content, encoding="utf-8")
+        (skill_dir / "main.py").write_text(full_code, encoding="utf-8")
+
+        # Reload skill registry
+        self._skills.load_all()
+        logger.info("Installed proposed skill: %s", name)
+
     async def _execute_approved_proposals(self) -> None:
         """Check for approved proposals and execute them."""
         import json as _json
@@ -740,6 +913,35 @@ class HeartbeatLoop:
                     await self._notify_proposal_result(
                         proposal,
                         "❌ Personality change failed — proposal expired.",
+                    )
+            elif proposal_type == ProposalType.SKILL_PROPOSAL:
+                proposed = meta.get("proposed_skill", {})
+                skill_name = proposed.get("name", "unknown")
+                try:
+                    await self._install_proposed_skill(proposed)
+                    logger.info(
+                        "Proposed skill '%s' installed",
+                        skill_name,
+                    )
+                    await self._memory.update_proposal_status(
+                        proposal_id, ProposalStatus.EXECUTED
+                    )
+                    await self._notify_proposal_result(
+                        proposal,
+                        f"✅ New skill '{skill_name}' installed successfully.",
+                    )
+                except Exception:
+                    logger.exception(
+                        "Proposed skill '%s' installation failed",
+                        skill_name,
+                    )
+                    await self._memory.update_proposal_status(
+                        proposal_id, ProposalStatus.EXPIRED
+                    )
+                    await self._notify_proposal_result(
+                        proposal,
+                        f"❌ Skill '{skill_name}' installation "
+                        f"failed — proposal expired.",
                     )
             else:
                 # General proposals are informational — just mark executed

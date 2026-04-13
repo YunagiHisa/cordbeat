@@ -90,6 +90,7 @@ class HeartbeatAction(StrEnum):
     SKILL = "skill"
     PROPOSE_IMPROVEMENT = "propose_improvement"
     PROPOSE_TRAIT_CHANGE = "propose_trait_change"
+    PROPOSE_SKILL = "propose_skill"
     NONE = "none"
 
 
@@ -99,6 +100,7 @@ class HeartbeatAction(StrEnum):
 class ProposalType(StrEnum):
     SKILL_EXECUTION = "skill_execution"
     TRAIT_CHANGE = "trait_change"
+    SKILL_PROPOSAL = "skill_proposal"
     GENERAL = "general"
 
 
@@ -118,6 +120,7 @@ class HeartbeatDecision:
     skill_params: dict[str, Any] = field(default_factory=dict)
     trait_add: list[str] = field(default_factory=list)
     trait_remove: list[str] = field(default_factory=list)
+    proposed_skill: dict[str, Any] = field(default_factory=dict)
     target_user_id: str | None = None
     target_adapter_id: str | None = None
     next_heartbeat_minutes: int = 60

@@ -330,6 +330,7 @@ class HeartbeatLoop:
             episodic_memories=episodic or None,
             history=history or None,
             soul_name=soul_snap["name"],
+            max_user_input_len=self._memory_config.max_user_input_len,
         )
 
         secondary_line = ""
@@ -351,7 +352,11 @@ class HeartbeatLoop:
             target_adapter_id=user.last_platform or "unknown",
         )
 
-        prompt = f"Triage reason: {sanitize(triage_reason, strict=True)}\n\n{context}"
+        max_len = self._memory_config.max_user_input_len
+        prompt = (
+            f"Triage reason: {sanitize(triage_reason, strict=True, max_len=max_len)}"
+            f"\n\n{context}"
+        )
 
         fallback = {
             "action": "none",
@@ -399,9 +404,10 @@ class HeartbeatLoop:
                 delta = datetime.now() - u.last_talked_at
                 elapsed = f" ({delta.days}d ago)" if delta.days > 0 else " (today)"
             # Sanitize user-controlled fields to prevent prompt injection
-            name = sanitize(u.display_name, strict=True)[:50]
-            topic = sanitize(u.last_topic, strict=True)[:50]
-            tone = sanitize(u.emotional_tone, strict=True)[:50]
+            max_len = self._memory_config.max_user_input_len
+            name = sanitize(u.display_name, strict=True, max_len=max_len)[:50]
+            topic = sanitize(u.last_topic, strict=True, max_len=max_len)[:50]
+            tone = sanitize(u.emotional_tone, strict=True, max_len=max_len)[:50]
             lines.append(
                 f"- {name} (ID: {u.user_id}){elapsed}: "
                 f"topic='{topic}', tone='{tone}', "

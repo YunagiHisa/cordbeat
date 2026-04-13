@@ -103,7 +103,7 @@ class MemoryExtractor:
             raw = await self._ai.generate(
                 prompt=prompt,
                 system="Respond in valid JSON only.",
-                temperature=0.2,
+                temperature=self._memory_config.extraction_temperature,
             )
             data = json.loads(raw)
             keywords = data.get("keywords", [])
@@ -143,7 +143,10 @@ class MemoryExtractor:
             logger.debug("Emotion updated: %s (%.2f)", emotion, intensity)
 
             # High-intensity emotion → flashbulb memory
-            if intensity >= 0.8 and emotion != Emotion.CALM:
+            if (
+                intensity >= self._memory_config.flashbulb_intensity_threshold
+                and emotion != Emotion.CALM
+            ):
                 summary = (
                     f"[{emotion.value}] User: {user_message[:200]} "
                     f"/ Response: {ai_response[:200]}"
@@ -176,7 +179,7 @@ class MemoryExtractor:
             raw = await self._ai.generate(
                 prompt=prompt,
                 system="Respond in valid JSON only.",
-                temperature=0.2,
+                temperature=self._memory_config.extraction_temperature,
             )
             data = json.loads(raw)
         except (

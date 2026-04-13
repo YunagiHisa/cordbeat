@@ -46,8 +46,16 @@ memory:
   emotion_recall_search_results: 2     # results for emotion-based recall
   chain_recall_max_depth: 2            # max depth for chain recall traversal
   recall_hints_limit: 20               # max recall hints per user
+  message_trim_keep: 100               # messages to keep per user when trimming
+  token_expiry_minutes: 10             # link token expiry in minutes
+  chain_link_query_limit: 100          # max chain link records to query
+  chain_link_max_results: 10           # max chain link results returned
 
-soul_dir: "data/soul"
+soul:
+  soul_dir: "data/soul"
+  emotion_decay_rate: 0.05             # per-tick emotion intensity decay
+  emotion_baseline_intensity: 0.3      # emotion intensity baseline (decay target)
+  emotion_secondary_clear_threshold: 0.1  # below this, secondary emotion is cleared
 skills_dir: "skills"
 data_dir: "data"
 

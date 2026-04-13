@@ -183,7 +183,9 @@ class GatewayServer:
         adapter_id: str | None = None
         try:
             # First message must identify the adapter
-            raw = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+            raw = await asyncio.wait_for(
+                websocket.recv(), timeout=self._config.handshake_timeout
+            )
             data = json.loads(raw)
             adapter_id = data.get("adapter_id")
             if not adapter_id:

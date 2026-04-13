@@ -14,16 +14,22 @@ _SANITIZE_STRICT_RE = re.compile(r"[#\n\r\x00-\x1f]")
 MAX_USER_INPUT_LEN = 2000
 
 
-def sanitize(text: str, *, strict: bool = False) -> str:
+def sanitize(
+    text: str,
+    *,
+    strict: bool = False,
+    max_len: int = MAX_USER_INPUT_LEN,
+) -> str:
     """Remove control characters and truncate for safe prompt use.
 
     Args:
         text: Raw text to sanitize.
         strict: If True, also strip ``#`` and newlines (for user-controlled
             data embedded inside a prompt section).
+        max_len: Maximum length of the returned string.
     """
     pattern = _SANITIZE_STRICT_RE if strict else _SANITIZE_RE
-    return pattern.sub("", text)[:MAX_USER_INPUT_LEN]
+    return pattern.sub("", text)[:max_len]
 
 
 def build_soul_system_prompt(soul_snap: dict[str, Any]) -> str:
@@ -64,12 +70,16 @@ def build_context(
     recall_hints: list[str] | None = None,
     history: list[dict[str, str]] | None = None,
     soul_name: str = "",
+    max_user_input_len: int = MAX_USER_INPUT_LEN,
 ) -> str:
     """Assemble the context block from memory and conversation data."""
-    parts = [f"User: {sanitize(user_display_name)}"]
+    parts = [f"User: {sanitize(user_display_name, max_len=max_user_input_len)}"]
 
     if profile:
-        sanitized = ", ".join(f"{k}={sanitize(str(v))}" for k, v in profile.items())
+        sanitized = ", ".join(
+            f"{k}={sanitize(str(v), max_len=max_user_input_len)}"
+            for k, v in profile.items()
+        )
         parts.append(f"Known info: {sanitized}")
 
     if semantic_memories:
@@ -91,6 +101,7 @@ def build_context(
         parts.append("\nConversation history:")
         for msg in history:
             prefix = "User" if msg["role"] == "user" else (soul_name or "AI")
-            parts.append(f"  {prefix}: {sanitize(msg['content'])}")
+            sanitized = sanitize(msg["content"], max_len=max_user_input_len)
+            parts.append(f"  {prefix}: {sanitized}")
 
     return "\n".join(parts)

@@ -13,6 +13,7 @@
 gateway:
   host: "0.0.0.0"
   port: 8765
+  handshake_timeout: 10.0  # seconds to wait for adapter handshake
 
 ai_backend:
   provider: ollama          # ollama | openai | openai_compat
@@ -32,6 +33,9 @@ memory:
   chroma_path: "data/chroma"
   decay_rate: 0.1
   archive_threshold: 0.05
+  extraction_temperature: 0.2          # AI temperature for memory extraction
+  flashbulb_intensity_threshold: 0.8   # emotion intensity to trigger flashbulb memory
+  max_user_input_len: 2000             # max chars for sanitized user input
 
 soul_dir: "data/soul"
 skills_dir: "skills"

@@ -16,6 +16,7 @@ _ENV_PREFIX = "CORDBEAT_"
 class GatewayConfig:
     host: str = "0.0.0.0"
     port: int = 8765
+    handshake_timeout: float = 10.0
 
 
 @dataclass
@@ -45,6 +46,9 @@ class MemoryConfig:
     memory_search_results: int = 3
     diary_max_tokens: int = 512
     facts_per_message_limit: int = 5
+    extraction_temperature: float = 0.2
+    flashbulb_intensity_threshold: float = 0.8
+    max_user_input_len: int = 2000
 
 
 @dataclass

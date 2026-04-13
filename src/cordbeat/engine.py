@@ -206,9 +206,12 @@ class CoreEngine:
             recall_hints=hints or None,
             history=history or None,
             soul_name=soul_snap["name"],
+            max_user_input_len=self._memory_config.max_user_input_len,
         )
 
-        safe_content = sanitize(message.content)
+        safe_content = sanitize(
+            message.content, max_len=self._memory_config.max_user_input_len
+        )
         prompt = f"{context}\n\nUser says: {safe_content}"
 
         try:

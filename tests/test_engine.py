@@ -1692,9 +1692,7 @@ class TestLinkCommands:
         )
         await engine.handle_message(msg)
 
-        records = await memory.get_certain_records(
-            "u1", record_type="link_audit"
-        )
+        records = await memory.get_certain_records("u1", record_type="link_audit")
         assert len(records) >= 1
         assert "unlink" in records[-1]["content"].lower()
 
@@ -1717,10 +1715,231 @@ class TestLinkCommands:
         )
         await engine.handle_message(msg)
 
-        records = await memory.get_certain_records(
-            "u1", record_type="link_audit"
-        )
+        records = await memory.get_certain_records("u1", record_type="link_audit")
         assert len(records) >= 1
-        assert "link_confirm" in json.loads(
-            records[-1]["metadata"]
-        ).get("action", "")
+        assert "link_confirm" in json.loads(records[-1]["metadata"]).get("action", "")
+
+
+class TestSoulCommands:
+    """Tests for /name, /quiet, /prefer text commands."""
+
+    async def test_name_command_shows_current(
+        self,
+        engine: CoreEngine,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/name without args shows current name."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/name",
+        )
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "current name" in reply.content.lower()
+
+    async def test_name_command_updates_name(
+        self,
+        engine: CoreEngine,
+        soul: Soul,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/name <new> updates the SOUL name."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/name Athena",
+        )
+        await engine.handle_message(msg)
+
+        assert soul.name == "Athena"
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "athena" in reply.content.lower()
+
+    async def test_quiet_command_shows_current(
+        self,
+        engine: CoreEngine,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/quiet without args shows current quiet hours."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/quiet",
+        )
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "current quiet hours" in reply.content.lower()
+
+    async def test_quiet_command_updates_hours(
+        self,
+        engine: CoreEngine,
+        soul: Soul,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/quiet <start> <end> updates quiet hours."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/quiet 23:00 08:00",
+        )
+        await engine.handle_message(msg)
+
+        assert soul.quiet_hours == ("23:00", "08:00")
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "23:00" in reply.content
+
+    async def test_quiet_command_invalid_format(
+        self,
+        engine: CoreEngine,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/quiet with bad format shows error."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/quiet abc xyz",
+        )
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "invalid" in reply.content.lower()
+
+    async def test_quiet_command_missing_end(
+        self,
+        engine: CoreEngine,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/quiet with only start shows usage."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/quiet 01:00",
+        )
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "usage" in reply.content.lower()
+
+    async def test_prefer_command_shows_current(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/prefer without args shows current preference."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/prefer",
+        )
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "not set" in reply.content.lower()
+
+    async def test_prefer_command_sets_platform(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/prefer <platform> sets the preferred platform."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        await memory.link_platform("u1", "discord", "disc_alice")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/prefer discord",
+        )
+        await engine.handle_message(msg)
+
+        user = await memory.get_or_create_user("u1", "Alice")
+        assert user.preferred_platform == "discord"
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "discord" in reply.content.lower()
+
+    async def test_prefer_command_unlinked_platform(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/prefer with an unlinked platform returns error."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/prefer slack",
+        )
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "not linked" in reply.content.lower()
+
+    async def test_prefer_command_clear(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/prefer clear removes the preferred platform."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        await memory.link_platform("u1", "discord", "disc_alice")
+
+        # Set preference first
+        user = await memory.get_or_create_user("u1", "Alice")
+        user.preferred_platform = "discord"
+        await memory.update_user_summary(user)
+
+        # Clear it
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/prefer clear",
+        )
+        await engine.handle_message(msg)
+
+        user = await memory.get_or_create_user("u1", "Alice")
+        assert user.preferred_platform is None
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "cleared" in reply.content.lower()
+
+    async def test_prefer_command_unknown_user(
+        self,
+        engine: CoreEngine,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/prefer from unknown user returns error."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="nobody",
+            content="/prefer discord",
+        )
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "not found" in reply.content.lower()

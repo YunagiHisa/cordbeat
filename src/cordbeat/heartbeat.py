@@ -349,7 +349,9 @@ class HeartbeatLoop:
             rules="\n".join(f"- {r}" for r in soul_snap["immutable_rules"]),
             skills=self._skills.get_skill_descriptions_for_prompt(),
             target_user_id=user.user_id,
-            target_adapter_id=user.last_platform or "unknown",
+            target_adapter_id=(
+                user.preferred_platform or user.last_platform or "unknown"
+            ),
         )
 
         max_len = self._memory_config.max_user_input_len

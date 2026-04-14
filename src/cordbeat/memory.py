@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS users (
     last_platform TEXT,
     last_topic    TEXT DEFAULT '',
     emotional_tone TEXT DEFAULT '',
-    attention_score REAL DEFAULT 0.5
+    attention_score REAL DEFAULT 0.5,
+    preferred_platform TEXT
 );
 
 CREATE TABLE IF NOT EXISTS platform_links (
@@ -103,6 +104,7 @@ class _UserStore:
                 last_topic=row["last_topic"] or "",
                 emotional_tone=row["emotional_tone"] or "",
                 attention_score=row["attention_score"] or 0.5,
+                preferred_platform=row["preferred_platform"],
             )
         await self._db.execute(
             "INSERT INTO users (user_id, display_name) VALUES (?, ?)",
@@ -115,7 +117,7 @@ class _UserStore:
         await self._db.execute(
             "UPDATE users SET display_name=?, last_talked_at=?, "
             "last_platform=?, last_topic=?, emotional_tone=?, "
-            "attention_score=? WHERE user_id=?",
+            "attention_score=?, preferred_platform=? WHERE user_id=?",
             (
                 summary.display_name,
                 summary.last_talked_at.isoformat() if summary.last_talked_at else None,
@@ -123,6 +125,7 @@ class _UserStore:
                 summary.last_topic,
                 summary.emotional_tone,
                 summary.attention_score,
+                summary.preferred_platform,
                 summary.user_id,
             ),
         )
@@ -142,6 +145,7 @@ class _UserStore:
                 last_topic=row["last_topic"] or "",
                 emotional_tone=row["emotional_tone"] or "",
                 attention_score=row["attention_score"] or 0.5,
+                preferred_platform=row["preferred_platform"],
             )
             for row in rows
         ]
@@ -167,8 +171,7 @@ class _UserStore:
     ) -> bool:
         """Remove a platform link. Returns True if a row was deleted."""
         cursor = await self._db.execute(
-            "DELETE FROM platform_links "
-            "WHERE user_id = ? AND adapter_id = ?",
+            "DELETE FROM platform_links WHERE user_id = ? AND adapter_id = ?",
             (user_id, adapter_id),
         )
         await self._db.commit()
@@ -180,8 +183,7 @@ class _UserStore:
     ) -> list[dict[str, str]]:
         """Return all platform links for a user."""
         cursor = await self._db.execute(
-            "SELECT adapter_id, platform_user_id FROM platform_links "
-            "WHERE user_id = ?",
+            "SELECT adapter_id, platform_user_id FROM platform_links WHERE user_id = ?",
             (user_id,),
         )
         rows = await cursor.fetchall()

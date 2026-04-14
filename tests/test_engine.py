@@ -1484,3 +1484,243 @@ class TestProposalCommands:
 
         reply_call = mock_gateway.send_to_adapter.call_args
         assert "not found" in reply_call[0][1].content.lower()
+
+
+class TestLinkCommands:
+    """Tests for /link and /unlink text commands."""
+
+    async def test_link_command_generates_token(
+        self,
+        engine: CoreEngine,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/link should generate a link token and reply."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content="/link",
+        )
+        await engine.handle_message(msg)
+
+        mock_gateway.send_to_adapter.assert_awaited()
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "Link token generated:" in reply.content
+
+    async def test_link_command_does_not_trigger_ai(
+        self,
+        engine: CoreEngine,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/link should not call the AI backend."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content="/link",
+        )
+        await engine.handle_message(msg)
+        mock_ai.generate.assert_not_awaited()
+
+    async def test_link_command_creates_audit_record(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/link should create an audit record."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content="/link",
+        )
+        await engine.handle_message(msg)
+
+        records = await memory.get_certain_records(
+            "__system__", record_type="link_audit"
+        )
+        assert len(records) >= 1
+        assert records[-1]["content"] == "Token issued on discord"
+
+    async def test_unlink_command_removes_platform(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/unlink should remove a linked platform."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "user1")
+        await memory.link_platform("u1", "telegram", "tg_user1")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content="/unlink telegram",
+        )
+        await engine.handle_message(msg)
+
+        # Verify telegram is unlinked
+        user_id = await memory.resolve_user("telegram", "tg_user1")
+        assert user_id is None
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "unlinked" in reply.content.lower()
+
+    async def test_unlink_command_no_platform_arg(
+        self,
+        engine: CoreEngine,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/unlink without a platform name shows usage."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content="/unlink",
+        )
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "usage" in reply.content.lower()
+
+    async def test_unlink_command_unknown_user(
+        self,
+        engine: CoreEngine,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/unlink from an unknown user returns error."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="nobody",
+            content="/unlink telegram",
+        )
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "not found" in reply.content.lower()
+
+    async def test_unlink_command_last_platform_blocked(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/unlink should block if only one platform is linked."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "user1")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content="/unlink discord",
+        )
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "at least one" in reply.content.lower()
+
+    async def test_unlink_command_current_platform_blocked(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/unlink cannot remove the platform being used."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "user1")
+        await memory.link_platform("u1", "telegram", "tg_user1")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content="/unlink discord",
+        )
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "currently using" in reply.content.lower()
+
+        # Discord should still be linked
+        user_id = await memory.resolve_user("discord", "user1")
+        assert user_id == "u1"
+
+    async def test_unlink_command_nonexistent_platform(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/unlink with a platform that isn't linked returns error."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "user1")
+        await memory.link_platform("u1", "telegram", "tg_user1")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content="/unlink slack",
+        )
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "not linked" in reply.content.lower()
+
+    async def test_unlink_command_creates_audit_record(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/unlink should record an audit entry."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "user1")
+        await memory.link_platform("u1", "telegram", "tg_user1")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content="/unlink telegram",
+        )
+        await engine.handle_message(msg)
+
+        records = await memory.get_certain_records(
+            "u1", record_type="link_audit"
+        )
+        assert len(records) >= 1
+        assert "unlink" in records[-1]["content"].lower()
+
+    async def test_link_confirm_creates_audit_record(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """LINK_CONFIRM should also create an audit record."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_alice")
+        token = await memory.store_link_token("telegram", "tg_alice")
+
+        msg = GatewayMessage(
+            type=MessageType.LINK_CONFIRM,
+            adapter_id="discord",
+            platform_user_id="discord_alice",
+            content=token,
+        )
+        await engine.handle_message(msg)
+
+        records = await memory.get_certain_records(
+            "u1", record_type="link_audit"
+        )
+        assert len(records) >= 1
+        assert "link_confirm" in json.loads(
+            records[-1]["metadata"]
+        ).get("action", "")

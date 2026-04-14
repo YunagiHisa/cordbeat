@@ -160,6 +160,39 @@ class _UserStore:
         )
         await self._db.commit()
 
+    async def unlink_platform(
+        self,
+        user_id: str,
+        adapter_id: str,
+    ) -> bool:
+        """Remove a platform link. Returns True if a row was deleted."""
+        cursor = await self._db.execute(
+            "DELETE FROM platform_links "
+            "WHERE user_id = ? AND adapter_id = ?",
+            (user_id, adapter_id),
+        )
+        await self._db.commit()
+        return cursor.rowcount > 0
+
+    async def get_linked_platforms(
+        self,
+        user_id: str,
+    ) -> list[dict[str, str]]:
+        """Return all platform links for a user."""
+        cursor = await self._db.execute(
+            "SELECT adapter_id, platform_user_id FROM platform_links "
+            "WHERE user_id = ?",
+            (user_id,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "adapter_id": row["adapter_id"],
+                "platform_user_id": row["platform_user_id"],
+            }
+            for row in rows
+        ]
+
     async def resolve_user(
         self,
         adapter_id: str,
@@ -804,6 +837,19 @@ class MemoryStore:
         platform_user_id: str,
     ) -> str | None:
         return await self._users.resolve_user(adapter_id, platform_user_id)  # type: ignore[union-attr]
+
+    async def unlink_platform(
+        self,
+        user_id: str,
+        adapter_id: str,
+    ) -> bool:
+        return await self._users.unlink_platform(user_id, adapter_id)  # type: ignore[union-attr]
+
+    async def get_linked_platforms(
+        self,
+        user_id: str,
+    ) -> list[dict[str, str]]:
+        return await self._users.get_linked_platforms(user_id)  # type: ignore[union-attr]
 
     async def resolve_platform_user(
         self,

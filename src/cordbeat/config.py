@@ -64,6 +64,10 @@ class MemoryConfig:
     token_expiry_minutes: int = 10
     chain_link_query_limit: int = 100
     chain_link_max_results: int = 10
+    recall_hints_retention_days: int = 2
+    chain_links_retention_days: int = 2
+    proposal_expiry_days: int = 7
+    chain_recall_depth_penalty: float = 0.5
 
 
 @dataclass

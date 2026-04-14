@@ -1101,7 +1101,8 @@ class MemoryStore:
 
                 # Distance increases with depth to prefer direct links
                 base_distance = meta.get("distance", 1.0)
-                adjusted = base_distance + depth * 0.5
+                penalty = self._config.chain_recall_depth_penalty
+                adjusted = base_distance + depth * penalty
                 scored.append((adjusted, content))
                 seen_contents.add(content)
 

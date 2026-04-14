@@ -50,6 +50,10 @@ memory:
   token_expiry_minutes: 10             # link token expiry in minutes
   chain_link_query_limit: 100          # max chain link records to query
   chain_link_max_results: 10           # max chain link results returned
+  recall_hints_retention_days: 2       # days to keep recall hints before cleanup
+  chain_links_retention_days: 2        # days to keep chain links before cleanup
+  proposal_expiry_days: 7              # days before pending proposals expire
+  chain_recall_depth_penalty: 0.5      # distance penalty per chain hop depth
 
 soul:
   soul_dir: "data/soul"

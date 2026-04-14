@@ -1338,3 +1338,149 @@ class TestProposalCommands:
         await engine.handle_message(msg)
         # Should fall through to normal AI processing
         mock_ai.generate.assert_called()
+
+    async def test_reject_no_id(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Reject without proposal ID shows usage."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/reject",
+        )
+        await engine.handle_message(msg)
+
+        reply_call = mock_gateway.send_to_adapter.call_args
+        assert "usage" in reply_call[0][1].content.lower()
+
+    async def test_reject_nonexistent_proposal(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Rejecting a nonexistent proposal returns error."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/reject fake-id-123",
+        )
+        await engine.handle_message(msg)
+
+        reply_call = mock_gateway.send_to_adapter.call_args
+        assert "not found" in reply_call[0][1].content.lower()
+
+    async def test_reject_other_users_proposal(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Users cannot reject proposals belonging to other users."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        await memory.get_or_create_user("u2", "Bob")
+        await memory.link_platform("u2", "test", "user2")
+
+        pid = await self._create_proposal(memory, "u2", "Bob's idea")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content=f"/reject {pid}",
+        )
+        await engine.handle_message(msg)
+
+        # Proposal should remain pending
+        proposal = await memory.get_proposal(pid)
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.PENDING
+
+        reply_call = mock_gateway.send_to_adapter.call_args
+        assert "not found" in reply_call[0][1].content.lower()
+
+    async def test_reject_already_rejected(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Rejecting an already rejected proposal returns error."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        pid = await self._create_proposal(memory, "u1")
+        await memory.update_proposal_status(pid, ProposalStatus.REJECTED)
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content=f"/reject {pid}",
+        )
+        await engine.handle_message(msg)
+
+        reply_call = mock_gateway.send_to_adapter.call_args
+        assert "cannot reject" in reply_call[0][1].content.lower()
+
+    async def test_approve_unknown_user(
+        self,
+        engine: CoreEngine,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Approving from an unknown user returns error."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="nobody",
+            content="/approve some-id",
+        )
+        await engine.handle_message(msg)
+
+        reply_call = mock_gateway.send_to_adapter.call_args
+        assert "not found" in reply_call[0][1].content.lower()
+
+    async def test_reject_unknown_user(
+        self,
+        engine: CoreEngine,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Rejecting from an unknown user returns error."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="nobody",
+            content="/reject some-id",
+        )
+        await engine.handle_message(msg)
+
+        reply_call = mock_gateway.send_to_adapter.call_args
+        assert "not found" in reply_call[0][1].content.lower()
+
+    async def test_proposals_unknown_user(
+        self,
+        engine: CoreEngine,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Listing proposals from unknown user returns error."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="nobody",
+            content="/proposals",
+        )
+        await engine.handle_message(msg)
+
+        reply_call = mock_gateway.send_to_adapter.call_args
+        assert "not found" in reply_call[0][1].content.lower()

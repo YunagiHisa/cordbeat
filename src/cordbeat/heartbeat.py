@@ -1077,18 +1077,24 @@ class HeartbeatLoop:
                 logger.exception("Failed to trim messages for user %s", user.user_id)
 
         try:
-            await self._memory.clear_old_recall_hints(keep_days=2)
+            await self._memory.clear_old_recall_hints(
+                keep_days=self._memory_config.recall_hints_retention_days,
+            )
         except Exception:
             logger.exception("Failed to clear old recall hints")
 
         try:
-            await self._memory.clear_old_chain_links(keep_days=2)
+            await self._memory.clear_old_chain_links(
+                keep_days=self._memory_config.chain_links_retention_days,
+            )
         except Exception:
             logger.exception("Failed to clear old chain links")
 
         # 6. Expire stale pending proposals (older than 7 days)
         try:
-            expired = await self._memory.expire_old_proposals(max_age_days=7)
+            expired = await self._memory.expire_old_proposals(
+                max_age_days=self._memory_config.proposal_expiry_days,
+            )
             if expired > 0:
                 logger.info("Expired %d stale proposals", expired)
         except Exception:

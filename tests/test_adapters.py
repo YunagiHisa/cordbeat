@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from cordbeat.config import AdapterConfig
 
@@ -69,6 +70,99 @@ class TestDiscordAdapter:
             )
             mock_logger.warning.assert_called()
 
+    async def test_forward_to_core_sends_payload(self) -> None:
+        from cordbeat.discord_adapter import DiscordAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = DiscordAdapter(config)
+        adapter._ws = AsyncMock()
+
+        message = MagicMock(
+            author=MagicMock(id=123, display_name="Alice"),
+            content="Hello!",
+            channel=MagicMock(id=456),
+            guild=MagicMock(id=789),
+        )
+        await adapter._forward_to_core(message)
+
+        adapter._ws.send.assert_awaited_once()
+        payload = json.loads(adapter._ws.send.call_args[0][0])
+        assert payload["type"] == "message"
+        assert payload["adapter_id"] == "discord"
+        assert payload["platform_user_id"] == "123"
+        assert payload["content"] == "Hello!"
+        # User channel should be cached
+        assert adapter._user_channels["123"] == 456
+
+    async def test_forward_to_core_ws_error(self) -> None:
+        from cordbeat.discord_adapter import DiscordAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = DiscordAdapter(config)
+        adapter._ws = AsyncMock()
+        adapter._ws.send = AsyncMock(side_effect=RuntimeError("ws closed"))
+
+        message = MagicMock(
+            author=MagicMock(id=123, display_name="Alice"),
+            content="Hello!",
+            channel=MagicMock(id=456),
+            guild=None,
+        )
+        with patch("cordbeat.discord_adapter.logger"):
+            await adapter._forward_to_core(message)
+        # Should not raise
+
+    async def test_stop(self) -> None:
+        from cordbeat.discord_adapter import DiscordAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = DiscordAdapter(config)
+        adapter._running = True
+        adapter._ws = AsyncMock()
+        adapter._bot = AsyncMock()
+
+        await adapter.stop()
+        assert adapter._running is False
+        adapter._ws.close.assert_awaited_once()
+        adapter._bot.close.assert_awaited_once()
+
+    async def test_send_to_discord_no_bot(self) -> None:
+        from cordbeat.discord_adapter import DiscordAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = DiscordAdapter(config)
+        adapter._bot = None
+
+        # Should not raise
+        await adapter._send_to_discord("123", "hello")
+
+    async def test_send_to_discord_via_channel(self) -> None:
+        from cordbeat.discord_adapter import DiscordAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = DiscordAdapter(config)
+        mock_channel = AsyncMock()
+        adapter._bot = MagicMock()
+        adapter._bot.get_channel = MagicMock(return_value=mock_channel)
+        adapter._user_channels["123"] = 456
+
+        await adapter._send_to_discord("123", "hello")
+        mock_channel.send.assert_awaited_once_with("hello")
+
+    async def test_send_to_discord_fallback_dm(self) -> None:
+        from cordbeat.discord_adapter import DiscordAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = DiscordAdapter(config)
+        mock_user = AsyncMock()
+        adapter._bot = MagicMock()
+        adapter._bot.get_channel = MagicMock(return_value=None)
+        adapter._bot.fetch_user = AsyncMock(return_value=mock_user)
+        adapter._user_channels["123"] = 456
+
+        await adapter._send_to_discord("123", "hello")
+        mock_user.send.assert_awaited_once_with("hello")
+
 
 class TestTelegramAdapter:
     def test_import(self) -> None:
@@ -125,6 +219,114 @@ class TestTelegramAdapter:
         # Simulate message storing chat_id
         adapter._chat_map["12345"] = 67890
         assert adapter._chat_map["12345"] == 67890
+
+    async def test_forward_to_core_sends_payload(self) -> None:
+        from cordbeat.telegram_adapter import TelegramAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = TelegramAdapter(config)
+        adapter._ws = AsyncMock()
+
+        await adapter._forward_to_core(
+            "user42",
+            "Hello!",
+            display_name="Alice",
+            chat_id=999,
+        )
+
+        adapter._ws.send.assert_awaited_once()
+        payload = json.loads(adapter._ws.send.call_args[0][0])
+        assert payload["type"] == "message"
+        assert payload["adapter_id"] == "telegram"
+        assert payload["platform_user_id"] == "user42"
+        assert payload["content"] == "Hello!"
+
+    async def test_forward_to_core_no_ws(self) -> None:
+        from cordbeat.telegram_adapter import TelegramAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = TelegramAdapter(config)
+        adapter._ws = None
+
+        with patch("cordbeat.telegram_adapter.logger") as mock_logger:
+            await adapter._forward_to_core("user1", "hello")
+            mock_logger.warning.assert_called()
+
+    async def test_forward_to_core_ws_error(self) -> None:
+        from cordbeat.telegram_adapter import TelegramAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = TelegramAdapter(config)
+        adapter._ws = AsyncMock()
+        adapter._ws.send = AsyncMock(side_effect=RuntimeError("ws fail"))
+
+        with patch("cordbeat.telegram_adapter.logger"):
+            await adapter._forward_to_core("user1", "hello")
+        # Should not raise
+
+    async def test_stop(self) -> None:
+        from cordbeat.telegram_adapter import TelegramAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = TelegramAdapter(config)
+        adapter._running = True
+        adapter._ws = AsyncMock()
+        adapter._app = MagicMock()
+        adapter._app.updater = MagicMock()
+        adapter._app.updater.stop = AsyncMock()
+        adapter._app.stop = AsyncMock()
+        adapter._app.shutdown = AsyncMock()
+
+        await adapter.stop()
+        assert adapter._running is False
+        adapter._ws.close.assert_awaited_once()
+
+    async def test_send_to_telegram_with_chat_map(self) -> None:
+        from cordbeat.telegram_adapter import TelegramAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = TelegramAdapter(config)
+        adapter._app = MagicMock()
+        adapter._app.bot = MagicMock()
+        adapter._app.bot.send_message = AsyncMock()
+        adapter._chat_map["user1"] = 12345
+
+        await adapter._send_to_telegram("user1", "hello")
+        adapter._app.bot.send_message.assert_awaited_once_with(
+            chat_id=12345,
+            text="hello",
+        )
+
+    async def test_send_to_telegram_dm_fallback(self) -> None:
+        from cordbeat.telegram_adapter import TelegramAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = TelegramAdapter(config)
+        adapter._app = MagicMock()
+        adapter._app.bot = MagicMock()
+        adapter._app.bot.send_message = AsyncMock()
+        # No entry in chat_map — should use user_id as int
+
+        await adapter._send_to_telegram("67890", "hello")
+        adapter._app.bot.send_message.assert_awaited_once_with(
+            chat_id=67890,
+            text="hello",
+        )
+
+    async def test_send_to_telegram_invalid_user_id(self) -> None:
+        from cordbeat.telegram_adapter import TelegramAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = TelegramAdapter(config)
+        adapter._app = MagicMock()
+        adapter._app.bot = MagicMock()
+        adapter._app.bot.send_message = AsyncMock()
+        # No chat_map entry and non-numeric user_id
+
+        with patch("cordbeat.telegram_adapter.logger") as mock_logger:
+            await adapter._send_to_telegram("not_a_number", "hello")
+            mock_logger.warning.assert_called()
+        adapter._app.bot.send_message.assert_not_awaited()
 
 
 class TestAdapterRunner:

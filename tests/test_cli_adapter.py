@@ -12,12 +12,8 @@ class TestCLIAdapter:
     async def test_main_connects_and_sends(self) -> None:
         """CLI adapter connects, completes handshake, then exits on EOF."""
         mock_ws = AsyncMock()
-        mock_ws.recv = AsyncMock(
-            return_value=json.dumps({"content": "Welcome"})
-        )
-        mock_ws.__aiter__ = MagicMock(
-            return_value=iter([])
-        )
+        mock_ws.recv = AsyncMock(return_value=json.dumps({"content": "Welcome"}))
+        mock_ws.__aiter__ = MagicMock(return_value=iter([]))
 
         mock_connect = AsyncMock()
         mock_connect.__aenter__ = AsyncMock(return_value=mock_ws)
@@ -37,9 +33,7 @@ class TestCLIAdapter:
     async def test_main_sends_message(self) -> None:
         """CLI adapter sends user input as message."""
         mock_ws = AsyncMock()
-        mock_ws.recv = AsyncMock(
-            return_value=json.dumps({"content": "Welcome"})
-        )
+        mock_ws.recv = AsyncMock(return_value=json.dumps({"content": "Welcome"}))
         mock_ws.__aiter__ = MagicMock(return_value=iter([]))
 
         mock_connect = AsyncMock()
@@ -72,9 +66,7 @@ class TestCLIAdapter:
     async def test_main_skips_blank_input(self) -> None:
         """Blank lines are not sent."""
         mock_ws = AsyncMock()
-        mock_ws.recv = AsyncMock(
-            return_value=json.dumps({"content": "OK"})
-        )
+        mock_ws.recv = AsyncMock(return_value=json.dumps({"content": "OK"}))
         mock_ws.__aiter__ = MagicMock(return_value=iter([]))
 
         mock_connect = AsyncMock()
@@ -104,9 +96,7 @@ class TestCLIAdapter:
     async def test_main_keyboard_interrupt(self) -> None:
         """Ctrl+C gracefully exits."""
         mock_ws = AsyncMock()
-        mock_ws.recv = AsyncMock(
-            return_value=json.dumps({"content": "OK"})
-        )
+        mock_ws.recv = AsyncMock(return_value=json.dumps({"content": "OK"}))
         mock_ws.__aiter__ = MagicMock(return_value=iter([]))
 
         mock_connect = AsyncMock()

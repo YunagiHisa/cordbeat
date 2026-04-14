@@ -214,7 +214,7 @@ cordbeat/
 │   ├── discord_adapter.py # Discord bot adapter
 │   ├── telegram_adapter.py# Telegram bot adapter
 │   └── adapter_runner.py  # Standalone adapter launcher
-├── tests/                 # Test suite (215+ tests)
+├── tests/                 # Test suite (460 tests)
 ├── docs/                  # Design & architecture documentation
 ├── Dockerfile             # Core container image
 ├── Dockerfile.adapter     # Adapter container image

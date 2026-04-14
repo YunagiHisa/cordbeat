@@ -19,6 +19,10 @@ ai_backend:
   provider: ollama          # ollama | openai | openai_compat
   base_url: "http://localhost:11434"
   model: "llama3"
+  timeout: 120.0             # request timeout in seconds
+  max_tokens: 1024           # max tokens per generation
+  # options:                 # provider-specific options
+  #   api_key: ""           # required for openai/openai_compat
 
 heartbeat:
   default_interval_minutes: 60
@@ -33,6 +37,10 @@ memory:
   chroma_path: "data/chroma"
   decay_rate: 0.1
   archive_threshold: 0.05
+  conversation_history_limit: 20     # recent messages loaded into context
+  memory_search_results: 3           # vector search results per query
+  diary_max_tokens: 512              # max tokens for diary generation
+  facts_per_message_limit: 5         # max facts extracted per message
   extraction_temperature: 0.2          # AI temperature for memory extraction
   flashbulb_intensity_threshold: 0.8   # emotion intensity to trigger flashbulb memory
   max_user_input_len: 2000             # max chars for sanitized user input
@@ -68,7 +76,9 @@ adapters:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60  # max seconds between reconnection attempts
-  # telegram:
-  #   core_ws_url: "ws://localhost:8765"
-  #   enabled: false
-  #   reconnect_max_backoff: 60
+  telegram:
+    core_ws_url: "ws://localhost:8765"
+    enabled: false
+    reconnect_max_backoff: 60
+    # options:
+    #   token: "YOUR_TELEGRAM_BOT_TOKEN"

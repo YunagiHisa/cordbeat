@@ -69,6 +69,7 @@ class UserSummary:
     last_topic: str = ""
     emotional_tone: str = ""
     attention_score: float = 0.5
+    preferred_platform: str | None = None
 
     def __post_init__(self) -> None:
         self.attention_score = max(0.0, min(1.0, self.attention_score))

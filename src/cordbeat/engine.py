@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 
 from cordbeat.ai_backend import AIBackend
@@ -343,6 +344,15 @@ class CoreEngine:
         if cmd == "/unlink":
             await self._cmd_unlink(message, arg)
             return True
+        if cmd == "/name":
+            await self._cmd_name(message, arg)
+            return True
+        if cmd == "/quiet":
+            await self._cmd_quiet(message, arg)
+            return True
+        if cmd == "/prefer":
+            await self._cmd_prefer(message, arg)
+            return True
 
         # Unknown slash command — fall through to normal processing
         return False
@@ -504,6 +514,117 @@ class CoreEngine:
         )
         await self._audit_link_event(
             message, "unlink", f"Unlinked {target} from user {user_id}"
+        )
+
+    async def _cmd_name(self, message: GatewayMessage, name: str) -> None:
+        """Change the SOUL character name."""
+        if not name:
+            current = self._soul.name
+            await self._send_reply(
+                message, f"Current name: {current}\nUsage: /name <new_name>"
+            )
+            return
+
+        self._soul.update_name(name)
+        await self._send_reply(
+            message, f"✅ Name updated to: {name}"
+        )
+        logger.info("SOUL name changed to '%s'", name)
+
+    async def _cmd_quiet(self, message: GatewayMessage, arg: str) -> None:
+        """Update HEARTBEAT quiet hours."""
+        if not arg:
+            start, end = self._soul.quiet_hours
+            await self._send_reply(
+                message,
+                f"Current quiet hours: {start} - {end}\n"
+                "Usage: /quiet <start> <end>  (e.g. /quiet 01:00 07:00)",
+            )
+            return
+
+        parts = arg.split()
+        if len(parts) != 2:
+            await self._send_reply(
+                message,
+                "Usage: /quiet <start> <end>  (e.g. /quiet 01:00 07:00)",
+            )
+            return
+
+        start, end = parts
+        # Basic HH:MM validation
+        if not re.fullmatch(r"\d{1,2}:\d{2}", start) or not re.fullmatch(
+            r"\d{1,2}:\d{2}", end
+        ):
+            await self._send_reply(
+                message, "Invalid time format. Use HH:MM (e.g. 01:00)."
+            )
+            return
+
+        self._soul.update_quiet_hours(start, end)
+        await self._send_reply(
+            message, f"✅ Quiet hours updated: {start} - {end}"
+        )
+        logger.info("Quiet hours changed to %s - %s", start, end)
+
+    async def _cmd_prefer(
+        self, message: GatewayMessage, platform: str
+    ) -> None:
+        """Set preferred reply platform for HEARTBEAT messages."""
+        user_id = await self._memory.resolve_user(
+            message.adapter_id, message.platform_user_id
+        )
+        if user_id is None:
+            await self._send_reply(message, "User not found.")
+            return
+
+        if not platform:
+            user = await self._memory.get_or_create_user(
+                user_id, message.platform_user_id
+            )
+            current = user.preferred_platform or "(not set)"
+            await self._send_reply(
+                message,
+                f"Preferred platform: {current}\n"
+                "Usage: /prefer <platform>  (e.g. /prefer discord)\n"
+                "Use /prefer clear to reset.",
+            )
+            return
+
+        user = await self._memory.get_or_create_user(
+            user_id, message.platform_user_id
+        )
+        if platform.lower() == "clear":
+            user.preferred_platform = None
+            await self._memory.update_user_summary(user)
+            await self._send_reply(
+                message,
+                "✅ Preferred platform cleared. "
+                "HEARTBEAT will reply on the last-used platform.",
+            )
+            return
+
+        # Verify the platform is actually linked
+        links = await self._memory.get_linked_platforms(user_id)
+        linked_ids = {lnk["adapter_id"] for lnk in links}
+        target = platform.lower()
+        if target not in linked_ids:
+            await self._send_reply(
+                message,
+                f"Platform '{target}' is not linked to your account. "
+                f"Linked: {', '.join(sorted(linked_ids))}",
+            )
+            return
+
+        user.preferred_platform = target
+        await self._memory.update_user_summary(user)
+        await self._send_reply(
+            message,
+            f"✅ Preferred platform set to: {target}",
+        )
+        logger.info(
+            "User %s preferred platform set to '%s'",
+            user_id,
+            target,
         )
 
     async def _audit_link_event(

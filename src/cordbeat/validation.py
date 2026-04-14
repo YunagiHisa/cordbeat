@@ -25,6 +25,7 @@ def validate_heartbeat_decision(data: dict[str, Any]) -> ValidationResult:
         "skill",
         "propose_improvement",
         "propose_trait_change",
+        "propose_skill",
         "none",
     }
 

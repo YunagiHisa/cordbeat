@@ -29,7 +29,12 @@ async def main(config_path: str = "config.yaml") -> None:
     logger.info("Configuration loaded from %s", config_path)
 
     # ── Initialize subsystems ─────────────────────────────────────
-    soul = Soul(config.soul_dir)
+    soul = Soul(
+        config.soul.soul_dir,
+        emotion_decay_rate=config.soul.emotion_decay_rate,
+        emotion_baseline_intensity=config.soul.emotion_baseline_intensity,
+        emotion_secondary_clear_threshold=config.soul.emotion_secondary_clear_threshold,
+    )
     logger.info("SOUL loaded: %s", soul.name)
 
     memory = MemoryStore(config.memory)

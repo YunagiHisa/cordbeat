@@ -818,8 +818,10 @@ class MemoryStore:
         self,
         requester_adapter_id: str,
         requester_platform_user_id: str,
-        token_expiry_minutes: int = 10,
+        token_expiry_minutes: int | None = None,
     ) -> str:
+        if token_expiry_minutes is None:
+            token_expiry_minutes = self._config.token_expiry_minutes
         return await self._records.store_link_token(  # type: ignore[union-attr]
             requester_adapter_id,
             requester_platform_user_id,
@@ -918,8 +920,10 @@ class MemoryStore:
     async def trim_old_messages(
         self,
         user_id: str,
-        keep: int = 100,
+        keep: int | None = None,
     ) -> int:
+        if keep is None:
+            keep = self._config.message_trim_keep
         return await self._conversations.trim_old_messages(user_id, keep)  # type: ignore[union-attr]
 
     # ── Semantic / episodic memory (delegates to _VectorMemory) ───
@@ -1008,7 +1012,9 @@ class MemoryStore:
     ) -> list[dict[str, Any]]:
         """Get precomputed recall hints for a user, optionally by date."""
         all_hints = await self._records.get_certain_records(  # type: ignore[union-attr]
-            user_id, record_type="recall_hint", limit=20
+            user_id,
+            record_type="recall_hint",
+            limit=self._config.recall_hints_limit,
         )
         if date_str is None:
             return all_hints
@@ -1061,17 +1067,21 @@ class MemoryStore:
         source_memory_ids: list[str],
         *,
         max_depth: int = 1,
-        max_results: int = 10,
+        max_results: int | None = None,
     ) -> list[str]:
         """Get linked memory contents for the given source memory IDs.
 
         With max_depth > 1, follows chain links transitively (multi-hop).
         Results are sorted by vector distance (closest first) when available.
         """
+        if max_results is None:
+            max_results = self._config.chain_link_max_results
         if not source_memory_ids:
             return []
         all_links = await self._records.get_certain_records(  # type: ignore[union-attr]
-            user_id, record_type="chain_link", limit=100
+            user_id,
+            record_type="chain_link",
+            limit=self._config.chain_link_query_limit,
         )
 
         scored: list[tuple[float, str]] = []

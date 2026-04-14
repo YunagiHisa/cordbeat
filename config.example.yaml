@@ -36,8 +36,26 @@ memory:
   extraction_temperature: 0.2          # AI temperature for memory extraction
   flashbulb_intensity_threshold: 0.8   # emotion intensity to trigger flashbulb memory
   max_user_input_len: 2000             # max chars for sanitized user input
+  diary_temperature: 0.5               # AI temperature for diary generation
+  consolidation_temperature: 0.2       # AI temperature for memory consolidation
+  consolidation_episode_results: 10    # episodic memories to review during consolidation
+  consolidation_facts_limit: 5         # max facts promoted per consolidation
+  chain_link_episode_results: 5        # today's episodes for chain link building
+  chain_link_related_results: 3        # related memories per episode for chain linking
+  recall_keyword_search_results: 2     # results per recall keyword search
+  emotion_recall_search_results: 2     # results for emotion-based recall
+  chain_recall_max_depth: 2            # max depth for chain recall traversal
+  recall_hints_limit: 20               # max recall hints per user
+  message_trim_keep: 100               # messages to keep per user when trimming
+  token_expiry_minutes: 10             # link token expiry in minutes
+  chain_link_query_limit: 100          # max chain link records to query
+  chain_link_max_results: 10           # max chain link results returned
 
-soul_dir: "data/soul"
+soul:
+  soul_dir: "data/soul"
+  emotion_decay_rate: 0.05             # per-tick emotion intensity decay
+  emotion_baseline_intensity: 0.3      # emotion intensity baseline (decay target)
+  emotion_secondary_clear_threshold: 0.1  # below this, secondary emotion is cleared
 skills_dir: "skills"
 data_dir: "data"
 
@@ -45,6 +63,8 @@ adapters:
   discord:
     core_ws_url: "ws://localhost:8765"
     enabled: false
+    reconnect_max_backoff: 60  # max seconds between reconnection attempts
   # telegram:
   #   core_ws_url: "ws://localhost:8765"
   #   enabled: false
+  #   reconnect_max_backoff: 60

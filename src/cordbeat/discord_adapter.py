@@ -28,6 +28,7 @@ class DiscordAdapter(RetryableConnection):
         self._bot: Any = None
         self._ws: Any = None
         self._running = False
+        self._max_backoff = config.reconnect_max_backoff
         # Cache last channel per user for guild replies
         self._user_channels: dict[str, int] = {}
 

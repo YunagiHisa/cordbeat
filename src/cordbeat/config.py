@@ -23,6 +23,7 @@ class GatewayConfig:
 class AdapterConfig:
     core_ws_url: str = "ws://localhost:8765"
     enabled: bool = True
+    reconnect_max_backoff: int = 60
     options: dict[str, Any] = field(default_factory=dict)
 
 
@@ -49,6 +50,28 @@ class MemoryConfig:
     extraction_temperature: float = 0.2
     flashbulb_intensity_threshold: float = 0.8
     max_user_input_len: int = 2000
+    diary_temperature: float = 0.5
+    consolidation_temperature: float = 0.2
+    consolidation_episode_results: int = 10
+    consolidation_facts_limit: int = 5
+    chain_link_episode_results: int = 5
+    chain_link_related_results: int = 3
+    recall_keyword_search_results: int = 2
+    emotion_recall_search_results: int = 2
+    chain_recall_max_depth: int = 2
+    recall_hints_limit: int = 20
+    message_trim_keep: int = 100
+    token_expiry_minutes: int = 10
+    chain_link_query_limit: int = 100
+    chain_link_max_results: int = 10
+
+
+@dataclass
+class SoulConfig:
+    soul_dir: str = "data/soul"
+    emotion_decay_rate: float = 0.05
+    emotion_baseline_intensity: float = 0.3
+    emotion_secondary_clear_threshold: float = 0.1
 
 
 @dataclass
@@ -68,9 +91,14 @@ class Config:
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     ai_backend: AIBackendConfig = field(default_factory=AIBackendConfig)
-    soul_dir: str = "data/soul"
+    soul: SoulConfig = field(default_factory=SoulConfig)
     skills_dir: str = "skills"
     data_dir: str = "data"
+
+    @property
+    def soul_dir(self) -> str:
+        """Backward-compatible accessor for soul directory path."""
+        return self.soul.soul_dir
 
 
 def _build_dataclass(cls: type, data: dict[str, Any]) -> Any:
@@ -201,13 +229,23 @@ def load_config(path: str | Path) -> Config:
         if isinstance(adapter_raw, dict):
             adapters[name] = _build_dataclass(AdapterConfig, adapter_raw)
 
+    # Handle soul config: support both legacy "soul_dir" and new "soul" section
+    soul_raw = raw.get("soul", {})
+    if isinstance(soul_raw, str):
+        soul_raw = {"soul_dir": soul_raw}
+    elif not isinstance(soul_raw, dict):
+        soul_raw = {}
+    if "soul_dir" in raw and "soul_dir" not in soul_raw:
+        soul_raw["soul_dir"] = raw["soul_dir"]
+    soul = _build_dataclass(SoulConfig, soul_raw)
+
     return Config(
         gateway=gateway,
         adapters=adapters,
         heartbeat=heartbeat,
         memory=memory,
         ai_backend=ai_backend,
-        soul_dir=raw.get("soul_dir", "data/soul"),
+        soul=soul,
         skills_dir=raw.get("skills_dir", "skills"),
         data_dir=raw.get("data_dir", "data"),
     )

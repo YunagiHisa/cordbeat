@@ -147,13 +147,17 @@ class CoreEngine:
         seen_ids = {m["id"] for m in semantic_memories + episodic_memories}
         for keyword in recall_keywords:
             for mem in await self._memory.search_semantic(
-                user_id, keyword, n_results=2
+                user_id,
+                keyword,
+                n_results=self._memory_config.recall_keyword_search_results,
             ):
                 if mem["id"] not in seen_ids:
                     semantic_memories.append(mem)
                     seen_ids.add(mem["id"])
             for mem in await self._memory.search_episodic(
-                user_id, keyword, n_results=2
+                user_id,
+                keyword,
+                n_results=self._memory_config.recall_keyword_search_results,
             ):
                 if mem["id"] not in seen_ids:
                     episodic_memories.append(mem)
@@ -166,7 +170,7 @@ class CoreEngine:
                 user_id,
                 current_emotion,
                 message.content,
-                n_results=2,
+                n_results=self._memory_config.emotion_recall_search_results,
             ):
                 if mem["id"] not in seen_ids:
                     episodic_memories.append(mem)
@@ -176,7 +180,9 @@ class CoreEngine:
         try:
             recalled_ids = list(seen_ids)
             chain_contents = await self._memory.get_chain_links(
-                user_id, recalled_ids, max_depth=2
+                user_id,
+                recalled_ids,
+                max_depth=self._memory_config.chain_recall_max_depth,
             )
             existing_contents = {
                 m["content"] for m in semantic_memories + episodic_memories

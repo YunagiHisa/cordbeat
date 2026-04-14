@@ -97,11 +97,21 @@ def _check_permission(field: str, caller: SoulCaller) -> None:
 class Soul:
     """Manages the agent's identity, personality, and emotional state."""
 
-    def __init__(self, soul_dir: str | Path) -> None:
+    def __init__(
+        self,
+        soul_dir: str | Path,
+        *,
+        emotion_decay_rate: float = _DECAY_RATE,
+        emotion_baseline_intensity: float = _BASELINE_INTENSITY,
+        emotion_secondary_clear_threshold: float = _SECONDARY_CLEAR_THRESHOLD,
+    ) -> None:
         self._soul_dir = Path(soul_dir)
         self._core: MappingProxyType[str, Any] = MappingProxyType({})
         self._soul: dict[str, Any] = {}
         self._notes: str = ""
+        self._emotion_decay_rate = emotion_decay_rate
+        self._emotion_baseline_intensity = emotion_baseline_intensity
+        self._emotion_secondary_clear_threshold = emotion_secondary_clear_threshold
         self._load()
 
     # ── properties ────────────────────────────────────────────────────
@@ -195,11 +205,11 @@ class Soul:
         # Decay primary intensity toward baseline
         primary_intensity = float(emo.get("primary_intensity", 0.5))
         if emo.get("primary", Emotion.CALM.value) != Emotion.CALM.value:
-            new_intensity = primary_intensity - _DECAY_RATE
-            if new_intensity <= _BASELINE_INTENSITY:
+            new_intensity = primary_intensity - self._emotion_decay_rate
+            if new_intensity <= self._emotion_baseline_intensity:
                 # Emotion faded enough — revert to calm
                 emo["primary"] = Emotion.CALM.value
-                emo["primary_intensity"] = _BASELINE_INTENSITY
+                emo["primary_intensity"] = self._emotion_baseline_intensity
             else:
                 emo["primary_intensity"] = new_intensity
             changed = True
@@ -207,8 +217,8 @@ class Soul:
         # Decay secondary
         sec_intensity = float(emo.get("secondary_intensity", 0.0))
         if sec_intensity > 0:
-            new_sec = sec_intensity - _DECAY_RATE
-            if new_sec < _SECONDARY_CLEAR_THRESHOLD:
+            new_sec = sec_intensity - self._emotion_decay_rate
+            if new_sec < self._emotion_secondary_clear_threshold:
                 emo.pop("secondary", None)
                 emo["secondary_intensity"] = 0.0
             else:

@@ -255,6 +255,9 @@ class CoreEngine:
             message.platform_user_id,
             message.adapter_id,
         )
+        await self._audit_link_event(
+            message, "link_request", f"Token issued on {message.adapter_id}"
+        )
 
     async def _handle_link_confirm(self, message: GatewayMessage) -> None:
         """Verify a link token and merge the requester's platform."""
@@ -310,6 +313,12 @@ class CoreEngine:
             requester_platform_user_id,
             confirmer_user_id,
         )
+        await self._audit_link_event(
+            message,
+            "link_confirm",
+            f"Linked {requester_adapter_id}/{requester_platform_user_id} "
+            f"to user {confirmer_user_id}",
+        )
 
     # ── Slash Commands ────────────────────────────────────────────────
 
@@ -327,6 +336,12 @@ class CoreEngine:
             return True
         if cmd == "/proposals":
             await self._cmd_proposals(message)
+            return True
+        if cmd == "/link":
+            await self._cmd_link(message)
+            return True
+        if cmd == "/unlink":
+            await self._cmd_unlink(message, arg)
             return True
 
         # Unknown slash command — fall through to normal processing
@@ -430,6 +445,88 @@ class CoreEngine:
             content = p["content"][:60]
             lines.append(f"  • {p['id'][:8]}… — {content}")
         await self._send_reply(message, "\n".join(lines))
+
+    async def _cmd_link(self, message: GatewayMessage) -> None:
+        """Generate a link token for cross-platform account linking."""
+        token = await self._memory.store_link_token(
+            requester_adapter_id=message.adapter_id,
+            requester_platform_user_id=message.platform_user_id,
+        )
+        await self._send_reply(
+            message,
+            f"Link token generated: {token}\n"
+            "Send this token from your other platform "
+            "using the link confirm command.",
+        )
+        await self._audit_link_event(
+            message, "link_request", f"Token issued on {message.adapter_id}"
+        )
+
+    async def _cmd_unlink(self, message: GatewayMessage, platform: str) -> None:
+        """Remove a platform link from the current user."""
+        if not platform:
+            await self._send_reply(message, "Usage: /unlink <platform>")
+            return
+
+        user_id = await self._memory.resolve_user(
+            message.adapter_id, message.platform_user_id
+        )
+        if user_id is None:
+            await self._send_reply(message, "User not found.")
+            return
+
+        # Prevent unlinking the current platform (last remaining link check)
+        links = await self._memory.get_linked_platforms(user_id)
+        if len(links) <= 1:
+            await self._send_reply(
+                message, "Cannot unlink: you must have at least one linked platform."
+            )
+            return
+
+        target = platform.lower()
+        if target == message.adapter_id:
+            await self._send_reply(
+                message,
+                "Cannot unlink the platform you are currently using. "
+                "Send /unlink from a different platform.",
+            )
+            return
+
+        removed = await self._memory.unlink_platform(user_id, target)
+        if not removed:
+            await self._send_reply(
+                message, f"Platform '{target}' is not linked to your account."
+            )
+            return
+
+        await self._send_reply(
+            message, f"✅ Platform '{target}' has been unlinked from your account."
+        )
+        await self._audit_link_event(
+            message, "unlink", f"Unlinked {target} from user {user_id}"
+        )
+
+    async def _audit_link_event(
+        self,
+        message: GatewayMessage,
+        action: str,
+        detail: str,
+    ) -> None:
+        """Record a link/unlink operation in the audit log."""
+        user_id = await self._memory.resolve_user(
+            message.adapter_id, message.platform_user_id
+        )
+        await self._memory.add_certain_record(
+            user_id=user_id or "__system__",
+            content=detail,
+            record_type="link_audit",
+            metadata={
+                "action": action,
+                "adapter_id": message.adapter_id,
+                "platform_user_id": message.platform_user_id,
+            },
+        )
+        logger.info("Link audit: %s — %s", action, detail)
 
     async def _send_reply(self, message: GatewayMessage, content: str) -> None:
         """Send a reply message back to the user."""

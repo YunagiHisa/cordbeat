@@ -526,9 +526,7 @@ class CoreEngine:
             return
 
         self._soul.update_name(name)
-        await self._send_reply(
-            message, f"✅ Name updated to: {name}"
-        )
+        await self._send_reply(message, f"✅ Name updated to: {name}")
         logger.info("SOUL name changed to '%s'", name)
 
     async def _cmd_quiet(self, message: GatewayMessage, arg: str) -> None:
@@ -561,14 +559,10 @@ class CoreEngine:
             return
 
         self._soul.update_quiet_hours(start, end)
-        await self._send_reply(
-            message, f"✅ Quiet hours updated: {start} - {end}"
-        )
+        await self._send_reply(message, f"✅ Quiet hours updated: {start} - {end}")
         logger.info("Quiet hours changed to %s - %s", start, end)
 
-    async def _cmd_prefer(
-        self, message: GatewayMessage, platform: str
-    ) -> None:
+    async def _cmd_prefer(self, message: GatewayMessage, platform: str) -> None:
         """Set preferred reply platform for HEARTBEAT messages."""
         user_id = await self._memory.resolve_user(
             message.adapter_id, message.platform_user_id
@@ -590,9 +584,7 @@ class CoreEngine:
             )
             return
 
-        user = await self._memory.get_or_create_user(
-            user_id, message.platform_user_id
-        )
+        user = await self._memory.get_or_create_user(user_id, message.platform_user_id)
         if platform.lower() == "clear":
             user.preferred_platform = None
             await self._memory.update_user_summary(user)

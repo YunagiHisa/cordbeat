@@ -350,9 +350,7 @@ class HeartbeatLoop:
             skills=self._skills.get_skill_descriptions_for_prompt(),
             target_user_id=user.user_id,
             target_adapter_id=(
-                user.preferred_platform
-                or user.last_platform
-                or "unknown"
+                user.preferred_platform or user.last_platform or "unknown"
             ),
         )
 

@@ -171,8 +171,7 @@ class _UserStore:
     ) -> bool:
         """Remove a platform link. Returns True if a row was deleted."""
         cursor = await self._db.execute(
-            "DELETE FROM platform_links "
-            "WHERE user_id = ? AND adapter_id = ?",
+            "DELETE FROM platform_links WHERE user_id = ? AND adapter_id = ?",
             (user_id, adapter_id),
         )
         await self._db.commit()
@@ -184,8 +183,7 @@ class _UserStore:
     ) -> list[dict[str, str]]:
         """Return all platform links for a user."""
         cursor = await self._db.execute(
-            "SELECT adapter_id, platform_user_id FROM platform_links "
-            "WHERE user_id = ?",
+            "SELECT adapter_id, platform_user_id FROM platform_links WHERE user_id = ?",
             (user_id,),
         )
         rows = await cursor.fetchall()

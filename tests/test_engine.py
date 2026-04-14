@@ -1692,9 +1692,7 @@ class TestLinkCommands:
         )
         await engine.handle_message(msg)
 
-        records = await memory.get_certain_records(
-            "u1", record_type="link_audit"
-        )
+        records = await memory.get_certain_records("u1", record_type="link_audit")
         assert len(records) >= 1
         assert "unlink" in records[-1]["content"].lower()
 
@@ -1717,13 +1715,9 @@ class TestLinkCommands:
         )
         await engine.handle_message(msg)
 
-        records = await memory.get_certain_records(
-            "u1", record_type="link_audit"
-        )
+        records = await memory.get_certain_records("u1", record_type="link_audit")
         assert len(records) >= 1
-        assert "link_confirm" in json.loads(
-            records[-1]["metadata"]
-        ).get("action", "")
+        assert "link_confirm" in json.loads(records[-1]["metadata"]).get("action", "")
 
 
 class TestSoulCommands:

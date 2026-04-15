@@ -13,12 +13,13 @@ logger = logging.getLogger("cordbeat")
 
 
 async def _run_adapter(adapter_name: str, config_path: str) -> None:
+    config = load_config(config_path)
+
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        level=getattr(logging, config.log.level.upper(), logging.INFO),
+        format=config.log.format,
     )
 
-    config = load_config(config_path)
     adapter_cfg = config.adapters.get(adapter_name)
 
     if adapter_cfg is None:

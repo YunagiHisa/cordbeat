@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from cordbeat.config import AdapterConfig
+from cordbeat.config import AdapterConfig, LogConfig
 
 
 class TestDiscordAdapter:
@@ -344,6 +344,7 @@ class TestAdapterRunner:
         config_mock.adapters = {
             "discord": AdapterConfig(enabled=False),
         }
+        config_mock.log = LogConfig()
         with (
             patch("cordbeat.adapter_runner.load_config", return_value=config_mock),
             patch("cordbeat.adapter_runner.logger") as mock_logger,

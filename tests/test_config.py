@@ -238,3 +238,42 @@ class TestLoadConfigWithEnv:
             assert config.gateway.port == 7777
         finally:
             os.environ.pop("CORDBEAT_GATEWAY__PORT", None)
+
+
+class TestLogConfig:
+    def test_default_log_config(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text("", encoding="utf-8")
+        config = load_config(cfg_file)
+        assert config.log.level == "INFO"
+        assert "%(asctime)s" in config.log.format
+
+    def test_custom_log_level(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "log:\n  level: DEBUG\n",
+            encoding="utf-8",
+        )
+        config = load_config(cfg_file)
+        assert config.log.level == "DEBUG"
+
+    def test_custom_log_format(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            'log:\n  format: "%(message)s"\n',
+            encoding="utf-8",
+        )
+        config = load_config(cfg_file)
+        assert config.log.format == "%(message)s"
+
+    def test_env_override_log_level(self, tmp_path: Path) -> None:
+        import os
+
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text("", encoding="utf-8")
+        os.environ["CORDBEAT_LOG__LEVEL"] = "WARNING"
+        try:
+            config = load_config(cfg_file)
+            assert config.log.level == "WARNING"
+        finally:
+            os.environ.pop("CORDBEAT_LOG__LEVEL", None)

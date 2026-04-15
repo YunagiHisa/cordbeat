@@ -20,6 +20,12 @@ class GatewayConfig:
 
 
 @dataclass
+class LogConfig:
+    level: str = "INFO"
+    format: str = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+
+
+@dataclass
 class AdapterConfig:
     core_ws_url: str = "ws://localhost:8765"
     enabled: bool = True
@@ -96,6 +102,7 @@ class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     ai_backend: AIBackendConfig = field(default_factory=AIBackendConfig)
     soul: SoulConfig = field(default_factory=SoulConfig)
+    log: LogConfig = field(default_factory=LogConfig)
     skills_dir: str = "skills"
     data_dir: str = "data"
 
@@ -243,6 +250,8 @@ def load_config(path: str | Path) -> Config:
         soul_raw["soul_dir"] = raw["soul_dir"]
     soul = _build_dataclass(SoulConfig, soul_raw)
 
+    log = _build_dataclass(LogConfig, raw.get("log", {}))
+
     return Config(
         gateway=gateway,
         adapters=adapters,
@@ -250,6 +259,7 @@ def load_config(path: str | Path) -> Config:
         memory=memory,
         ai_backend=ai_backend,
         soul=soul,
+        log=log,
         skills_dir=raw.get("skills_dir", "skills"),
         data_dir=raw.get("data_dir", "data"),
     )

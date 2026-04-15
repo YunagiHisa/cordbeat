@@ -15,6 +15,10 @@ gateway:
   port: 8765
   handshake_timeout: 10.0  # seconds to wait for adapter handshake
 
+log:
+  level: "INFO"                                            # DEBUG | INFO | WARNING | ERROR
+  format: "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+
 ai_backend:
   provider: ollama          # ollama | openai | openai_compat
   base_url: "http://localhost:11434"

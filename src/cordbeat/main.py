@@ -20,12 +20,13 @@ logger = logging.getLogger("cordbeat")
 
 
 async def main(config_path: str = "config.yaml") -> None:
+    config = load_config(config_path)
+
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        level=getattr(logging, config.log.level.upper(), logging.INFO),
+        format=config.log.format,
     )
 
-    config = load_config(config_path)
     logger.info("Configuration loaded from %s", config_path)
 
     # ── Initialize subsystems ─────────────────────────────────────

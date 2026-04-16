@@ -282,10 +282,17 @@ class TestGatewayServer:
         assert queued_msg.content == "hello world"
 
 
+class _ConcreteConnection(RetryableConnection):
+    """Concrete subclass for testing the ABC."""
+
+    async def _dispatch_core_message(self, platform_user_id: str, content: str) -> None:
+        raise NotImplementedError
+
+
 class TestRetryableConnection:
     async def test_dispatch_core_message_raises(self) -> None:
         """Base _dispatch_core_message raises NotImplementedError."""
-        conn = RetryableConnection()
+        conn = _ConcreteConnection()
         try:
             await conn._dispatch_core_message("u1", "hello")
             raise AssertionError("Should have raised")  # noqa: TRY301
@@ -293,7 +300,7 @@ class TestRetryableConnection:
             pass
 
     async def test_listen_core_dispatches_message(self) -> None:
-        conn = RetryableConnection()
+        conn = _ConcreteConnection()
         dispatched: list[tuple[str, str]] = []
 
         async def fake_dispatch(uid: str, content: str) -> None:
@@ -317,7 +324,7 @@ class TestRetryableConnection:
         assert dispatched == [("u1", "hi")]
 
     async def test_listen_core_ignores_unknown_types(self) -> None:
-        conn = RetryableConnection()
+        conn = _ConcreteConnection()
         dispatched: list[tuple[str, str]] = []
 
         async def fake_dispatch(uid: str, content: str) -> None:

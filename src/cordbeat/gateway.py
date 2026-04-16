@@ -47,7 +47,7 @@ class BaseAdapter(ABC):
         """Handle disconnection from Core."""
 
 
-class RetryableConnection:
+class RetryableConnection(ABC):
     """Mixin / helper for adapters that connect to Core via WebSocket.
 
     Handles exponential-backoff reconnection and incoming message dispatch.
@@ -92,9 +92,9 @@ class RetryableConnection:
         except websockets.ConnectionClosed:
             logger.info("Core connection closed")
 
+    @abstractmethod
     async def _dispatch_core_message(self, platform_user_id: str, content: str) -> None:
         """Override in subclass to route messages to the platform."""
-        raise NotImplementedError
 
 
 # ── Message queue ─────────────────────────────────────────────────────

@@ -178,10 +178,15 @@ def _apply_env_overrides(raw: dict[str, Any]) -> None:
 
 
 def _coerce_value(value: str) -> Any:
-    """Convert string env var to an appropriate Python type."""
-    if value.lower() in ("true", "1", "yes"):
+    """Convert string env var to an appropriate Python type.
+
+    Only the words ``true/false/yes/no`` are treated as booleans so that
+    numeric strings like ``"0"`` and ``"1"`` are correctly coerced to
+    integers rather than booleans.
+    """
+    if value.lower() in ("true", "yes"):
         return True
-    if value.lower() in ("false", "0", "no"):
+    if value.lower() in ("false", "no"):
         return False
     try:
         return int(value)

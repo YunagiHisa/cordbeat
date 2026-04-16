@@ -107,15 +107,19 @@ class TestLoadConfig:
 
 class TestCoerceValue:
     def test_true_values(self) -> None:
-        for v in ("true", "True", "1", "yes"):
+        for v in ("true", "True", "yes"):
             assert _coerce_value(v) is True
 
     def test_false_values(self) -> None:
-        for v in ("false", "False", "0", "no"):
+        for v in ("false", "False", "no"):
             assert _coerce_value(v) is False
 
     def test_int(self) -> None:
         assert _coerce_value("42") == 42
+
+    def test_int_zero_and_one(self) -> None:
+        assert _coerce_value("0") == 0
+        assert _coerce_value("1") == 1
 
     def test_float(self) -> None:
         assert _coerce_value("0.5") == 0.5

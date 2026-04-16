@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable, Coroutine
 from datetime import datetime
+from typing import Any
 
 from cordbeat.ai_backend import AIBackend
 from cordbeat.config import MemoryConfig
@@ -329,33 +331,22 @@ class CoreEngine:
         cmd = parts[0].lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
 
-        if cmd == "/approve":
-            await self._cmd_approve(message, arg)
-            return True
-        if cmd == "/reject":
-            await self._cmd_reject(message, arg)
-            return True
-        if cmd == "/proposals":
-            await self._cmd_proposals(message)
-            return True
-        if cmd == "/link":
-            await self._cmd_link(message)
-            return True
-        if cmd == "/unlink":
-            await self._cmd_unlink(message, arg)
-            return True
-        if cmd == "/name":
-            await self._cmd_name(message, arg)
-            return True
-        if cmd == "/quiet":
-            await self._cmd_quiet(message, arg)
-            return True
-        if cmd == "/prefer":
-            await self._cmd_prefer(message, arg)
-            return True
+        handlers: dict[str, Callable[[], Coroutine[Any, Any, None]]] = {
+            "/approve": lambda: self._cmd_approve(message, arg),
+            "/reject": lambda: self._cmd_reject(message, arg),
+            "/proposals": lambda: self._cmd_proposals(message),
+            "/link": lambda: self._cmd_link(message),
+            "/unlink": lambda: self._cmd_unlink(message, arg),
+            "/name": lambda: self._cmd_name(message, arg),
+            "/quiet": lambda: self._cmd_quiet(message, arg),
+            "/prefer": lambda: self._cmd_prefer(message, arg),
+        }
 
-        # Unknown slash command — fall through to normal processing
-        return False
+        handler = handlers.get(cmd)
+        if handler is None:
+            return False
+        await handler()
+        return True
 
     async def _cmd_approve(self, message: GatewayMessage, proposal_id: str) -> None:
         """Approve a pending proposal."""

@@ -201,9 +201,9 @@ class HeartbeatLoop:
         """Execute one HEARTBEAT cycle. Returns next interval in minutes."""
         quiet_start, quiet_end = self._soul.quiet_hours
         try:
-            tz = zoneinfo.ZoneInfo(self._config.timezone)
+            tz: tzinfo = zoneinfo.ZoneInfo(self._config.timezone)
         except (KeyError, zoneinfo.ZoneInfoNotFoundError, Exception):
-            tz = UTC  # type: ignore[assignment]
+            tz = UTC
         if _in_quiet_hours(quiet_start, quiet_end, tz=tz):
             if not self._sleep_done_today:
                 await self._run_sleep_phase()

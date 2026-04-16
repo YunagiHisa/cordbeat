@@ -771,22 +771,55 @@ class MemoryStore:
         self._config = config
         self._db_path = Path(config.sqlite_path)
         self._chroma_path = Path(config.chroma_path)
-        self._conn: aiosqlite.Connection | None = None
-        self._users: _UserStore | None = None
-        self._records: _RecordStore | None = None
-        self._conversations: _ConversationStore | None = None
-        self._vectors: _VectorMemory | None = None
+        self.__conn: aiosqlite.Connection | None = None
+        self.__users: _UserStore | None = None
+        self.__records: _RecordStore | None = None
+        self.__conversations: _ConversationStore | None = None
+        self.__vectors: _VectorMemory | None = None
+
+    # ── Type-narrowed accessors (raise if initialize() was not called) ──
+
+    @property
+    def _conn(self) -> aiosqlite.Connection:
+        if self.__conn is None:
+            raise RuntimeError("MemoryStore not initialized: call initialize() first")
+        return self.__conn
+
+    @property
+    def _users(self) -> _UserStore:
+        if self.__users is None:
+            raise RuntimeError("MemoryStore not initialized: call initialize() first")
+        return self.__users
+
+    @property
+    def _records(self) -> _RecordStore:
+        if self.__records is None:
+            raise RuntimeError("MemoryStore not initialized: call initialize() first")
+        return self.__records
+
+    @property
+    def _conversations(self) -> _ConversationStore:
+        if self.__conversations is None:
+            raise RuntimeError("MemoryStore not initialized: call initialize() first")
+        return self.__conversations
+
+    @property
+    def _vectors(self) -> _VectorMemory:
+        if self.__vectors is None:
+            raise RuntimeError("MemoryStore not initialized: call initialize() first")
+        return self.__vectors
 
     async def initialize(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = await aiosqlite.connect(str(self._db_path))
-        self._conn.row_factory = aiosqlite.Row
-        await self._conn.executescript(_SCHEMA)
-        await self._conn.commit()
+        conn = await aiosqlite.connect(str(self._db_path))
+        conn.row_factory = aiosqlite.Row
+        await conn.executescript(_SCHEMA)
+        await conn.commit()
+        self.__conn = conn
 
-        self._users = _UserStore(self._conn)
-        self._records = _RecordStore(self._conn)
-        self._conversations = _ConversationStore(self._conn)
+        self.__users = _UserStore(conn)
+        self.__records = _RecordStore(conn)
+        self.__conversations = _ConversationStore(conn)
 
         self._chroma_path.mkdir(parents=True, exist_ok=True)
         import chromadb
@@ -803,13 +836,13 @@ class MemoryStore:
             client.get_or_create_collection,
             name="episodic_memory",
         )
-        self._vectors = _VectorMemory(semantic, episodic)
+        self.__vectors = _VectorMemory(semantic, episodic)
         logger.info("Memory store initialized")
 
     async def close(self) -> None:
-        if self._conn:
-            await self._conn.close()
-            self._conn = None
+        if self.__conn:
+            await self.__conn.close()
+            self.__conn = None
 
     # ── User management (delegates to _UserStore) ─────────────────
 
@@ -818,13 +851,13 @@ class MemoryStore:
         user_id: str,
         display_name: str,
     ) -> UserSummary:
-        return await self._users.get_or_create_user(user_id, display_name)  # type: ignore[union-attr]
+        return await self._users.get_or_create_user(user_id, display_name)
 
     async def update_user_summary(self, summary: UserSummary) -> None:
-        await self._users.update_user_summary(summary)  # type: ignore[union-attr]
+        await self._users.update_user_summary(summary)
 
     async def get_all_user_summaries(self) -> list[UserSummary]:
-        return await self._users.get_all_user_summaries()  # type: ignore[union-attr]
+        return await self._users.get_all_user_summaries()
 
     async def link_platform(
         self,
@@ -832,34 +865,34 @@ class MemoryStore:
         adapter_id: str,
         platform_user_id: str,
     ) -> None:
-        await self._users.link_platform(user_id, adapter_id, platform_user_id)  # type: ignore[union-attr]
+        await self._users.link_platform(user_id, adapter_id, platform_user_id)
 
     async def resolve_user(
         self,
         adapter_id: str,
         platform_user_id: str,
     ) -> str | None:
-        return await self._users.resolve_user(adapter_id, platform_user_id)  # type: ignore[union-attr]
+        return await self._users.resolve_user(adapter_id, platform_user_id)
 
     async def unlink_platform(
         self,
         user_id: str,
         adapter_id: str,
     ) -> bool:
-        return await self._users.unlink_platform(user_id, adapter_id)  # type: ignore[union-attr]
+        return await self._users.unlink_platform(user_id, adapter_id)
 
     async def get_linked_platforms(
         self,
         user_id: str,
     ) -> list[dict[str, str]]:
-        return await self._users.get_linked_platforms(user_id)  # type: ignore[union-attr]
+        return await self._users.get_linked_platforms(user_id)
 
     async def resolve_platform_user(
         self,
         user_id: str,
         adapter_id: str,
     ) -> str | None:
-        return await self._users.resolve_platform_user(user_id, adapter_id)  # type: ignore[union-attr]
+        return await self._users.resolve_platform_user(user_id, adapter_id)
 
     # ── Link tokens (delegates to _RecordStore) ──────────────────
 
@@ -871,7 +904,7 @@ class MemoryStore:
     ) -> str:
         if token_expiry_minutes is None:
             token_expiry_minutes = self._config.token_expiry_minutes
-        return await self._records.store_link_token(  # type: ignore[union-attr]
+        return await self._records.store_link_token(
             requester_adapter_id,
             requester_platform_user_id,
             token_expiry_minutes,
@@ -881,7 +914,7 @@ class MemoryStore:
         self,
         token: str,
     ) -> dict[str, str] | None:
-        return await self._records.verify_link_token(token)  # type: ignore[union-attr]
+        return await self._records.verify_link_token(token)
 
     # ── Core profiles + certain records (delegates to _RecordStore) ──
 
@@ -891,10 +924,10 @@ class MemoryStore:
         key: str,
         value: str,
     ) -> None:
-        await self._records.set_core_profile(user_id, key, value)  # type: ignore[union-attr]
+        await self._records.set_core_profile(user_id, key, value)
 
     async def get_core_profile(self, user_id: str) -> dict[str, str]:
-        return await self._records.get_core_profile(user_id)  # type: ignore[union-attr]
+        return await self._records.get_core_profile(user_id)
 
     async def add_certain_record(
         self,
@@ -903,7 +936,7 @@ class MemoryStore:
         record_type: str = "log",
         metadata: dict[str, Any] | None = None,
     ) -> str:
-        return await self._records.add_certain_record(  # type: ignore[union-attr]
+        return await self._records.add_certain_record(
             user_id, content, record_type, metadata
         )
 
@@ -913,27 +946,27 @@ class MemoryStore:
         record_type: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
-        return await self._records.get_certain_records(user_id, record_type, limit)  # type: ignore[union-attr]
+        return await self._records.get_certain_records(user_id, record_type, limit)
 
     async def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
-        return await self._records.get_proposal(proposal_id)  # type: ignore[union-attr]
+        return await self._records.get_proposal(proposal_id)
 
     async def update_proposal_status(
         self,
         proposal_id: str,
         status: str,
     ) -> bool:
-        return await self._records.update_proposal_status(proposal_id, status)  # type: ignore[union-attr]
+        return await self._records.update_proposal_status(proposal_id, status)
 
     async def get_pending_proposals(
         self,
         user_id: str | None = None,
         status: str = "pending",
     ) -> list[dict[str, Any]]:
-        return await self._records.get_pending_proposals(user_id, status)  # type: ignore[union-attr]
+        return await self._records.get_pending_proposals(user_id, status)
 
     async def expire_old_proposals(self, max_age_days: int = 7) -> int:
-        return await self._records.expire_old_proposals(max_age_days)  # type: ignore[union-attr]
+        return await self._records.expire_old_proposals(max_age_days)
 
     # ── Conversation history (delegates to _ConversationStore) ────
 
@@ -944,27 +977,27 @@ class MemoryStore:
         content: str,
         adapter_id: str = "",
     ) -> None:
-        await self._conversations.add_message(user_id, role, content, adapter_id)  # type: ignore[union-attr]
+        await self._conversations.add_message(user_id, role, content, adapter_id)
 
     async def get_recent_messages(
         self,
         user_id: str,
         limit: int = 20,
     ) -> list[dict[str, str]]:
-        return await self._conversations.get_recent_messages(user_id, limit)  # type: ignore[union-attr]
+        return await self._conversations.get_recent_messages(user_id, limit)
 
     async def get_todays_messages(
         self,
         user_id: str,
     ) -> list[dict[str, str]]:
-        return await self._conversations.get_todays_messages(user_id)  # type: ignore[union-attr]
+        return await self._conversations.get_todays_messages(user_id)
 
     async def get_messages_on_date(
         self,
         user_id: str,
         date_str: str,
     ) -> list[dict[str, str]]:
-        return await self._conversations.get_messages_on_date(user_id, date_str)  # type: ignore[union-attr]
+        return await self._conversations.get_messages_on_date(user_id, date_str)
 
     async def trim_old_messages(
         self,
@@ -973,12 +1006,12 @@ class MemoryStore:
     ) -> int:
         if keep is None:
             keep = self._config.message_trim_keep
-        return await self._conversations.trim_old_messages(user_id, keep)  # type: ignore[union-attr]
+        return await self._conversations.trim_old_messages(user_id, keep)
 
     # ── Semantic / episodic memory (delegates to _VectorMemory) ───
 
     async def add_semantic_memory(self, entry: MemoryEntry) -> str:
-        return await self._vectors.add_semantic(entry)  # type: ignore[union-attr]
+        return await self._vectors.add_semantic(entry)
 
     async def search_semantic(
         self,
@@ -986,10 +1019,10 @@ class MemoryStore:
         query: str,
         n_results: int = 5,
     ) -> list[dict[str, Any]]:
-        return await self._vectors.search_semantic(user_id, query, n_results)  # type: ignore[union-attr]
+        return await self._vectors.search_semantic(user_id, query, n_results)
 
     async def add_episodic_memory(self, entry: MemoryEntry) -> str:
-        return await self._vectors.add_episodic(entry)  # type: ignore[union-attr]
+        return await self._vectors.add_episodic(entry)
 
     async def search_episodic(
         self,
@@ -997,7 +1030,7 @@ class MemoryStore:
         query: str,
         n_results: int = 5,
     ) -> list[dict[str, Any]]:
-        return await self._vectors.search_episodic(user_id, query, n_results)  # type: ignore[union-attr]
+        return await self._vectors.search_episodic(user_id, query, n_results)
 
     async def search_by_emotion(
         self,
@@ -1007,7 +1040,7 @@ class MemoryStore:
         n_results: int = 3,
     ) -> list[dict[str, Any]]:
         """Search episodic memories by emotional_tone metadata."""
-        return await self._vectors.search_by_emotion(user_id, emotion, query, n_results)  # type: ignore[union-attr]
+        return await self._vectors.search_by_emotion(user_id, emotion, query, n_results)
 
     async def add_flashbulb_memory(
         self,
@@ -1015,7 +1048,7 @@ class MemoryStore:
         content: str,
         metadata: dict[str, Any] | None = None,
     ) -> str:
-        return await self._vectors.add_flashbulb(user_id, content, metadata)  # type: ignore[union-attr]
+        return await self._vectors.add_flashbulb(user_id, content, metadata)
 
     # ── Forgetting (Ebbinghaus decay) ─────────────────────────────
 
@@ -1030,7 +1063,7 @@ class MemoryStore:
         return base_strength * (1.0 / (1.0 + effective_decay * elapsed_days))
 
     async def decay_and_archive_memories(self) -> dict[str, int]:
-        return await self._vectors.decay_and_archive(self._config)  # type: ignore[union-attr]
+        return await self._vectors.decay_and_archive(self._config)
 
     # ── Recall hints (Phase4 precomputation) ──────────────────────
 
@@ -1047,7 +1080,7 @@ class MemoryStore:
             "date": datetime.now().strftime("%Y-%m-%d"),
             **(metadata or {}),
         }
-        return await self._records.add_certain_record(  # type: ignore[union-attr]
+        return await self._records.add_certain_record(
             user_id=user_id,
             content=content,
             record_type="recall_hint",
@@ -1060,7 +1093,7 @@ class MemoryStore:
         date_str: str | None = None,
     ) -> list[dict[str, Any]]:
         """Get precomputed recall hints for a user, optionally by date."""
-        all_hints = await self._records.get_certain_records(  # type: ignore[union-attr]
+        all_hints = await self._records.get_certain_records(
             user_id,
             record_type="recall_hint",
             limit=self._config.recall_hints_limit,
@@ -1077,12 +1110,12 @@ class MemoryStore:
     async def clear_old_recall_hints(self, keep_days: int = 2) -> int:
         """Remove recall hints older than keep_days."""
         cutoff = (datetime.now() - timedelta(days=keep_days)).isoformat()
-        cursor = await self._conn.execute(  # type: ignore[union-attr]
+        cursor = await self._conn.execute(
             "DELETE FROM certain_records "
             "WHERE record_type = 'recall_hint' AND created_at < ?",
             (cutoff,),
         )
-        await self._conn.commit()  # type: ignore[union-attr]
+        await self._conn.commit()
         return cursor.rowcount
 
     # ── Chain links (Phase4 芋づる想起) ───────────────────────────
@@ -1103,7 +1136,7 @@ class MemoryStore:
         }
         if distance is not None:
             meta["distance"] = distance
-        return await self._records.add_certain_record(  # type: ignore[union-attr]
+        return await self._records.add_certain_record(
             user_id=user_id,
             content=linked_content,
             record_type="chain_link",
@@ -1127,7 +1160,7 @@ class MemoryStore:
             max_results = self._config.chain_link_max_results
         if not source_memory_ids:
             return []
-        all_links = await self._records.get_certain_records(  # type: ignore[union-attr]
+        all_links = await self._records.get_certain_records(
             user_id,
             record_type="chain_link",
             limit=self._config.chain_link_query_limit,
@@ -1170,10 +1203,10 @@ class MemoryStore:
     async def clear_old_chain_links(self, keep_days: int = 2) -> int:
         """Remove chain links older than keep_days."""
         cutoff = (datetime.now() - timedelta(days=keep_days)).isoformat()
-        cursor = await self._conn.execute(  # type: ignore[union-attr]
+        cursor = await self._conn.execute(
             "DELETE FROM certain_records "
             "WHERE record_type = 'chain_link' AND created_at < ?",
             (cutoff,),
         )
-        await self._conn.commit()  # type: ignore[union-attr]
+        await self._conn.commit()
         return cursor.rowcount

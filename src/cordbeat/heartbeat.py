@@ -556,8 +556,6 @@ class HeartbeatLoop:
         skill_name: str,
     ) -> str:
         """Store a skill execution proposal for user confirmation."""
-        import json as _json
-
         metadata: dict[str, Any] = {
             "status": ProposalStatus.PENDING,
             "proposal_type": ProposalType.SKILL_EXECUTION,
@@ -572,7 +570,7 @@ class HeartbeatLoop:
 
         content = (
             f"Skill '{skill_name}' requires confirmation.\n"
-            f"Parameters: {_json.dumps(decision.skill_params)}"
+            f"Parameters: {json.dumps(decision.skill_params)}"
         )
 
         proposal_id = await self._memory.add_certain_record(
@@ -602,7 +600,7 @@ class HeartbeatLoop:
                     content=(
                         f"🔧 {soul_snap['name']} wants to run "
                         f"skill '{skill_name}'.\n"
-                        f"Parameters: {_json.dumps(decision.skill_params)}\n\n"
+                        f"Parameters: {json.dumps(decision.skill_params)}\n\n"
                         f"(proposal ID: {proposal_id})"
                     ),
                 )
@@ -838,14 +836,12 @@ class HeartbeatLoop:
 
     async def _execute_approved_proposals(self) -> None:
         """Check for approved proposals and execute them."""
-        import json as _json
-
         proposals = await self._memory.get_pending_proposals(
             status=ProposalStatus.APPROVED,
         )
 
         for proposal in proposals:
-            meta = _json.loads(proposal.get("metadata") or "{}")
+            meta = json.loads(proposal.get("metadata") or "{}")
             proposal_type = meta.get("proposal_type", ProposalType.GENERAL)
             proposal_id = proposal["id"]
 
@@ -971,9 +967,7 @@ class HeartbeatLoop:
         message: str,
     ) -> None:
         """Send execution result notification to the proposal owner."""
-        import json as _json
-
-        meta = _json.loads(proposal.get("metadata") or "{}")
+        meta = json.loads(proposal.get("metadata") or "{}")
         adapter_id = meta.get("adapter_id")
         user_id = proposal.get("user_id")
 

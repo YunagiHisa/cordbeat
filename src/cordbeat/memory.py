@@ -625,28 +625,29 @@ class _RecordStore:
         user_id: str | None = None,
         status: str = "pending",
     ) -> list[dict[str, Any]]:
-        """Return all proposals matching the given status."""
+        """Return all proposals matching the given status.
+
+        Uses SQLite's ``json_extract()`` to filter at the database level
+        instead of loading every proposal into Python.
+        """
         if user_id:
             cursor = await self._db.execute(
                 "SELECT * FROM certain_records "
                 "WHERE record_type = 'proposal' AND user_id = ? "
+                "AND json_extract(metadata, '$.status') = ? "
                 "ORDER BY created_at ASC",
-                (user_id,),
+                (user_id, status),
             )
         else:
             cursor = await self._db.execute(
                 "SELECT * FROM certain_records "
                 "WHERE record_type = 'proposal' "
+                "AND json_extract(metadata, '$.status') = ? "
                 "ORDER BY created_at ASC",
+                (status,),
             )
         rows = await cursor.fetchall()
-        results = []
-        for row in rows:
-            record = dict(row)
-            meta = json.loads(record.get("metadata") or "{}")
-            if meta.get("status") == status:
-                results.append(record)
-        return results
+        return [dict(row) for row in rows]
 
     async def expire_old_proposals(self, max_age_days: int = 7) -> int:
         """Expire PENDING proposals older than max_age_days.

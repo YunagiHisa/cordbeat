@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from collections.abc import Callable, Coroutine
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from cordbeat.ai_backend import AIBackend
@@ -111,7 +111,7 @@ class CoreEngine:
         else:
             user = await self._memory.get_or_create_user(user_id, platform_user_id)
 
-        user.last_talked_at = datetime.now()
+        user.last_talked_at = datetime.now(tz=UTC)
         user.last_platform = adapter_id
         await self._memory.update_user_summary(user)
         return user_id, user

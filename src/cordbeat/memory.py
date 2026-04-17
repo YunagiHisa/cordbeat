@@ -7,7 +7,7 @@ import json
 import logging
 import secrets
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,12 @@ from cordbeat.config import MemoryConfig
 from cordbeat.models import MemoryEntry, MemoryLayer, UserSummary
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_aware(dt: datetime) -> datetime:
+    """Return *dt* with UTC timezone attached if it was naive."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
 
 # ── SQLite schema ─────────────────────────────────────────────────────
 
@@ -97,7 +103,9 @@ class _UserStore:
             return UserSummary(
                 user_id=row["user_id"],
                 display_name=row["display_name"],
-                last_talked_at=datetime.fromisoformat(row["last_talked_at"])
+                last_talked_at=_ensure_aware(
+                    datetime.fromisoformat(row["last_talked_at"])
+                )
                 if row["last_talked_at"]
                 else None,
                 last_platform=row["last_platform"],
@@ -138,7 +146,9 @@ class _UserStore:
             UserSummary(
                 user_id=row["user_id"],
                 display_name=row["display_name"],
-                last_talked_at=datetime.fromisoformat(row["last_talked_at"])
+                last_talked_at=_ensure_aware(
+                    datetime.fromisoformat(row["last_talked_at"])
+                )
                 if row["last_talked_at"]
                 else None,
                 last_platform=row["last_platform"],
@@ -160,7 +170,7 @@ class _UserStore:
             "INSERT OR REPLACE INTO platform_links "
             "(user_id, adapter_id, platform_user_id, linked_at) "
             "VALUES (?, ?, ?, ?)",
-            (user_id, adapter_id, platform_user_id, datetime.now().isoformat()),
+            (user_id, adapter_id, platform_user_id, datetime.now(tz=UTC).isoformat()),
         )
         await self._db.commit()
 
@@ -333,7 +343,7 @@ class _VectorMemory:
         config: MemoryConfig,
     ) -> dict[str, int]:
         threshold = config.archive_threshold
-        now = datetime.now()
+        now = datetime.now(tz=UTC)
         stats = {"decayed": 0, "archived": 0}
 
         for collection in (self._semantic, self._episodic):
@@ -352,7 +362,7 @@ class _VectorMemory:
                 if not created_str:
                     continue
 
-                created_at = datetime.fromisoformat(created_str)
+                created_at = _ensure_aware(datetime.fromisoformat(created_str))
                 elapsed_days = (now - created_at).total_seconds() / 86400.0
                 base_strength = float(meta.get("strength", 1.0))
                 emotion_weight = float(meta.get("emotion_weight", 0.0))
@@ -422,7 +432,7 @@ class _ConversationStore:
             "INSERT INTO conversation_messages "
             "(user_id, role, content, adapter_id, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
-            (user_id, role, content, adapter_id, datetime.now().isoformat()),
+            (user_id, role, content, adapter_id, datetime.now(tz=UTC).isoformat()),
         )
         await self._db.commit()
 
@@ -447,7 +457,7 @@ class _ConversationStore:
         self,
         user_id: str,
     ) -> list[dict[str, str]]:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
         cursor = await self._db.execute(
             "SELECT role, content FROM conversation_messages "
             "WHERE user_id = ? AND created_at >= ? "
@@ -539,7 +549,7 @@ class _RecordStore:
                 user_id,
                 content,
                 record_type,
-                datetime.now().isoformat(),
+                datetime.now(tz=UTC).isoformat(),
                 json.dumps(metadata or {}),
             ),
         )
@@ -654,7 +664,7 @@ class _RecordStore:
 
         Returns the number of proposals expired.
         """
-        cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+        cutoff = (datetime.now(tz=UTC) - timedelta(days=max_age_days)).isoformat()
         cursor = await self._db.execute(
             "SELECT id, metadata FROM certain_records "
             "WHERE record_type = 'proposal' AND created_at < ?",
@@ -686,7 +696,9 @@ class _RecordStore:
         Returns the generated token string.
         """
         token = secrets.token_urlsafe(16)
-        expiry = (datetime.now() + timedelta(minutes=token_expiry_minutes)).isoformat()
+        expiry = (
+            datetime.now(tz=UTC) + timedelta(minutes=token_expiry_minutes)
+        ).isoformat()
         metadata = {
             "requester_adapter_id": requester_adapter_id,
             "requester_platform_user_id": requester_platform_user_id,
@@ -703,7 +715,7 @@ class _RecordStore:
                 "__system__",
                 token,
                 "link_token",
-                datetime.now().isoformat(),
+                datetime.now(tz=UTC).isoformat(),
                 json.dumps(metadata),
             ),
         )
@@ -737,7 +749,9 @@ class _RecordStore:
 
         # Check expiry
         expires_at = meta.get("expires_at", "")
-        if expires_at and datetime.fromisoformat(expires_at) < datetime.now():
+        if expires_at and _ensure_aware(
+            datetime.fromisoformat(expires_at)
+        ) < datetime.now(tz=UTC):
             return None
 
         # Mark as used
@@ -1077,7 +1091,7 @@ class MemoryStore:
         """Store a precomputed recall hint."""
         meta = {
             "hint_type": hint_type,
-            "date": datetime.now().strftime("%Y-%m-%d"),
+            "date": datetime.now(tz=UTC).strftime("%Y-%m-%d"),
             **(metadata or {}),
         }
         return await self._records.add_certain_record(
@@ -1109,7 +1123,7 @@ class MemoryStore:
 
     async def clear_old_recall_hints(self, keep_days: int = 2) -> int:
         """Remove recall hints older than keep_days."""
-        cutoff = (datetime.now() - timedelta(days=keep_days)).isoformat()
+        cutoff = (datetime.now(tz=UTC) - timedelta(days=keep_days)).isoformat()
         cursor = await self._conn.execute(
             "DELETE FROM certain_records "
             "WHERE record_type = 'recall_hint' AND created_at < ?",
@@ -1132,7 +1146,7 @@ class MemoryStore:
         meta: dict[str, Any] = {
             "source_memory_id": source_memory_id,
             "linked_memory_id": linked_memory_id,
-            "date": datetime.now().strftime("%Y-%m-%d"),
+            "date": datetime.now(tz=UTC).strftime("%Y-%m-%d"),
         }
         if distance is not None:
             meta["distance"] = distance
@@ -1202,7 +1216,7 @@ class MemoryStore:
 
     async def clear_old_chain_links(self, keep_days: int = 2) -> int:
         """Remove chain links older than keep_days."""
-        cutoff = (datetime.now() - timedelta(days=keep_days)).isoformat()
+        cutoff = (datetime.now(tz=UTC) - timedelta(days=keep_days)).isoformat()
         cursor = await self._conn.execute(
             "DELETE FROM certain_records "
             "WHERE record_type = 'chain_link' AND created_at < ?",

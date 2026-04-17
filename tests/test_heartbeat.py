@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import time
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -453,8 +453,6 @@ class TestTick:
         ) as mock_quiet:
             await heartbeat._tick()
         _, kwargs = mock_quiet.call_args
-        from datetime import UTC
-
         assert kwargs["tz"] is UTC
 
 
@@ -618,8 +616,6 @@ class TestBuildGlobalContextElapsed:
         self,
         heartbeat: HeartbeatLoop,
     ) -> None:
-        from datetime import datetime
-
         users = [
             UserSummary(
                 user_id="u1",
@@ -627,7 +623,7 @@ class TestBuildGlobalContextElapsed:
                 last_topic="",
                 emotional_tone="",
                 attention_score=0.5,
-                last_talked_at=datetime.now(),
+                last_talked_at=datetime.now(tz=UTC),
             ),
         ]
         ctx = heartbeat._build_global_context(users)
@@ -637,8 +633,6 @@ class TestBuildGlobalContextElapsed:
         self,
         heartbeat: HeartbeatLoop,
     ) -> None:
-        from datetime import datetime, timedelta
-
         users = [
             UserSummary(
                 user_id="u1",
@@ -646,7 +640,7 @@ class TestBuildGlobalContextElapsed:
                 last_topic="",
                 emotional_tone="",
                 attention_score=0.5,
-                last_talked_at=datetime.now() - timedelta(days=3),
+                last_talked_at=datetime.now(tz=UTC) - timedelta(days=3),
             ),
         ]
         ctx = heartbeat._build_global_context(users)
@@ -889,7 +883,7 @@ class TestTemporalRecall:
         await memory.get_or_create_user("u1", "Alice")
 
         # Insert a message dated 7 days ago
-        seven_days_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        seven_days_ago = (datetime.now(tz=UTC) - timedelta(days=7)).strftime("%Y-%m-%d")
         await memory._conn.execute(
             "INSERT INTO conversation_messages "
             "(user_id, role, content, adapter_id, created_at) "
@@ -919,7 +913,7 @@ class TestTemporalRecall:
 
         # Insert messages at 1-day and 30-day marks
         for days_ago, topic in [(1, "Yesterday topic"), (30, "Monthly topic")]:
-            target_date = (datetime.now() - timedelta(days=days_ago)).strftime(
+            target_date = (datetime.now(tz=UTC) - timedelta(days=days_ago)).strftime(
                 "%Y-%m-%d"
             )
             await memory._conn.execute(
@@ -950,7 +944,7 @@ class TestTemporalRecall:
 
         await memory.get_or_create_user("u1", "Alice")
 
-        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        yesterday = (datetime.now(tz=UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
         await memory._conn.execute(
             "INSERT INTO conversation_messages "
             "(user_id, role, content, adapter_id, created_at) "

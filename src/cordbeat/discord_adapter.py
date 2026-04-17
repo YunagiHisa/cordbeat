@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from cordbeat.config import AdapterConfig
@@ -97,7 +97,7 @@ class DiscordAdapter(RetryableConnection):
                 "adapter_id": ADAPTER_ID,
                 "platform_user_id": str(message.author.id),
                 "content": message.content,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(tz=UTC).isoformat(),
                 "metadata": {
                     "channel_id": str(message.channel.id),
                     "guild_id": str(message.guild.id) if message.guild else "",

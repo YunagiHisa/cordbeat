@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import websockets
@@ -216,7 +216,7 @@ class GatewayServer:
                         content=msg_data.get("content", ""),
                         timestamp=datetime.fromisoformat(msg_data["timestamp"])
                         if "timestamp" in msg_data
-                        else datetime.now(),
+                        else datetime.now(tz=UTC),
                         metadata=msg_data.get("metadata", {}),
                     )
                     await self._queue.put(message)

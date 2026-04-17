@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from cordbeat.config import AdapterConfig
@@ -117,7 +117,7 @@ class TelegramAdapter(RetryableConnection):
                 "adapter_id": ADAPTER_ID,
                 "platform_user_id": user_id,
                 "content": text,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(tz=UTC).isoformat(),
                 "metadata": {
                     "chat_id": str(chat_id),
                     "display_name": display_name,

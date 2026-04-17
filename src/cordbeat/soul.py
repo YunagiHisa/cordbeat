@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -240,7 +240,7 @@ class Soul:
             {
                 "emotion": emotion.value,
                 "intensity": round(intensity, 2),
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(tz=UTC).isoformat(),
             }
         )
         # Keep last 50

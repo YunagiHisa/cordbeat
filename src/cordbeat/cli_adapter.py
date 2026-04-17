@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 
 import websockets
 
@@ -51,7 +51,7 @@ async def main(ws_url: str = "ws://localhost:8765") -> None:
                     "adapter_id": "cli",
                     "platform_user_id": "cli_user",
                     "content": line.strip(),
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now(tz=UTC).isoformat(),
                 }
                 await ws.send(json.dumps(msg))
         except (KeyboardInterrupt, EOFError):

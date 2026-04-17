@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -399,9 +400,7 @@ class TestGetMessagesOnDate:
         await memory.add_message("u1", "user", "Hello", "discord")
         await memory.add_message("u1", "assistant", "Hi!", "discord")
 
-        from datetime import datetime
-
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
         messages = await memory.get_messages_on_date("u1", today)
         assert len(messages) == 2
         assert messages[0]["content"] == "Hello"
@@ -419,9 +418,7 @@ class TestGetMessagesOnDate:
         await memory.get_or_create_user("u2", "Bob")
         await memory.add_message("u2", "user", "Bob's message", "discord")
 
-        from datetime import datetime
-
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
         messages = await memory.get_messages_on_date("u1", today)
         assert messages == []
 
@@ -448,9 +445,7 @@ class TestRecallHints:
             hint_type="temporal",
             content="Hint for today",
         )
-        from datetime import datetime
-
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
         hints = await memory.get_recall_hints("u1", date_str=today)
         assert len(hints) == 1
 

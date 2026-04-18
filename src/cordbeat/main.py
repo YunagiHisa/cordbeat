@@ -49,6 +49,9 @@ async def main(config_path: str = "config.yaml") -> None:
         format=config.log.format,
     )
 
+    # Suppress noisy websockets handshake errors (e.g. plain HTTP to WS)
+    logging.getLogger("websockets.server").setLevel(logging.WARNING)
+
     logger.info("Configuration loaded from %s", config_path)
 
     # ── Initialize subsystems ─────────────────────────────────────

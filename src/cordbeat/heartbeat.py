@@ -3,26 +3,22 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import uuid
 import zoneinfo
-from datetime import UTC, datetime, time, timedelta, tzinfo
+from datetime import UTC, datetime, time, tzinfo
 from typing import Any
 
 from cordbeat.ai_backend import AIBackend
 from cordbeat.config import HeartbeatConfig, MemoryConfig
 from cordbeat.gateway import GatewayServer, MessageQueue
+from cordbeat.heartbeat_proposals import ProposalExecutor
+from cordbeat.heartbeat_sleep import SleepPhase
 from cordbeat.memory import MemoryStore
 from cordbeat.models import (
     GatewayMessage,
     HeartbeatAction,
     HeartbeatDecision,
-    MemoryEntry,
-    MemoryLayer,
     MessageType,
-    ProposalStatus,
-    ProposalType,
     SafetyLevel,
     UserSummary,
 )
@@ -100,30 +96,6 @@ You MUST respond in valid JSON:
 }}
 """
 
-_DIARY_SYSTEM_PROMPT = """\
-You are {name}, reviewing today's conversations to write a diary entry.
-Write a brief, reflective diary entry summarizing what happened today.
-Note key topics, emotional moments, and anything worth remembering.
-Keep it concise (3-5 sentences). Write in first person.
-Respond with ONLY the diary text, no JSON.
-"""
-
-_PROMOTION_SYSTEM_PROMPT = """\
-You are reviewing today's episodic memories to extract general facts.
-For each episode, decide if it contains a general fact or preference about
-the user that should be remembered long-term (e.g., "likes Python",
-"works as a developer", "enjoys hiking").
-
-Episodes:
-{episodes}
-
-Respond in JSON only:
-{{"facts": ["general fact 1", "general fact 2"]}}
-
-Only include genuinely general facts. Do NOT include specific events,
-timestamps, or one-time occurrences. Empty list if nothing is generalizable.
-"""
-
 
 def _parse_time(s: str) -> time:
     parts = s.split(":")
@@ -166,6 +138,19 @@ class HeartbeatLoop:
         self._sleep_done_today = False
         self._task: asyncio.Task[None] | None = None
 
+        self._proposals = ProposalExecutor(
+            memory=memory,
+            skills=skills,
+            gateway=gateway,
+            soul=soul,
+        )
+        self._sleep = SleepPhase(
+            memory=memory,
+            ai=ai,
+            soul=soul,
+            memory_config=self._memory_config,
+        )
+
     async def start(self) -> None:
         self._running = True
         self._task = asyncio.create_task(self._loop())
@@ -206,7 +191,7 @@ class HeartbeatLoop:
             tz = UTC
         if _in_quiet_hours(quiet_start, quiet_end, tz=tz):
             if not self._sleep_done_today:
-                await self._run_sleep_phase()
+                await self._sleep.run()
                 self._sleep_done_today = True
             logger.debug("In quiet hours, skipping HEARTBEAT")
             return self._config.default_interval_minutes
@@ -215,7 +200,7 @@ class HeartbeatLoop:
         self._sleep_done_today = False
 
         # ── Execute approved proposals ────────────────────────────────
-        await self._execute_approved_proposals()
+        await self._proposals.execute_approved()
 
         # ── Emotion decay ─────────────────────────────────────────────
         self._soul.decay_emotion()
@@ -427,11 +412,11 @@ class HeartbeatLoop:
             case HeartbeatAction.SKILL:
                 await self._execute_skill(decision)
             case HeartbeatAction.PROPOSE_IMPROVEMENT:
-                await self._store_and_notify_proposal(decision)
+                await self._proposals.store_and_notify(decision)
             case HeartbeatAction.PROPOSE_TRAIT_CHANGE:
-                await self._store_trait_proposal(decision)
+                await self._proposals.store_trait_proposal(decision)
             case HeartbeatAction.PROPOSE_SKILL:
-                await self._store_skill_creation_proposal(decision)
+                await self._proposals.store_skill_creation_proposal(decision)
             case HeartbeatAction.NONE:
                 logger.debug("HEARTBEAT decided: do nothing")
 
@@ -491,7 +476,7 @@ class HeartbeatLoop:
             return
 
         if skill.meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION:
-            await self._store_skill_proposal(decision, skill.meta.name)
+            await self._proposals.store_skill_proposal(decision, skill.meta.name)
             return
 
         try:
@@ -499,755 +484,3 @@ class HeartbeatLoop:
             logger.info("Skill '%s' result: %s", decision.skill_name, result)
         except Exception:
             logger.exception("Skill '%s' failed", decision.skill_name)
-
-    async def _store_and_notify_proposal(
-        self,
-        decision: HeartbeatDecision,
-        proposal_type: str = ProposalType.GENERAL,
-    ) -> str:
-        """Store an improvement proposal and notify the target user."""
-        user_id = decision.target_user_id
-        adapter_id = decision.target_adapter_id
-        content = decision.content
-
-        # Store proposal in memory
-        metadata: dict[str, Any] = {
-            "status": ProposalStatus.PENDING,
-            "proposal_type": proposal_type,
-        }
-        if adapter_id:
-            metadata["adapter_id"] = adapter_id
-
-        proposal_id = await self._memory.add_certain_record(
-            user_id=user_id or "__system__",
-            content=content,
-            record_type="proposal",
-            metadata=metadata,
-        )
-        logger.info("Improvement proposal stored (id=%s): %s", proposal_id, content)
-
-        # Notify user if target is specified
-        if user_id and adapter_id:
-            platform_user_id = await self._memory.resolve_platform_user(
-                user_id, adapter_id
-            )
-            if platform_user_id:
-                soul_snap = self._soul.get_soul_snapshot()
-                notification = GatewayMessage(
-                    type=MessageType.HEARTBEAT_MESSAGE,
-                    adapter_id=adapter_id,
-                    platform_user_id=platform_user_id,
-                    content=(
-                        f"💡 {soul_snap['name']} has a suggestion:\n\n{content}"
-                        f"\n\n(proposal ID: {proposal_id})"
-                    ),
-                )
-                await self._gateway.send_to_adapter(adapter_id, notification)
-                logger.info(
-                    "Proposal notification sent to %s via %s",
-                    user_id,
-                    adapter_id,
-                )
-        return proposal_id
-
-    async def _store_skill_proposal(
-        self,
-        decision: HeartbeatDecision,
-        skill_name: str,
-    ) -> str:
-        """Store a skill execution proposal for user confirmation."""
-        metadata: dict[str, Any] = {
-            "status": ProposalStatus.PENDING,
-            "proposal_type": ProposalType.SKILL_EXECUTION,
-            "skill_name": skill_name,
-            "skill_params": decision.skill_params,
-        }
-        user_id = decision.target_user_id or "__system__"
-        adapter_id = decision.target_adapter_id
-
-        if adapter_id:
-            metadata["adapter_id"] = adapter_id
-
-        content = (
-            f"Skill '{skill_name}' requires confirmation.\n"
-            f"Parameters: {json.dumps(decision.skill_params)}"
-        )
-
-        proposal_id = await self._memory.add_certain_record(
-            user_id=user_id,
-            content=content,
-            record_type="proposal",
-            metadata=metadata,
-        )
-        logger.info(
-            "Skill proposal stored (id=%s): %s with params %s",
-            proposal_id,
-            skill_name,
-            decision.skill_params,
-        )
-
-        # Notify user
-        if user_id != "__system__" and adapter_id:
-            platform_user_id = await self._memory.resolve_platform_user(
-                user_id, adapter_id
-            )
-            if platform_user_id:
-                soul_snap = self._soul.get_soul_snapshot()
-                notification = GatewayMessage(
-                    type=MessageType.HEARTBEAT_MESSAGE,
-                    adapter_id=adapter_id,
-                    platform_user_id=platform_user_id,
-                    content=(
-                        f"🔧 {soul_snap['name']} wants to run "
-                        f"skill '{skill_name}'.\n"
-                        f"Parameters: {json.dumps(decision.skill_params)}\n\n"
-                        f"(proposal ID: {proposal_id})"
-                    ),
-                )
-                await self._gateway.send_to_adapter(adapter_id, notification)
-
-        return proposal_id
-
-    async def _store_trait_proposal(
-        self,
-        decision: HeartbeatDecision,
-    ) -> str:
-        """Store a trait change proposal for user approval."""
-        add = decision.trait_add
-        remove = decision.trait_remove
-
-        # Preview what the traits would look like after the change
-        preview = self._soul.propose_trait_change(add=add, remove=remove)
-
-        metadata: dict[str, Any] = {
-            "status": ProposalStatus.PENDING,
-            "proposal_type": ProposalType.TRAIT_CHANGE,
-            "trait_add": add,
-            "trait_remove": remove,
-            "trait_preview": preview["preview"],
-        }
-        user_id = decision.target_user_id or "__system__"
-        adapter_id = decision.target_adapter_id
-
-        if adapter_id:
-            metadata["adapter_id"] = adapter_id
-
-        content = decision.content or (
-            f"Trait change proposal: add {add}, remove {remove}"
-        )
-
-        proposal_id = await self._memory.add_certain_record(
-            user_id=user_id,
-            content=content,
-            record_type="proposal",
-            metadata=metadata,
-        )
-        logger.info(
-            "Trait proposal stored (id=%s): add=%s remove=%s preview=%s",
-            proposal_id,
-            add,
-            remove,
-            preview["preview"],
-        )
-
-        # Notify user
-        if user_id != "__system__" and adapter_id:
-            platform_user_id = await self._memory.resolve_platform_user(
-                user_id, adapter_id
-            )
-            if platform_user_id:
-                soul_snap = self._soul.get_soul_snapshot()
-                traits_display = ", ".join(preview["preview"])
-                notification = GatewayMessage(
-                    type=MessageType.HEARTBEAT_MESSAGE,
-                    adapter_id=adapter_id,
-                    platform_user_id=platform_user_id,
-                    content=(
-                        f"🎭 {soul_snap['name']} wants to change personality traits.\n"
-                        f"{content}\n\n"
-                        f"Preview: [{traits_display}]\n\n"
-                        f"(proposal ID: {proposal_id})"
-                    ),
-                )
-                await self._gateway.send_to_adapter(adapter_id, notification)
-
-        return proposal_id
-
-    async def _store_skill_creation_proposal(
-        self,
-        decision: HeartbeatDecision,
-    ) -> str:
-        """Store a skill creation proposal for user approval."""
-        proposed = decision.proposed_skill
-        skill_name = proposed.get("name", "unnamed_skill")
-
-        metadata: dict[str, Any] = {
-            "status": ProposalStatus.PENDING,
-            "proposal_type": ProposalType.SKILL_PROPOSAL,
-            "proposed_skill": proposed,
-        }
-        user_id = decision.target_user_id or "__system__"
-        adapter_id = decision.target_adapter_id
-
-        if adapter_id:
-            metadata["adapter_id"] = adapter_id
-
-        content = decision.content or (
-            f"New skill proposal: {skill_name}\n"
-            f"Description: {proposed.get('description', '')}"
-        )
-
-        proposal_id = await self._memory.add_certain_record(
-            user_id=user_id,
-            content=content,
-            record_type="proposal",
-            metadata=metadata,
-        )
-        logger.info(
-            "Skill creation proposal stored (id=%s): %s",
-            proposal_id,
-            skill_name,
-        )
-
-        # Notify user
-        if user_id != "__system__" and adapter_id:
-            platform_user_id = await self._memory.resolve_platform_user(
-                user_id, adapter_id
-            )
-            if platform_user_id:
-                soul_snap = self._soul.get_soul_snapshot()
-                params_desc = ", ".join(
-                    p.get("name", "?") for p in proposed.get("parameters", [])
-                )
-                notification = GatewayMessage(
-                    type=MessageType.HEARTBEAT_MESSAGE,
-                    adapter_id=adapter_id,
-                    platform_user_id=platform_user_id,
-                    content=(
-                        f"🛠️ {soul_snap['name']} wants to create "
-                        f"a new skill: '{skill_name}'\n"
-                        f"Description: {proposed.get('description', '')}\n"
-                        f"Parameters: ({params_desc})\n\n"
-                        f"(proposal ID: {proposal_id})"
-                    ),
-                )
-                await self._gateway.send_to_adapter(adapter_id, notification)
-
-        return proposal_id
-
-    async def _install_proposed_skill(
-        self,
-        proposed: dict[str, Any],
-    ) -> None:
-        """Validate and write a proposed skill to the skills directory."""
-        import re
-
-        name = proposed.get("name", "")
-        if not re.fullmatch(r"[a-z][a-z0-9_]{0,49}", name):
-            raise ValueError(
-                f"Invalid skill name: {name!r}. "
-                "Must be lowercase alphanumeric with underscores."
-            )
-
-        # Block overwriting existing skills
-        if self._skills.get(name) is not None:
-            raise ValueError(f"Skill '{name}' already exists.")
-
-        code = proposed.get("code", "")
-        if not code.strip():
-            raise ValueError("Skill code is empty.")
-
-        # Validate Python syntax
-        compile(code, f"skills/{name}/main.py", "exec")
-
-        # Block dangerous patterns in generated code
-        dangerous_patterns = {
-            r"\bsubprocess\b",
-            r"\bos\.system\b",
-            r"\b__import__\b",
-            r"\beval\s*\(",
-            r"\bexec\s*\(",
-            r"\bopen\s*\(.*/etc/",
-            r"\bshutil\.rmtree\b",
-        }
-        for pattern in dangerous_patterns:
-            if re.search(pattern, code):
-                raise ValueError(f"Skill code contains blocked pattern: {pattern}")
-
-        # Build skill.yaml — force safety to requires_confirmation
-        description = proposed.get("description", "AI-generated skill")
-        usage = proposed.get("usage", "")
-        parameters = proposed.get("parameters", [])
-
-        yaml_lines = [
-            f"name: {name}",
-            f'description: "{description}"',
-            'version: "1.0.0"',
-            'author: "cordbeat-ai"',
-            "",
-            f"usage: |\n  {usage}",
-            "",
-        ]
-        if parameters:
-            yaml_lines.append("parameters:")
-        else:
-            yaml_lines.append("parameters: []")
-        for param in parameters:
-            yaml_lines.append(f"  - name: {param.get('name', 'arg')}")
-            yaml_lines.append(f"    type: {param.get('type', 'string')}")
-            yaml_lines.append(
-                f"    required: {str(param.get('required', True)).lower()}"
-            )
-            desc = param.get("description", "")
-            if desc:
-                yaml_lines.append(f'    description: "{desc}"')
-        yaml_lines.extend(
-            [
-                "",
-                "safety:",
-                "  level: requires_confirmation",
-                "  sandbox: false",
-                "  network: false",
-                "  filesystem: false",
-            ]
-        )
-        yaml_content = "\n".join(yaml_lines) + "\n"
-
-        # Prepend standard header to code
-        code_header = (
-            f'"""AI-generated skill: {name}."""\n\n'
-            "from __future__ import annotations\n\n"
-            "from typing import Any\n\n\n"
-        )
-        if "from __future__" not in code:
-            full_code = code_header + code + "\n"
-        else:
-            full_code = code + "\n"
-
-        # Write to disk
-        skill_dir = self._skills.skills_dir / name
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        (skill_dir / "skill.yaml").write_text(yaml_content, encoding="utf-8")
-        (skill_dir / "main.py").write_text(full_code, encoding="utf-8")
-
-        # Reload skill registry
-        self._skills.load_all()
-        logger.info("Installed proposed skill: %s", name)
-
-    async def _execute_approved_proposals(self) -> None:
-        """Check for approved proposals and execute them."""
-        proposals = await self._memory.get_pending_proposals(
-            status=ProposalStatus.APPROVED,
-        )
-
-        for proposal in proposals:
-            meta = json.loads(proposal.get("metadata") or "{}")
-            proposal_type = meta.get("proposal_type", ProposalType.GENERAL)
-            proposal_id = proposal["id"]
-
-            if proposal_type == ProposalType.SKILL_EXECUTION:
-                skill_name = meta.get("skill_name", "")
-                skill_params = meta.get("skill_params", {})
-                skill = self._skills.get(skill_name)
-                if skill is None:
-                    logger.warning(
-                        "Approved skill '%s' not found, marking expired",
-                        skill_name,
-                    )
-                    await self._memory.update_proposal_status(
-                        proposal_id, ProposalStatus.EXPIRED
-                    )
-                    await self._notify_proposal_result(
-                        proposal,
-                        f"⚠️ Skill '{skill_name}' not found — proposal expired.",
-                    )
-                    continue
-
-                try:
-                    result = await skill.execute(skill_params, memory=self._memory)
-                    logger.info(
-                        "Approved skill '%s' executed: %s",
-                        skill_name,
-                        result,
-                    )
-                    await self._memory.update_proposal_status(
-                        proposal_id, ProposalStatus.EXECUTED
-                    )
-                    summary = str(result.get("result", "done"))[:200]
-                    await self._notify_proposal_result(
-                        proposal,
-                        f"✅ Skill '{skill_name}' executed successfully.\n{summary}",
-                    )
-                except Exception:
-                    logger.exception("Approved skill '%s' failed", skill_name)
-                    await self._memory.update_proposal_status(
-                        proposal_id, ProposalStatus.EXPIRED
-                    )
-                    await self._notify_proposal_result(
-                        proposal,
-                        f"❌ Skill '{skill_name}' failed — proposal expired.",
-                    )
-            elif proposal_type == ProposalType.TRAIT_CHANGE:
-                trait_add = meta.get("trait_add", [])
-                trait_remove = meta.get("trait_remove", [])
-                try:
-                    self._soul.apply_trait_change(add=trait_add, remove=trait_remove)
-                    logger.info(
-                        "Approved trait change applied: add=%s remove=%s",
-                        trait_add,
-                        trait_remove,
-                    )
-                    await self._memory.update_proposal_status(
-                        proposal_id, ProposalStatus.EXECUTED
-                    )
-                    parts: list[str] = []
-                    if trait_add:
-                        parts.append(f"added: {', '.join(trait_add)}")
-                    if trait_remove:
-                        parts.append(f"removed: {', '.join(trait_remove)}")
-                    await self._notify_proposal_result(
-                        proposal,
-                        f"✅ Personality updated — {'; '.join(parts)}.",
-                    )
-                except Exception:
-                    logger.exception("Trait change failed")
-                    await self._memory.update_proposal_status(
-                        proposal_id, ProposalStatus.EXPIRED
-                    )
-                    await self._notify_proposal_result(
-                        proposal,
-                        "❌ Personality change failed — proposal expired.",
-                    )
-            elif proposal_type == ProposalType.SKILL_PROPOSAL:
-                proposed = meta.get("proposed_skill", {})
-                skill_name = proposed.get("name", "unknown")
-                try:
-                    await self._install_proposed_skill(proposed)
-                    logger.info(
-                        "Proposed skill '%s' installed",
-                        skill_name,
-                    )
-                    await self._memory.update_proposal_status(
-                        proposal_id, ProposalStatus.EXECUTED
-                    )
-                    await self._notify_proposal_result(
-                        proposal,
-                        f"✅ New skill '{skill_name}' installed successfully.",
-                    )
-                except Exception:
-                    logger.exception(
-                        "Proposed skill '%s' installation failed",
-                        skill_name,
-                    )
-                    await self._memory.update_proposal_status(
-                        proposal_id, ProposalStatus.EXPIRED
-                    )
-                    await self._notify_proposal_result(
-                        proposal,
-                        f"❌ Skill '{skill_name}' installation "
-                        f"failed — proposal expired.",
-                    )
-            else:
-                # General proposals are informational — just mark executed
-                logger.info(
-                    "General proposal %s acknowledged",
-                    proposal_id,
-                )
-                await self._memory.update_proposal_status(
-                    proposal_id, ProposalStatus.EXECUTED
-                )
-                await self._notify_proposal_result(
-                    proposal,
-                    "✅ Proposal acknowledged.",
-                )
-
-    async def _notify_proposal_result(
-        self,
-        proposal: dict[str, Any],
-        message: str,
-    ) -> None:
-        """Send execution result notification to the proposal owner."""
-        meta = json.loads(proposal.get("metadata") or "{}")
-        adapter_id = meta.get("adapter_id")
-        user_id = proposal.get("user_id")
-
-        if not adapter_id or not user_id:
-            return
-
-        platform_user_id = await self._memory.resolve_platform_user(user_id, adapter_id)
-        if not platform_user_id:
-            return
-
-        notification = GatewayMessage(
-            type=MessageType.HEARTBEAT_MESSAGE,
-            adapter_id=adapter_id,
-            platform_user_id=platform_user_id,
-            content=message,
-        )
-        await self._gateway.send_to_adapter(adapter_id, notification)
-
-    # ── Sleep Phase ───────────────────────────────────────────────────
-
-    async def _run_sleep_phase(self) -> None:
-        """Memory consolidation during quiet hours.
-
-        1. For each user, review today's conversations and generate a diary.
-        2. Promote notable episodic memories to semantic facts.
-        3. Precompute Phase4 temporal recall hints (7 days ago).
-        4. Apply forgetting curve and archive decayed memories.
-        5. Trim old conversation messages and recall hints.
-        """
-        logger.info("Sleep phase started — consolidating memories")
-
-        users = await self._memory.get_all_user_summaries()
-        soul_snap = self._soul.get_soul_snapshot()
-
-        # 1. Generate diary entries per user
-        for user in users:
-            try:
-                messages = await self._memory.get_todays_messages(user.user_id)
-                if not messages:
-                    continue
-
-                conversation = "\n".join(
-                    f"{'User' if m['role'] == 'user' else soul_snap['name']}: "
-                    f"{m['content']}"
-                    for m in messages
-                )
-                system = _DIARY_SYSTEM_PROMPT.format(name=soul_snap["name"])
-                prompt = (
-                    f"Today's conversation with {user.display_name}:\n\n{conversation}"
-                )
-
-                diary_text = await self._ai.generate(
-                    prompt=prompt,
-                    system=system,
-                    temperature=self._memory_config.diary_temperature,
-                    max_tokens=self._memory_config.diary_max_tokens,
-                )
-
-                await self._memory.add_certain_record(
-                    user_id=user.user_id,
-                    content=diary_text.strip(),
-                    record_type="diary",
-                    metadata={"date": datetime.now(tz=UTC).strftime("%Y-%m-%d")},
-                )
-                logger.info("Diary written for user %s", user.user_id)
-            except Exception:
-                logger.exception("Failed to write diary for user %s", user.user_id)
-
-        # 2. Promote notable episodic memories to semantic facts
-        for user in users:
-            await self._promote_episodic_memories(user.user_id)
-
-        # 3. Phase4: Temporal recall (check multiple lookback windows)
-        for user in users:
-            await self._precompute_temporal_recall(user)
-
-        # 3b. Phase4: Chain recall (芋づる想起 — precompute memory links)
-        for user in users:
-            await self._precompute_chain_links(user.user_id)
-
-        # 4. Decay and archive weak memories
-        try:
-            stats = await self._memory.decay_and_archive_memories()
-            logger.info(
-                "Memory consolidation: %d decayed, %d archived",
-                stats["decayed"],
-                stats["archived"],
-            )
-        except Exception:
-            logger.exception("Memory decay/archive failed")
-
-        # 5. Trim old conversation messages and recall hints
-        for user in users:
-            try:
-                deleted = await self._memory.trim_old_messages(user.user_id)
-                if deleted > 0:
-                    logger.info(
-                        "Trimmed %d old messages for user %s",
-                        deleted,
-                        user.user_id,
-                    )
-            except Exception:
-                logger.exception("Failed to trim messages for user %s", user.user_id)
-
-        try:
-            await self._memory.clear_old_recall_hints(
-                keep_days=self._memory_config.recall_hints_retention_days,
-            )
-        except Exception:
-            logger.exception("Failed to clear old recall hints")
-
-        try:
-            await self._memory.clear_old_chain_links(
-                keep_days=self._memory_config.chain_links_retention_days,
-            )
-        except Exception:
-            logger.exception("Failed to clear old chain links")
-
-        # 6. Expire stale pending proposals (older than 7 days)
-        try:
-            expired = await self._memory.expire_old_proposals(
-                max_age_days=self._memory_config.proposal_expiry_days,
-            )
-            if expired > 0:
-                logger.info("Expired %d stale proposals", expired)
-        except Exception:
-            logger.exception("Failed to expire old proposals")
-
-        logger.info("Sleep phase completed")
-
-    async def _promote_episodic_memories(self, user_id: str) -> None:
-        """AI reviews today's episodic memories and promotes general facts."""
-        try:
-            episodic = await self._memory.search_episodic(
-                user_id,
-                "today",
-                n_results=self._memory_config.consolidation_episode_results,
-            )
-            if not episodic:
-                return
-
-            episodes_text = "\n".join(f"- {m['content']}" for m in episodic)
-            system = _PROMOTION_SYSTEM_PROMPT.format(episodes=episodes_text)
-
-            raw = await self._ai.generate(
-                prompt="Extract generalizable facts from the episodes above.",
-                system=system,
-                temperature=self._memory_config.consolidation_temperature,
-            )
-            data = json.loads(raw)
-            facts = data.get("facts", [])
-            if not isinstance(facts, list):
-                return
-
-            for fact in facts[: self._memory_config.consolidation_facts_limit]:
-                if not isinstance(fact, str) or len(fact.strip()) < 3:
-                    continue
-                entry = MemoryEntry(
-                    id=str(uuid.uuid4()),
-                    user_id=user_id,
-                    layer=MemoryLayer.SEMANTIC,
-                    content=fact.strip(),
-                    metadata={"source": "sleep_promotion"},
-                )
-                await self._memory.add_semantic_memory(entry)
-                logger.debug("Promoted episodic → semantic for %s: %s", user_id, fact)
-        except Exception:
-            logger.exception("Episodic promotion failed for user %s", user_id)
-
-    # Temporal recall lookback windows: (days_ago, human_label)
-    _TEMPORAL_WINDOWS: list[tuple[int, str]] = [
-        (1, "yesterday"),
-        (7, "1 week ago"),
-        (30, "1 month ago"),
-        (365, "1 year ago"),
-    ]
-
-    async def _precompute_temporal_recall(self, user: UserSummary) -> None:
-        """Precompute temporal recall hints for multiple lookback windows."""
-        for days_ago, label in self._TEMPORAL_WINDOWS:
-            try:
-                target_date = (
-                    datetime.now(tz=UTC) - timedelta(days=days_ago)
-                ).strftime("%Y-%m-%d")
-                messages = await self._memory.get_messages_on_date(
-                    user.user_id, target_date
-                )
-                if not messages:
-                    continue
-
-                topics: list[str] = []
-                for msg in messages:
-                    if msg["role"] == "user" and len(msg["content"]) > 10:
-                        topics.append(msg["content"][:100])
-                if not topics:
-                    continue
-
-                summary = "; ".join(topics[:3])
-                content = (
-                    f"{label} ({target_date}), "
-                    f"{user.display_name} talked about: {summary}"
-                )
-                await self._memory.store_recall_hint(
-                    user_id=user.user_id,
-                    hint_type="temporal",
-                    content=content,
-                    metadata={"original_date": target_date, "days_ago": days_ago},
-                )
-                logger.debug(
-                    "Temporal recall hint stored for %s (%s): %s",
-                    user.user_id,
-                    label,
-                    content[:80],
-                )
-            except Exception:
-                logger.exception(
-                    "Temporal recall (%s) failed for user %s",
-                    label,
-                    user.user_id,
-                )
-
-    async def _precompute_chain_links(self, user_id: str) -> None:
-        """Precompute chain-recall links between related memories.
-
-        For each of today's episodic memories, find related older memories
-        via vector search and store the linkage for runtime chain recall.
-        """
-        try:
-            recent_episodes = await self._memory.search_episodic(
-                user_id,
-                "today",
-                n_results=self._memory_config.chain_link_episode_results,
-            )
-            if not recent_episodes:
-                return
-
-            for episode in recent_episodes:
-                ep_id = episode.get("id", "")
-                ep_content = episode.get("content", "")
-                if not ep_content:
-                    continue
-
-                # Search for related semantic memories
-                related = await self._memory.search_semantic(
-                    user_id,
-                    ep_content,
-                    n_results=self._memory_config.chain_link_related_results,
-                )
-                for mem in related:
-                    mem_id = mem.get("id", "")
-                    mem_content = mem.get("content", "")
-                    if mem_id == ep_id or not mem_content:
-                        continue
-                    await self._memory.store_chain_link(
-                        user_id=user_id,
-                        source_memory_id=ep_id,
-                        linked_content=mem_content,
-                        linked_memory_id=mem_id,
-                        distance=mem.get("distance"),
-                    )
-
-                # Search for related episodic memories
-                related_ep = await self._memory.search_episodic(
-                    user_id,
-                    ep_content,
-                    n_results=self._memory_config.chain_link_related_results,
-                )
-                for mem in related_ep:
-                    mem_id = mem.get("id", "")
-                    mem_content = mem.get("content", "")
-                    if mem_id == ep_id or not mem_content:
-                        continue
-                    await self._memory.store_chain_link(
-                        user_id=user_id,
-                        source_memory_id=ep_id,
-                        linked_content=mem_content,
-                        linked_memory_id=mem_id,
-                        distance=mem.get("distance"),
-                    )
-
-            logger.debug("Chain links computed for user %s", user_id)
-        except Exception:
-            logger.exception("Chain link precomputation failed for user %s", user_id)

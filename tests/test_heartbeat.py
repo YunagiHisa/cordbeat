@@ -473,7 +473,7 @@ class TestSleepPhase:
 
         mock_ai.generate = AsyncMock(return_value="Today I chatted with Alice.")
 
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
         records = await memory.get_certain_records("u1", record_type="diary")
         assert len(records) == 1
@@ -488,7 +488,7 @@ class TestSleepPhase:
         """Users with no messages today don't get a diary entry."""
         await memory.get_or_create_user("u1", "Silent")
 
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
         records = await memory.get_certain_records("u1", record_type="diary")
         assert len(records) == 0
@@ -503,7 +503,7 @@ class TestSleepPhase:
         memory.decay_and_archive_memories = AsyncMock(
             return_value={"decayed": 5, "archived": 2}
         )
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
         memory.decay_and_archive_memories.assert_called_once()
 
     async def test_sleep_phase_trims_messages(
@@ -515,7 +515,7 @@ class TestSleepPhase:
         await memory.get_or_create_user("u1", "Alice")
         memory.trim_old_messages = AsyncMock(return_value=10)
 
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
         memory.trim_old_messages.assert_called_once_with("u1")
 
     async def test_sleep_phase_only_runs_once_per_quiet_period(
@@ -724,7 +724,7 @@ class TestSleepPhaseErrors:
 
         mock_ai.generate = AsyncMock(side_effect=RuntimeError("AI down"))
         # Should not raise — error is logged and skipped
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
     async def test_decay_error_does_not_stop_sleep(
         self,
@@ -736,7 +736,7 @@ class TestSleepPhaseErrors:
             side_effect=RuntimeError("DB error")
         )
         # Should not raise
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
     async def test_trim_error_does_not_stop_sleep(
         self,
@@ -747,7 +747,7 @@ class TestSleepPhaseErrors:
         await memory.get_or_create_user("u1", "Alice")
         memory.trim_old_messages = AsyncMock(side_effect=RuntimeError("DB error"))
         # Should not raise
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
 
 # ── Sleep phase: memory promotion ─────────────────────────────────────
@@ -781,7 +781,7 @@ class TestMemoryPromotion:
 
         mock_ai.generate = AsyncMock(side_effect=_generate)
 
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
         # Check that a semantic memory was created
         results = await memory.search_semantic("u1", "hiking")
@@ -814,7 +814,7 @@ class TestMemoryPromotion:
 
         mock_ai.generate = AsyncMock(side_effect=_generate)
 
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
         results = await memory.search_semantic("u1", "Fact")
         fact_results = [r for r in results if r["content"].startswith("Fact")]
@@ -846,7 +846,7 @@ class TestMemoryPromotion:
 
         mock_ai.generate = AsyncMock(side_effect=_generate)
         # Should not raise
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
     async def test_skips_user_without_episodic_memories(
         self,
@@ -864,7 +864,7 @@ class TestMemoryPromotion:
             return "Diary"
 
         mock_ai.generate = AsyncMock(side_effect=_generate)
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
 
 # ── Sleep phase: temporal recall precomputation ───────────────────────
@@ -894,7 +894,7 @@ class TestTemporalRecall:
 
         mock_ai.generate = AsyncMock(return_value="Diary entry")
 
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
         hints = await memory.get_recall_hints("u1")
         assert len(hints) >= 1
@@ -926,7 +926,7 @@ class TestTemporalRecall:
 
         mock_ai.generate = AsyncMock(return_value="Diary")
 
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
         hints = await memory.get_recall_hints("u1")
         contents = [h["content"] for h in hints]
@@ -954,7 +954,7 @@ class TestTemporalRecall:
         await memory._conn.commit()
 
         mock_ai.generate = AsyncMock(return_value="Diary")
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
         hints = await memory.get_recall_hints("u1")
         assert any("yesterday" in h["content"] for h in hints)
@@ -970,7 +970,7 @@ class TestTemporalRecall:
 
         mock_ai.generate = AsyncMock(return_value="Diary")
 
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
         hints = await memory.get_recall_hints("u1")
         assert len(hints) == 0
@@ -987,7 +987,7 @@ class TestTemporalRecall:
 
         mock_ai.generate = AsyncMock(return_value="Diary")
         # Should not raise
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
     async def test_clears_old_recall_hints(
         self,
@@ -1010,7 +1010,7 @@ class TestTemporalRecall:
         await memory._conn.commit()
 
         mock_ai.generate = AsyncMock(return_value="Diary")
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
         hints = await memory.get_recall_hints("u1")
         assert len(hints) == 0
@@ -1049,7 +1049,7 @@ class TestChainRecallPrecomputation:
 
         mock_ai.generate = AsyncMock(return_value="Diary")
 
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
         # Chain links should have been created
         links = await memory.get_chain_links("u1", ["ep_python"])
@@ -1066,7 +1066,7 @@ class TestChainRecallPrecomputation:
         await memory.get_or_create_user("u1", "Alice")
         mock_ai.generate = AsyncMock(return_value="Diary")
 
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
         # Should not crash, and no chain_link records
         records = await memory.get_certain_records("u1", record_type="chain_link")
@@ -1084,7 +1084,7 @@ class TestChainRecallPrecomputation:
         mock_ai.generate = AsyncMock(return_value="Diary")
 
         # Should not raise
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
     async def test_clears_old_chain_links(
         self,
@@ -1106,7 +1106,7 @@ class TestChainRecallPrecomputation:
         await memory._conn.commit()
 
         mock_ai.generate = AsyncMock(return_value="Diary")
-        await heartbeat._run_sleep_phase()
+        await heartbeat._sleep.run()
 
         links = await memory.get_chain_links("u1", ["mem_old"])
         assert len(links) == 0
@@ -1552,7 +1552,7 @@ class TestApprovedProposalExecution:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         # Skill was executed with correct params
         execute_fn.assert_called_once_with(key="value")
@@ -1581,7 +1581,7 @@ class TestApprovedProposalExecution:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         proposal = await memory.get_proposal(proposal_id)
         assert proposal is not None
@@ -1621,7 +1621,7 @@ class TestApprovedProposalExecution:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         # Skill was NOT executed
         execute_fn.assert_not_called()
@@ -1642,7 +1642,7 @@ class TestApprovedProposalExecution:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         proposal = await memory.get_proposal(proposal_id)
         assert proposal is not None
@@ -1684,7 +1684,7 @@ class TestApprovedProposalExecution:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         proposal = await memory.get_proposal(proposal_id)
         assert proposal is not None
@@ -1710,7 +1710,7 @@ class TestTraitChangeProposal:
             target_user_id="u1",
             target_adapter_id="discord",
         )
-        await heartbeat._store_trait_proposal(decision)
+        await heartbeat._proposals.store_trait_proposal(decision)
 
         records = await memory.get_certain_records("u1", record_type="proposal")
         assert len(records) == 1
@@ -1735,7 +1735,7 @@ class TestTraitChangeProposal:
             trait_add=["bold"],
             trait_remove=[],
         )
-        await heartbeat._store_trait_proposal(decision)
+        await heartbeat._proposals.store_trait_proposal(decision)
 
         assert soul.traits == original_traits
         assert "bold" not in soul.traits
@@ -1758,7 +1758,7 @@ class TestTraitChangeProposal:
             target_user_id="u1",
             target_adapter_id="discord",
         )
-        await heartbeat._store_trait_proposal(decision)
+        await heartbeat._proposals.store_trait_proposal(decision)
 
         mock_gateway.send_to_adapter.assert_called_once()
         msg = mock_gateway.send_to_adapter.call_args[0][1]
@@ -1797,7 +1797,7 @@ class TestTraitChangeProposal:
             trait_add=["adventurous"],
             trait_remove=["curious"],
         )
-        await heartbeat._store_trait_proposal(decision)
+        await heartbeat._proposals.store_trait_proposal(decision)
 
         records = await memory.get_certain_records("__system__", record_type="proposal")
         assert len(records) == 1
@@ -1830,7 +1830,7 @@ class TestApprovedTraitExecution:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         # Trait was applied
         assert "playful" in soul.traits
@@ -1862,7 +1862,7 @@ class TestApprovedTraitExecution:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         assert "curious" not in soul.traits
 
@@ -1892,7 +1892,7 @@ class TestApprovedTraitExecution:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         assert soul.traits == original
         assert "bold" not in soul.traits
@@ -1939,7 +1939,7 @@ class TestProposalExecutionNotification:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         mock_gateway.send_to_adapter.assert_called_once()
         msg = mock_gateway.send_to_adapter.call_args[0][1]
@@ -1986,7 +1986,7 @@ class TestProposalExecutionNotification:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         mock_gateway.send_to_adapter.assert_called_once()
         msg = mock_gateway.send_to_adapter.call_args[0][1]
@@ -2016,7 +2016,7 @@ class TestProposalExecutionNotification:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         mock_gateway.send_to_adapter.assert_called_once()
         msg = mock_gateway.send_to_adapter.call_args[0][1]
@@ -2047,7 +2047,7 @@ class TestProposalExecutionNotification:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         mock_gateway.send_to_adapter.assert_called_once()
         msg = mock_gateway.send_to_adapter.call_args[0][1]
@@ -2075,7 +2075,7 @@ class TestProposalExecutionNotification:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         mock_gateway.send_to_adapter.assert_called_once()
         msg = mock_gateway.send_to_adapter.call_args[0][1]
@@ -2098,7 +2098,7 @@ class TestProposalExecutionNotification:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         # Proposal still executed but no notification
         mock_gateway.send_to_adapter.assert_not_called()
@@ -2169,7 +2169,7 @@ class TestSkillCreationProposal:
             target_user_id="u1",
             target_adapter_id="discord",
         )
-        await heartbeat._store_skill_creation_proposal(decision)
+        await heartbeat._proposals.store_skill_creation_proposal(decision)
 
         mock_gateway.send_to_adapter.assert_called_once()
         msg = mock_gateway.send_to_adapter.call_args[0][1]
@@ -2202,7 +2202,7 @@ class TestSkillCreationProposal:
                 "    return {'greeting': f'Hello {name}'}\n"
             ),
         }
-        await heartbeat._install_proposed_skill(proposed)
+        await heartbeat._proposals.install_proposed_skill(proposed)
 
         # Files written
         skill_dir = skills_dir / "greet"
@@ -2225,7 +2225,7 @@ class TestSkillCreationProposal:
             "code": "def execute(**kw):\n    pass\n",
         }
         with pytest.raises(ValueError, match="Invalid skill name"):
-            await heartbeat._install_proposed_skill(proposed)
+            await heartbeat._proposals.install_proposed_skill(proposed)
 
     async def test_install_rejects_existing_skill(
         self,
@@ -2243,11 +2243,11 @@ class TestSkillCreationProposal:
             "parameters": [],
             "code": "def execute(**kw):\n    return {}\n",
         }
-        await heartbeat._install_proposed_skill(proposed)
+        await heartbeat._proposals.install_proposed_skill(proposed)
 
         # Try again
         with pytest.raises(ValueError, match="already exists"):
-            await heartbeat._install_proposed_skill(proposed)
+            await heartbeat._proposals.install_proposed_skill(proposed)
 
     async def test_install_rejects_dangerous_code(
         self,
@@ -2264,7 +2264,7 @@ class TestSkillCreationProposal:
             "code": "import subprocess\ndef execute(**kw):\n    pass\n",
         }
         with pytest.raises(ValueError, match="blocked pattern"):
-            await heartbeat._install_proposed_skill(proposed)
+            await heartbeat._proposals.install_proposed_skill(proposed)
 
     async def test_install_rejects_invalid_syntax(
         self,
@@ -2281,7 +2281,7 @@ class TestSkillCreationProposal:
             "code": "def execute(**kw)\n    pass\n",  # missing colon
         }
         with pytest.raises(SyntaxError):
-            await heartbeat._install_proposed_skill(proposed)
+            await heartbeat._proposals.install_proposed_skill(proposed)
 
     async def test_install_rejects_empty_code(
         self,
@@ -2298,7 +2298,7 @@ class TestSkillCreationProposal:
             "code": "",
         }
         with pytest.raises(ValueError, match="empty"):
-            await heartbeat._install_proposed_skill(proposed)
+            await heartbeat._proposals.install_proposed_skill(proposed)
 
     async def test_execute_approved_skill_proposal(
         self,
@@ -2331,7 +2331,7 @@ class TestSkillCreationProposal:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         # Skill installed
         skill = heartbeat._skills.get("hello")
@@ -2372,7 +2372,7 @@ class TestSkillCreationProposal:
             },
         )
 
-        await heartbeat._execute_approved_proposals()
+        await heartbeat._proposals.execute_approved()
 
         mock_gateway.send_to_adapter.assert_called_once()
         msg = mock_gateway.send_to_adapter.call_args[0][1]
@@ -2392,7 +2392,7 @@ class TestSkillCreationProposal:
             "parameters": [],
             "code": "def execute(**kw):\n    return {}\n",
         }
-        await heartbeat._install_proposed_skill(proposed)
+        await heartbeat._proposals.install_proposed_skill(proposed)
 
         yaml_content = (skills_dir / "safeskill" / "skill.yaml").read_text(
             encoding="utf-8"

@@ -43,7 +43,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `LINK_REQUEST` / `LINK_CONFIRM` message handlers in CoreEngine
 - CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, CHANGELOG.md
 - Docker HEALTHCHECK for core container
-- 311 tests with 85%+ coverage
+- Built-in skills: file_read, file_write, timer, read_diary, shell_exec,
+  web_search, weather, api_call
+- AI-generated skill proposal feature (`PROPOSE_SKILL` action)
+- Externalized hardcoded constants into `MemoryConfig` (46 settings total)
+- `/link` and `/unlink` text commands with audit logging
+- `/name`, `/quiet`, `/prefer` user commands and `preferred_platform` field
+- Configurable logging via `config.yaml` (`log.level`, `log.format`)
+- Timezone-aware datetimes throughout codebase
+- Setup wizard (`cordbeat-init`) — zero-question bootstrapping with
+  auto-detection of Ollama and llama.cpp
+- `cordbeat doctor` diagnostic command — checks config, AI connectivity,
+  data directories, memory DB, and skills
+- SOUL `language` property for multilingual response support
+- llama.cpp server auto-detection at `localhost:8080`
+- 536+ tests with 92%+ coverage
 
 ### Changed
 - Migrated to aiosqlite for async database operations
@@ -52,9 +66,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `CoreEngine.handle_message()` split into `_resolve_user()` and
   `_generate_response()` phases
 - Discord and Telegram adapters now extend `RetryableConnection`
+- `heartbeat.py` split into three focused modules: `heartbeat.py`,
+  `heartbeat_proposals.py`, `heartbeat_sleep.py`
+- Eliminated all `type: ignore` comments (39 → 0) via typed accessors
+- Replaced `dict(result)` coercion with proper type checks in engine
+- Improved code quality: ABC base classes, routing tables, proposal filters
 
 ### Fixed
 - Redundant `except (json.JSONDecodeError, Exception)` in engine.py
 - `dict(result)` TypeError when skill returns non-dict value
 - `CancelledError` not collected after `queue_task.cancel()` in main.py
 - Async safety, security, and performance issues (PR #16)
+- YAML injection in AI-generated skill proposals
+- Japanese comments in codebase replaced with English

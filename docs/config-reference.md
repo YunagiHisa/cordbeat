@@ -72,7 +72,7 @@ adapters:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `provider` | string | `"ollama"` | AI provider (`ollama` or `openai`) |
+| `provider` | string | `"ollama"` | AI provider (`ollama`, `openai`, or `openai_compat`) |
 | `base_url` | string | `"http://localhost:11434"` | API base URL |
 | `model` | string | `"llama3"` | Model name |
 | `timeout` | float | `120.0` | HTTP request timeout in seconds |

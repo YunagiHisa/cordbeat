@@ -68,6 +68,25 @@ def _probe_ollama(base_url: str = "http://localhost:11434") -> str | None:
         return None
 
 
+def _probe_llama_cpp(
+    base_url: str = "http://localhost:8080",
+) -> str | None:
+    """Test connection to llama.cpp server and return the model name, or None."""
+    import json
+
+    try:
+        url = base_url.rstrip("/") + "/v1/models"
+        req = urllib.request.Request(url, method="GET")  # noqa: S310
+        with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
+            data = json.loads(resp.read().decode())
+        models = data.get("data", [])
+        if models:
+            return str(models[0].get("id", "default"))
+        return "default"
+    except (urllib.error.URLError, OSError, ValueError, KeyError):
+        return None
+
+
 def _probe_provider(
     provider: str,
     base_url: str,
@@ -200,29 +219,38 @@ def run_wizard(home: Path | None = None) -> Path:
     home = home or cordbeat_home()
     print(_BANNER)
 
-    # ── Auto-detect Ollama ────────────────────────────────────────
+    # ── Auto-detect AI backend ───────────────────────────────────
     print("  Detecting AI backend...")
     detected_model = _probe_ollama()
 
     if detected_model:
-        # Zero-question path
+        # Zero-question path — Ollama
         print(f"  ✓ Ollama detected — model: {detected_model}\n")
         provider = "ollama"
         base_url = "http://localhost:11434"
         model = detected_model
         api_key = ""
     else:
-        # Fallback: ask minimal questions
-        print("  ✗ Ollama not found at localhost:11434\n")
-        print("  Supported providers: ollama, openai, openai_compat")
-        provider = _ask("AI provider", "ollama")
-        preset = _PROVIDERS.get(provider, _PROVIDERS["ollama"])
-        base_url = _ask("API base URL", preset["base_url"])
-        model = _ask("Model name", "llama3")
-        provider = preset["config_provider"]
-        api_key = ""
-        if provider in ("openai", "openai_compat"):
-            api_key = _ask("API key (leave empty to skip)", "")
+        # Try llama.cpp server
+        llama_model = _probe_llama_cpp()
+        if llama_model:
+            print(f"  ✓ llama.cpp detected — model: {llama_model}\n")
+            provider = "openai_compat"
+            base_url = "http://localhost:8080/v1"
+            model = llama_model
+            api_key = ""
+        else:
+            # Fallback: ask minimal questions
+            print("  ✗ No local AI backend detected\n")
+            print("  Supported providers: ollama, openai, openai_compat (llama.cpp)")
+            provider = _ask("AI provider", "ollama")
+            preset = _PROVIDERS.get(provider, _PROVIDERS["ollama"])
+            base_url = _ask("API base URL", preset["base_url"])
+            model = _ask("Model name", "llama3")
+            provider = preset["config_provider"]
+            api_key = ""
+            if provider in ("openai", "openai_compat"):
+                api_key = _ask("API key (leave empty to skip)", "")
 
     # ── Character name (optional) ─────────────────────────────────
     name = _ask("Character name", "CordBeat")

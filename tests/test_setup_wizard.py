@@ -19,6 +19,7 @@ from cordbeat.setup_wizard import (
     _probe_ollama,
     _probe_provider,
     _write_soul_files,
+    cordbeat_init_cli,
     run_wizard,
 )
 
@@ -307,3 +308,14 @@ class TestRunWizard:
         assert (tmp_path / "skills").is_dir()
         assert (tmp_path / "soul").is_dir()
         assert (tmp_path / "soul" / "soul_core.yaml").is_file()
+
+
+# -- cordbeat_init_cli tests ──────────────────────────────────────────
+
+
+def test_cordbeat_init_cli_delegates_to_run_wizard(tmp_path: Path) -> None:
+    """``cordbeat_init_cli`` simply calls ``run_wizard``."""
+    with patch("cordbeat.setup_wizard.run_wizard") as mock_rw:
+        mock_rw.return_value = tmp_path / "config.yaml"
+        cordbeat_init_cli()
+        mock_rw.assert_called_once()

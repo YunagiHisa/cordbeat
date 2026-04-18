@@ -144,7 +144,7 @@ class TestOpenAICompatBackend:
 
         assert result == "Hi!"
         call_kwargs = backend._client.post.call_args
-        assert "/v1/chat/completions" in call_kwargs[0][0]
+        assert "/chat/completions" in call_kwargs[0][0]
 
     async def test_unexpected_response_format(self) -> None:
         cfg = AIBackendConfig(provider="openai")

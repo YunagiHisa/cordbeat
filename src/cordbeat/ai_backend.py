@@ -121,7 +121,7 @@ class OpenAICompatBackend(AIBackend):
         messages.append({"role": "user", "content": prompt})
 
         resp = await self._client.post(
-            f"{self._base_url}/v1/chat/completions",
+            f"{self._base_url}/chat/completions",
             json={
                 "model": self._model,
                 "messages": messages,

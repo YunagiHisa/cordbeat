@@ -69,7 +69,7 @@ Free-form notes about this character's personality nuances.
 Write anything here: speech patterns, favorite phrases, tone preferences, etc.
 """
 
-# ── Permission matrix (from 設計書/SOUL.md) ──────────────────────────
+# ── Permission matrix (from design docs / SOUL.md) ──────────────────
 # Maps each mutable field to the set of callers allowed to change it.
 # Fields NOT listed (immutable_rules, emotion_states) cannot be changed
 # by anyone at runtime.

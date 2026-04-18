@@ -305,9 +305,10 @@ class ProposalExecutor:
         usage = proposed.get("usage", "")
         parameters = proposed.get("parameters", [])
 
+        safe_desc = description.replace("\\", "\\\\").replace('"', '\\"')
         yaml_lines = [
             f"name: {name}",
-            f'description: "{description}"',
+            f'description: "{safe_desc}"',
             'version: "1.0.0"',
             'author: "cordbeat-ai"',
             "",
@@ -326,7 +327,8 @@ class ProposalExecutor:
             )
             desc = param.get("description", "")
             if desc:
-                yaml_lines.append(f'    description: "{desc}"')
+                safe = desc.replace("\\", "\\\\").replace('"', '\\"')
+                yaml_lines.append(f'    description: "{safe}"')
         yaml_lines.extend(
             [
                 "",

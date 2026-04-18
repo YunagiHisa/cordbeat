@@ -179,7 +179,7 @@ class CoreEngine:
                     episodic_memories.append(mem)
                     seen_ids.add(mem["id"])
 
-        # Phase 4a: Chain recall (芋づる想起 — precomputed links)
+        # Phase 4a: Chain recall (precomputed associative links)
         try:
             recalled_ids = list(seen_ids)
             chain_contents = await self._memory.get_chain_links(

@@ -90,7 +90,10 @@ Self-contained and easy to add or remove.
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (package manager)
-- [Ollama](https://ollama.com/) (for local AI inference)
+- A local AI backend — one of:
+  - [Ollama](https://ollama.com/) (auto-detected at `localhost:11434`)
+  - [llama.cpp](https://github.com/ggerganov/llama.cpp) server (auto-detected at `localhost:8080`)
+  - Any OpenAI-compatible API
 
 ### Installation
 
@@ -111,6 +114,23 @@ uv sync --extra dev
 
 ### Running CordBeat
 
+The fastest way to get started is the **setup wizard**:
+
+```bash
+# Run the setup wizard — auto-detects Ollama or llama.cpp
+cordbeat-init
+
+# Start CordBeat
+cordbeat
+```
+
+The wizard automatically detects your local AI backend and generates
+`~/.cordbeat/config.yaml` with sensible defaults. No questions asked if
+Ollama or llama.cpp is running.
+
+<details>
+<summary>Manual setup (without wizard)</summary>
+
 ```bash
 # 1. Pull an AI model (e.g. qwen3.5:9b)
 ollama pull qwen3.5:9b
@@ -124,6 +144,16 @@ uv run cordbeat
 
 # 4. In another terminal, connect the CLI adapter
 uv run python -m cordbeat.cli_adapter
+```
+
+</details>
+
+### Diagnostics
+
+Run the built-in doctor to check your setup:
+
+```bash
+cordbeat doctor
 ```
 
 ### Docker
@@ -207,14 +237,18 @@ cordbeat/
 │   ├── extraction.py      # AI-driven memory extraction
 │   ├── skills.py          # Pluggable skill registry (with integrity check)
 │   ├── gateway.py         # WebSocket gateway & adapter base
-│   ├── heartbeat.py       # Autonomous HEARTBEAT loop
+│   ├── heartbeat.py       # Autonomous HEARTBEAT loop (2-layer)
+│   ├── heartbeat_proposals.py # Proposal execution (skills, traits)
+│   ├── heartbeat_sleep.py # Sleep phase (diary, decay, promotion)
 │   ├── engine.py          # Message processing engine
+│   ├── setup_wizard.py    # Zero-friction setup wizard
+│   ├── doctor.py          # Diagnostic health checks
 │   ├── main.py            # Entry point — boots all subsystems
 │   ├── cli_adapter.py     # Interactive CLI client
 │   ├── discord_adapter.py # Discord bot adapter
 │   ├── telegram_adapter.py# Telegram bot adapter
 │   └── adapter_runner.py  # Standalone adapter launcher
-├── tests/                 # Test suite (510+ tests)
+├── tests/                 # Test suite (536+ tests)
 ├── docs/                  # Design & architecture documentation
 ├── Dockerfile             # Core container image
 ├── Dockerfile.adapter     # Adapter container image

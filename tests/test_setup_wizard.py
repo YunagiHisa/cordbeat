@@ -15,6 +15,7 @@ import yaml
 from cordbeat.setup_wizard import (
     _build_config,
     _build_soul_yaml,
+    _probe_llama_cpp,
     _probe_ollama,
     _probe_provider,
     _write_soul_files,
@@ -52,6 +53,36 @@ def ollama_server() -> Generator[str, None, None]:
     server.shutdown()
 
 
+class _LlamaCppHandler(BaseHTTPRequestHandler):
+    """Minimal handler that mimics llama.cpp /v1/models."""
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/v1/models":
+            body = json.dumps(
+                {"data": [{"id": "my-model", "object": "model"}]}
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, *_args: object) -> None:
+        pass
+
+
+@pytest.fixture()
+def llama_cpp_server() -> Generator[str, None, None]:
+    server = HTTPServer(("127.0.0.1", 0), _LlamaCppHandler)
+    port = server.server_address[1]
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{port}"
+    server.shutdown()
+
+
 # -- _probe_ollama ─────────────────────────────────────────────────────
 
 
@@ -73,6 +104,18 @@ class TestProbeProvider:
 
     def test_unreachable(self) -> None:
         assert _probe_provider("ollama", "http://127.0.0.1:1") is False
+
+
+# -- _probe_llama_cpp ──────────────────────────────────────────────────
+
+
+class TestProbeLlamaCpp:
+    def test_detected(self, llama_cpp_server: str) -> None:
+        model = _probe_llama_cpp(llama_cpp_server)
+        assert model == "my-model"
+
+    def test_not_detected(self) -> None:
+        assert _probe_llama_cpp("http://127.0.0.1:1") is None
 
 
 # -- _build_soul_yaml ──────────────────────────────────────────────────
@@ -183,6 +226,7 @@ class TestRunWizard:
         inputs = iter(["ollama", "http://myhost:11434", "mistral", "TestBot", "ja"])
         with (
             patch("cordbeat.setup_wizard._probe_ollama", return_value=None),
+            patch("cordbeat.setup_wizard._probe_llama_cpp", return_value=None),
             patch("builtins.input", side_effect=inputs),
             patch(
                 "cordbeat.setup_wizard._probe_provider",
@@ -194,6 +238,28 @@ class TestRunWizard:
         cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         assert cfg["ai_backend"]["base_url"] == "http://myhost:11434"
         assert cfg["ai_backend"]["model"] == "mistral"
+
+    def test_llama_cpp_detected(self, tmp_path: Path) -> None:
+        """When llama.cpp is detected (but not Ollama), wizard auto-configures."""
+        inputs = iter(["TestBot", "en"])
+        with (
+            patch("cordbeat.setup_wizard._probe_ollama", return_value=None),
+            patch(
+                "cordbeat.setup_wizard._probe_llama_cpp",
+                return_value="my-gguf-model",
+            ),
+            patch("builtins.input", side_effect=inputs),
+            patch(
+                "cordbeat.setup_wizard._probe_provider",
+                return_value=True,
+            ),
+        ):
+            config_path = run_wizard(tmp_path)
+
+        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert cfg["ai_backend"]["provider"] == "openai_compat"
+        assert cfg["ai_backend"]["base_url"] == "http://localhost:8080/v1"
+        assert cfg["ai_backend"]["model"] == "my-gguf-model"
 
     def test_openai_provider_asks_api_key(self, tmp_path: Path) -> None:
         """OpenAI provider asks for API key."""
@@ -209,6 +275,7 @@ class TestRunWizard:
         )
         with (
             patch("cordbeat.setup_wizard._probe_ollama", return_value=None),
+            patch("cordbeat.setup_wizard._probe_llama_cpp", return_value=None),
             patch("builtins.input", side_effect=inputs),
             patch(
                 "cordbeat.setup_wizard._probe_provider",

@@ -90,7 +90,7 @@ class SleepPhase:
         for user in users:
             await self._precompute_temporal_recall(user)
 
-        # 3b. Phase4: Chain recall (芋づる想起 — precompute memory links)
+        # 3b. Phase4: Chain recall (precompute associative memory links)
         for user in users:
             await self._precompute_chain_links(user.user_id)
 

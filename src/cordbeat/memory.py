@@ -1132,7 +1132,7 @@ class MemoryStore:
         await self._conn.commit()
         return cursor.rowcount
 
-    # ── Chain links (Phase4 芋づる想起) ───────────────────────────
+    # ── Chain links (Phase4 chain recall) ──────────────────────────
 
     async def store_chain_link(
         self,

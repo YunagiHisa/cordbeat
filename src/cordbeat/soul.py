@@ -129,6 +129,10 @@ class Soul:
         return str(self._soul.get("identity", {}).get("pronoun", "わたし"))
 
     @property
+    def language(self) -> str:
+        return str(self._soul.get("identity", {}).get("language", "en"))
+
+    @property
     def traits(self) -> list[str]:
         return list(self._soul.get("personality", {}).get("traits", []))
 
@@ -324,6 +328,7 @@ class Soul:
         return {
             "name": self.name,
             "pronoun": self.pronoun,
+            "language": self.language,
             "traits": self.traits,
             "emotion": emotion_data,
             "immutable_rules": self.immutable_rules,

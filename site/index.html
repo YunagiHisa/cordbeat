@@ -240,6 +240,17 @@
             margin: 0 auto;
         }
 
+        /* Quick Start */
+        .quickstart {
+            padding: 3rem 0;
+        }
+
+        .quickstart h2 {
+            text-align: center;
+            font-size: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
         /* Status */
         .status {
             padding: 3rem 0;
@@ -433,9 +444,24 @@
             </div>
         </section>
 
+        <section class="quickstart">
+            <h2>Get started in 3 commands</h2>
+            <div class="arch-diagram">
+                <pre style="color: #e0e0e0; font-family: monospace; font-size: 0.9rem; line-height: 1.8; margin: 0;"><code><span style="color: #8a8a8a"># Install</span>
+git clone https://github.com/YunagiHisa/cordbeat.git && cd cordbeat
+uv sync
+
+<span style="color: #8a8a8a"># Setup — auto-detects Ollama or llama.cpp</span>
+cordbeat-init
+
+<span style="color: #8a8a8a"># Run</span>
+cordbeat</code></pre>
+            </div>
+        </section>
+
         <section class="status">
             <div class="status-badge">&#x1F497; Alpha &mdash; Core is alive</div>
-            <p>Core agent framework implemented and running. HEARTBEAT, SOUL, MEMORY, and AI backend are operational. Contributions, ideas, and feedback are welcome.</p>
+            <p>536+ tests, 92% coverage. HEARTBEAT, SOUL, MEMORY, SKILL, and 8 built-in skills are operational. Setup wizard auto-detects Ollama and llama.cpp. Contributions, ideas, and feedback are welcome.</p>
         </section>
     </div>
 

@@ -28,6 +28,18 @@ ai_backend:
   # options:                 # provider-specific options
   #   api_key: ""           # required for openai/openai_compat
 
+  # --- Alternative: llama.cpp server ---
+  # provider: openai_compat
+  # base_url: "http://localhost:8080/v1"
+  # model: "default"
+
+  # --- Alternative: OpenAI API ---
+  # provider: openai
+  # base_url: "https://api.openai.com/v1"
+  # model: "gpt-4"
+  # options:
+  #   api_key: "sk-..."
+
 heartbeat:
   default_interval_minutes: 60
   min_interval_minutes: 5

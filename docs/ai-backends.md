@@ -39,6 +39,27 @@ ai_backend:
 
 Uses the `/v1/chat/completions` endpoint.
 
+### llama.cpp
+
+The [llama.cpp](https://github.com/ggerganov/llama.cpp) built-in server
+exposes an OpenAI-compatible API. CordBeat auto-detects it at
+`localhost:8080` during setup.
+
+```yaml
+ai_backend:
+  provider: openai_compat
+  base_url: "http://localhost:8080/v1"
+  model: "default"
+```
+
+Start the llama.cpp server:
+
+```bash
+llama-server -m your-model.gguf --port 8080
+```
+
+Uses the same `/v1/chat/completions` endpoint as the OpenAI provider.
+
 ---
 
 ## Thinking Models

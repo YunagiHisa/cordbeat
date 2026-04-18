@@ -18,12 +18,15 @@
 | Document | Description |
 |---|---|
 | [Engine](engine.md) | CoreEngine message processing flow |
-| [AI Backends](ai-backends.md) | Provider configuration (Ollama, OpenAI-compatible) |
+| [AI Backends](ai-backends.md) | Provider configuration (Ollama, llama.cpp, OpenAI-compatible) |
 | [Config Reference](config-reference.md) | All `config.yaml` fields and defaults |
 | [Deployment](deployment.md) | Local and Docker deployment guide |
 
 ## Getting Started
 
-- See the [main README](../README.md) for quick start instructions
-- See [Architecture](architecture.md) for the full system overview
-- See [Config Reference](config-reference.md) for all configuration options
+1. Run `cordbeat-init` — the setup wizard auto-detects your local AI backend
+2. Run `cordbeat` to start
+3. Run `cordbeat doctor` to verify your setup
+
+See the [main README](../README.md) for more details, or
+[Deployment](deployment.md) for Docker instructions.

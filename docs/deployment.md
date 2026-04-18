@@ -4,13 +4,37 @@
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (package manager)
-- [Ollama](https://ollama.com/) (or any OpenAI-compatible API)
+- A local AI backend — one of:
+  - [Ollama](https://ollama.com/) (auto-detected at `localhost:11434`)
+  - [llama.cpp](https://github.com/ggerganov/llama.cpp) server (auto-detected at `localhost:8080`)
+  - Any OpenAI-compatible API
 
 ---
 
 ## Local Deployment
 
-### 1. Install and Run
+### Quick Start (Setup Wizard)
+
+The fastest way to get started:
+
+```bash
+git clone https://github.com/YunagiHisa/cordbeat.git
+cd cordbeat
+uv sync
+
+# Run the setup wizard — auto-detects Ollama or llama.cpp
+cordbeat-init
+
+# Start CordBeat
+cordbeat
+```
+
+The wizard generates `~/.cordbeat/config.yaml` with sensible defaults.
+No questions asked if Ollama or llama.cpp is already running.
+
+Run `cordbeat doctor` to verify your setup at any time.
+
+### Manual Setup
 
 ```bash
 git clone https://github.com/YunagiHisa/cordbeat.git

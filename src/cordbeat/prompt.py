@@ -54,6 +54,10 @@ def build_soul_system_prompt(soul_snap: dict[str, Any]) -> str:
         "Keep your response concise."
     )
 
+    language = soul_snap.get("language", "en")
+    if language != "en":
+        prompt += f"\n\nAlways respond in {language}."
+
     notes = soul_snap.get("notes", "").strip()
     if notes:
         prompt += f"\n\nCharacter notes:\n{notes}"

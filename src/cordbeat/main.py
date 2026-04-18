@@ -6,9 +6,10 @@ import asyncio
 import logging
 import signal
 import sys
+from pathlib import Path
 
 from cordbeat.ai_backend import create_backend
-from cordbeat.config import load_config
+from cordbeat.config import cordbeat_home, load_config
 from cordbeat.engine import CoreEngine
 from cordbeat.gateway import GatewayServer, MessageQueue
 from cordbeat.heartbeat import HeartbeatLoop
@@ -17,6 +18,27 @@ from cordbeat.skills import SkillRegistry
 from cordbeat.soul import Soul
 
 logger = logging.getLogger("cordbeat")
+
+
+def _resolve_config_path() -> str:
+    """Find the config file, or run the setup wizard if none exists."""
+    # Explicit argument overrides everything
+    if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+        return sys.argv[1]
+
+    # Try ~/.cordbeat/config.yaml
+    home_config = cordbeat_home() / "config.yaml"
+    if home_config.is_file():
+        return str(home_config)
+
+    # Try CWD config.yaml (backward compat)
+    if Path("config.yaml").is_file():
+        return "config.yaml"
+
+    # Nothing found — run wizard
+    from cordbeat.setup_wizard import run_wizard
+
+    return str(run_wizard())
 
 
 async def main(config_path: str = "config.yaml") -> None:
@@ -124,7 +146,13 @@ async def main(config_path: str = "config.yaml") -> None:
 
 
 def cli() -> None:
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
+    # Handle subcommands
+    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
+        from cordbeat.doctor import run_doctor
+
+        raise SystemExit(run_doctor())
+
+    config_path = _resolve_config_path()
     asyncio.run(main(config_path))
 
 

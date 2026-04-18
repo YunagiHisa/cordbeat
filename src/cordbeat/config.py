@@ -12,6 +12,19 @@ import yaml
 _ENV_PREFIX = "CORDBEAT_"
 
 
+def cordbeat_home() -> Path:
+    """Return the CordBeat home directory.
+
+    Resolution order:
+        1. ``CORDBEAT_HOME`` environment variable
+        2. ``~/.cordbeat/``
+    """
+    env = os.environ.get("CORDBEAT_HOME")
+    if env:
+        return Path(env).expanduser().resolve()
+    return Path.home() / ".cordbeat"
+
+
 @dataclass
 class GatewayConfig:
     host: str = "0.0.0.0"

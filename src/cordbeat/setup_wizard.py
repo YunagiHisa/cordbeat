@@ -291,3 +291,8 @@ def run_wizard(home: Path | None = None) -> Path:
     print(f"\n  ✨ {name} is ready to come alive!")
     print("  Starting CordBeat...\n")
     return config_path
+
+
+def cordbeat_init_cli() -> None:
+    """CLI entry point for ``cordbeat-init``."""
+    run_wizard()

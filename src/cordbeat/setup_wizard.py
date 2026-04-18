@@ -289,7 +289,7 @@ def run_wizard(home: Path | None = None) -> Path:
 
     # ── Done ──────────────────────────────────────────────────────
     print(f"\n  ✨ {name} is ready to come alive!")
-    print("  Starting CordBeat...\n")
+    print("  Run 'cordbeat' to start.\n")
     return config_path
 
 

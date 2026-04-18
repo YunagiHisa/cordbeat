@@ -91,3 +91,21 @@ integrity:
 
 If the hash does not match, the skill is rejected with an error. Skills
 without an `integrity` field are loaded normally (backwards compatible).
+
+---
+
+## Sandbox Limitations
+
+When `sandbox: true` is set in `skill.yaml`, the skill is executed with the
+following restrictions:
+
+| Layer | Mechanism | Note |
+|-------|-----------|------|
+| Filesystem | `open()` is monkey-patched to restrict paths to a temporary work directory | Python-level only; subprocesses are not restricted |
+| Network | `socket.socket` is replaced with a function that raises `OSError` | Blocks direct socket creation; does not intercept FFI or subprocess calls |
+| Execution | Skill runs in a temporary directory (`tempfile.mkdtemp`) that is cleaned up after execution | No OS-level chroot or container isolation |
+
+**Important**: These restrictions operate at the Python interpreter level.
+They do **not** provide OS-level sandboxing. A malicious skill using `ctypes`,
+`subprocess`, or native extensions can bypass them. For untrusted skills,
+run CordBeat inside a container or VM.

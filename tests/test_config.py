@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+import pytest
 
 from cordbeat.config import (
     Config,
@@ -129,106 +132,75 @@ class TestCoerceValue:
 
 
 class TestLoadDotenv:
-    def test_loads_env_file(self, tmp_path: Path, monkeypatch: object) -> None:
-        import os
-
+    def test_loads_env_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         env_file = tmp_path / ".env"
         env_file.write_text(
             '# comment\nMY_KEY=my_value\nQUOTED="quoted_val"\n',
             encoding="utf-8",
         )
-        # Ensure MY_KEY is not already set
-        os.environ.pop("MY_KEY", None)
-        os.environ.pop("QUOTED", None)
-        try:
-            _load_dotenv(env_file)
-            assert os.environ["MY_KEY"] == "my_value"
-            assert os.environ["QUOTED"] == "quoted_val"
-        finally:
-            os.environ.pop("MY_KEY", None)
-            os.environ.pop("QUOTED", None)
+        monkeypatch.delenv("MY_KEY", raising=False)
+        monkeypatch.delenv("QUOTED", raising=False)
+        _load_dotenv(env_file)
+        assert os.environ["MY_KEY"] == "my_value"
+        assert os.environ["QUOTED"] == "quoted_val"
 
-    def test_does_not_overwrite_existing(self, tmp_path: Path) -> None:
-        import os
-
+    def test_does_not_overwrite_existing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         env_file = tmp_path / ".env"
         env_file.write_text("MY_KEY=from_file\n", encoding="utf-8")
-        os.environ["MY_KEY"] = "from_env"
-        try:
-            _load_dotenv(env_file)
-            assert os.environ["MY_KEY"] == "from_env"
-        finally:
-            os.environ.pop("MY_KEY", None)
+        monkeypatch.setenv("MY_KEY", "from_env")
+        _load_dotenv(env_file)
+        assert os.environ["MY_KEY"] == "from_env"
 
     def test_missing_file_is_noop(self, tmp_path: Path) -> None:
         _load_dotenv(tmp_path / "nonexistent")
 
 
 class TestApplyEnvOverrides:
-    def test_simple_override(self) -> None:
-        import os
-
+    def test_simple_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         raw: dict = {"gateway": {"host": "0.0.0.0"}}
-        os.environ["CORDBEAT_GATEWAY__HOST"] = "127.0.0.1"
-        try:
-            _apply_env_overrides(raw)
-            assert raw["gateway"]["host"] == "127.0.0.1"
-        finally:
-            os.environ.pop("CORDBEAT_GATEWAY__HOST")
+        monkeypatch.setenv("CORDBEAT_GATEWAY__HOST", "127.0.0.1")
+        _apply_env_overrides(raw)
+        assert raw["gateway"]["host"] == "127.0.0.1"
 
-    def test_nested_options(self) -> None:
-        import os
-
+    def test_nested_options(self, monkeypatch: pytest.MonkeyPatch) -> None:
         raw: dict = {"adapters": {"discord": {"options": {}}}}
-        os.environ["CORDBEAT_ADAPTERS__DISCORD__OPTIONS__TOKEN"] = "secret"
-        try:
-            _apply_env_overrides(raw)
-            assert raw["adapters"]["discord"]["options"]["token"] == "secret"
-        finally:
-            os.environ.pop("CORDBEAT_ADAPTERS__DISCORD__OPTIONS__TOKEN")
+        monkeypatch.setenv("CORDBEAT_ADAPTERS__DISCORD__OPTIONS__TOKEN", "secret")
+        _apply_env_overrides(raw)
+        assert raw["adapters"]["discord"]["options"]["token"] == "secret"
 
-    def test_creates_missing_sections(self) -> None:
-        import os
-
+    def test_creates_missing_sections(self, monkeypatch: pytest.MonkeyPatch) -> None:
         raw: dict = {}
-        os.environ["CORDBEAT_AI_BACKEND__MODEL"] = "gpt-4"
-        try:
-            _apply_env_overrides(raw)
-            assert raw["ai_backend"]["model"] == "gpt-4"
-        finally:
-            os.environ.pop("CORDBEAT_AI_BACKEND__MODEL")
+        monkeypatch.setenv("CORDBEAT_AI_BACKEND__MODEL", "gpt-4")
+        _apply_env_overrides(raw)
+        assert raw["ai_backend"]["model"] == "gpt-4"
 
-    def test_int_coercion(self) -> None:
-        import os
-
+    def test_int_coercion(self, monkeypatch: pytest.MonkeyPatch) -> None:
         raw: dict = {"gateway": {}}
-        os.environ["CORDBEAT_GATEWAY__PORT"] = "9000"
-        try:
-            _apply_env_overrides(raw)
-            assert raw["gateway"]["port"] == 9000
-        finally:
-            os.environ.pop("CORDBEAT_GATEWAY__PORT")
+        monkeypatch.setenv("CORDBEAT_GATEWAY__PORT", "9000")
+        _apply_env_overrides(raw)
+        assert raw["gateway"]["port"] == 9000
 
 
 class TestLoadConfigWithEnv:
-    def test_env_overrides_yaml(self, tmp_path: Path) -> None:
-        import os
-
+    def test_env_overrides_yaml(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(
             "ai_backend:\n  model: llama3\n",
             encoding="utf-8",
         )
-        os.environ["CORDBEAT_AI_BACKEND__MODEL"] = "gpt-4"
-        try:
-            config = load_config(cfg_file)
-            assert config.ai_backend.model == "gpt-4"
-        finally:
-            os.environ.pop("CORDBEAT_AI_BACKEND__MODEL")
+        monkeypatch.setenv("CORDBEAT_AI_BACKEND__MODEL", "gpt-4")
+        config = load_config(cfg_file)
+        assert config.ai_backend.model == "gpt-4"
 
-    def test_dotenv_file_loaded(self, tmp_path: Path) -> None:
-        import os
-
+    def test_dotenv_file_loaded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text("", encoding="utf-8")
         env_file = tmp_path / ".env"
@@ -236,12 +208,9 @@ class TestLoadConfigWithEnv:
             "CORDBEAT_GATEWAY__PORT=7777\n",
             encoding="utf-8",
         )
-        os.environ.pop("CORDBEAT_GATEWAY__PORT", None)
-        try:
-            config = load_config(cfg_file)
-            assert config.gateway.port == 7777
-        finally:
-            os.environ.pop("CORDBEAT_GATEWAY__PORT", None)
+        monkeypatch.delenv("CORDBEAT_GATEWAY__PORT", raising=False)
+        config = load_config(cfg_file)
+        assert config.gateway.port == 7777
 
 
 class TestLogConfig:

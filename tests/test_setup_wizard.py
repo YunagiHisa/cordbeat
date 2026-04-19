@@ -7,7 +7,7 @@ from collections.abc import Generator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -314,8 +314,15 @@ class TestRunWizard:
 
 
 def test_cordbeat_init_cli_delegates_to_run_wizard(tmp_path: Path) -> None:
-    """``cordbeat_init_cli`` simply calls ``run_wizard``."""
-    with patch("cordbeat.setup_wizard.run_wizard") as mock_rw:
-        mock_rw.return_value = tmp_path / "config.yaml"
+    """``cordbeat_init_cli`` runs wizard then starts CordBeat."""
+    config_file = tmp_path / "config.yaml"
+    with (
+        patch("cordbeat.setup_wizard.run_wizard") as mock_rw,
+        patch("cordbeat.main.main", new_callable=MagicMock) as mock_main,
+        patch("asyncio.run") as mock_run,
+    ):
+        mock_rw.return_value = config_file
         cordbeat_init_cli()
         mock_rw.assert_called_once()
+        mock_main.assert_called_once_with(str(config_file))
+        mock_run.assert_called_once_with(mock_main.return_value)

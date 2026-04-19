@@ -94,18 +94,58 @@ without an `integrity` field are loaded normally (backwards compatible).
 
 ---
 
-## Sandbox Limitations
+## Sandbox Architecture
 
-When `sandbox: true` is set in `skill.yaml`, the skill is executed with the
-following restrictions:
+All skills execute in an **isolated subprocess** — never inside the Core
+process. The sandbox enforces multiple layers of defense:
+
+### Layer 1: Static Validation (AST)
+
+Before execution, `skill_validator.py` parses the skill source as an AST and
+checks it against a strict whitelist:
+
+| Check | Detail |
+|-------|--------|
+| **Import whitelist** | Only modules in `ALLOWED_IMPORTS` can be imported (e.g. `json`, `httpx`, `datetime`). All others are rejected. |
+| **Forbidden names** | `exec`, `eval`, `compile`, `__import__`, `globals`, `locals`, `breakpoint`, etc. are blocked |
+| **Forbidden attributes** | `__subclasses__`, `__code__`, `__globals__`, `f_locals`, `gi_frame`, etc. |
+| **Star imports** | `from x import *` is always rejected |
+
+Skills that fail validation are never executed.
+
+### Layer 2: Subprocess Isolation
+
+Skills run via `python -I -m cordbeat.skill_runner` in a dedicated subprocess
+with the following restrictions:
 
 | Layer | Mechanism | Note |
 |-------|-----------|------|
-| Filesystem | `open()` is monkey-patched to restrict paths to a temporary work directory | Python-level only; subprocesses are not restricted |
-| Network | `socket.socket` is replaced with a function that raises `OSError` | Blocks direct socket creation; does not intercept FFI or subprocess calls |
-| Execution | Skill runs in a temporary directory (`tempfile.mkdtemp`) that is cleaned up after execution | No OS-level chroot or container isolation |
+| **Network** | `socket.socket` is replaced — all socket creation raises `OSError` | Skills needing network declare `network: true` in `skill.yaml`, which exempts this guard |
+| **Filesystem** | `open()` is wrapped to restrict paths to the skill directory and a temporary work directory; symlink following is blocked via `O_NOFOLLOW` | OS-level path resolution prevents directory traversal |
+| **Resource limits** | `RLIMIT_AS` (memory), `RLIMIT_CPU` (time), `RLIMIT_NOFILE` (file descriptors), `RLIMIT_FSIZE` (file size) are set via `resource.setrlimit` | Linux only; Windows falls back to timeout-based termination |
+| **sys.path** | Restricted to stdlib + skill directory only | Prevents importing arbitrary packages |
+| **Environment** | `os.environ` is sanitized — only `PATH`, `HOME`, `LANG`, `TZ`, `PYTHONPATH` are preserved | Secrets and tokens are not leaked to skills |
+| **Timeout** | Configurable per-skill via `SandboxConfig`; default 30 seconds | Process tree is killed on timeout via `psutil` |
 
-**Important**: These restrictions operate at the Python interpreter level.
-They do **not** provide OS-level sandboxing. A malicious skill using `ctypes`,
-`subprocess`, or native extensions can bypass them. For untrusted skills,
-run CordBeat inside a container or VM.
+### Layer 3: Communication Protocol
+
+The subprocess communicates with Core via JSON-over-stdio:
+
+- **Memory access**: Skills call `memory.recall()` / `memory.store()` which
+  are proxied via RPC to the parent process
+- **Result**: Returned as a JSON object on stdout; stderr is captured for
+  logging
+- **Output limits**: `max_stdout_bytes` (1 MiB), notification truncation
+  (200 chars), API response cap (32 KB)
+
+### SSRF Hardening (api_call skill)
+
+The built-in `api_call` skill includes additional protections against
+Server-Side Request Forgery:
+
+| Protection | Detail |
+|------------|--------|
+| **DNS resolution** | URLs are resolved to IP addresses before connection |
+| **Private IP blocking** | RFC 1918, link-local, loopback, and cloud metadata addresses (169.254.169.254) are rejected |
+| **DNS rebinding mitigation** | The URL is rewritten to connect to the verified IP directly, with the original `Host` header preserved |
+| **Redirect disabled** | `httpx` is configured with `follow_redirects=False` to prevent redirect-based SSRF |

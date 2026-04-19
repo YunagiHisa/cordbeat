@@ -85,3 +85,50 @@ User: cb_0001 (display: "Alex")
 ```
 
 Platform linking uses a time-limited token flow, verified through the CLI.
+
+## Security Architecture
+
+CordBeat applies defense-in-depth across multiple layers:
+
+```
+┌──────────────────────────────────────────────────┐
+│              Security Layers                      │
+│                                                   │
+│  ┌─────────────────────────────────────────────┐  │
+│  │  Skill Execution Sandbox                    │  │
+│  │  AST validator → subprocess isolation       │  │
+│  │  Resource limits, network/FS guards         │  │
+│  └─────────────────────────────────────────────┘  │
+│                                                   │
+│  ┌─────────────────────────────────────────────┐  │
+│  │  Gateway Authentication                     │  │
+│  │  HMAC token (hmac.compare_digest)           │  │
+│  │  Default bind: 127.0.0.1 (localhost only)   │  │
+│  └─────────────────────────────────────────────┘  │
+│                                                   │
+│  ┌─────────────────────────────────────────────┐  │
+│  │  SSRF Hardening (api_call skill)            │  │
+│  │  DNS resolution → private IP blocking       │  │
+│  │  DNS rebinding mitigation → redirect block  │  │
+│  └─────────────────────────────────────────────┘  │
+│                                                   │
+│  ┌─────────────────────────────────────────────┐  │
+│  │  Prompt Injection Defense                   │  │
+│  │  Memory delimiters, content truncation      │  │
+│  │  System prompt directive                    │  │
+│  └─────────────────────────────────────────────┘  │
+│                                                   │
+│  ┌─────────────────────────────────────────────┐  │
+│  │  Data Integrity                             │  │
+│  │  Atomic conditional state transitions       │  │
+│  │  AI output validation (3 layers)            │  │
+│  │  Skill integrity hash verification          │  │
+│  └─────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────┘
+```
+
+See individual documents for details:
+- [Skills — Sandbox Architecture](skills.md#sandbox-architecture)
+- [Gateway — Authentication](gateway.md#authentication)
+- [Memory — Prompt Injection Defense](memory.md#prompt-injection-defense)
+- [Validation — AI Output Validation](validation.md)

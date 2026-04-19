@@ -18,6 +18,9 @@ gateway:
 log:
   level: "INFO"                                            # DEBUG | INFO | WARNING | ERROR
   format: "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+  # file: "data/cordbeat.log"    # Uncomment to enable file logging with rotation
+  # max_bytes: 10485760          # 10 MiB — rotate when file exceeds this size
+  # backup_count: 5              # Number of rotated backup files to keep
 
 ai_backend:
   provider: ollama          # ollama | openai | openai_compat

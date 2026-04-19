@@ -37,6 +37,9 @@ class GatewayConfig:
 class LogConfig:
     level: str = "INFO"
     format: str = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+    file: str = ""  # empty = stderr only; set a path to enable file logging
+    max_bytes: int = 10_485_760  # 10 MiB — triggers rotation
+    backup_count: int = 5
 
 
 @dataclass
@@ -227,6 +230,30 @@ def _coerce_value(value: str) -> Any:
     return value
 
 
+def _resolve_relative_paths(config: Config, config_dir: Path) -> None:
+    """Resolve relative paths in config relative to the config file directory.
+
+    When the config lives outside CWD (e.g. ``~/.cordbeat/config.yaml``),
+    paths like ``data/cordbeat.db`` must be anchored to the config
+    directory so that data files are found regardless of the working
+    directory the process was started from.
+    """
+
+    def _resolve(p: str) -> str:
+        pp = Path(p)
+        if not pp.is_absolute():
+            return str((config_dir / pp).resolve())
+        return p
+
+    config.memory.sqlite_path = _resolve(config.memory.sqlite_path)
+    config.memory.chroma_path = _resolve(config.memory.chroma_path)
+    config.soul.soul_dir = _resolve(config.soul.soul_dir)
+    config.data_dir = _resolve(config.data_dir)
+    config.skills_dir = _resolve(config.skills_dir)
+    if config.log.file:
+        config.log.file = _resolve(config.log.file)
+
+
 def load_config(path: str | Path) -> Config:
     """Load configuration from a YAML file with env var overrides.
 
@@ -235,6 +262,10 @@ def load_config(path: str | Path) -> Config:
         2. YAML file values
         3. .env file (same directory as config, or CWD)
         4. CORDBEAT_* environment variables
+
+    Relative paths in the resulting config are resolved relative to the
+    config file's parent directory so that ``~/.cordbeat/config.yaml``
+    correctly anchors ``data/`` paths to ``~/.cordbeat/data/``.
     """
     path = Path(path)
 
@@ -295,7 +326,7 @@ def load_config(path: str | Path) -> Config:
         sandbox=_build_dataclass(SkillSandboxConfig, sandbox_raw),
     )
 
-    return Config(
+    cfg = Config(
         gateway=gateway,
         adapters=adapters,
         heartbeat=heartbeat,
@@ -307,3 +338,6 @@ def load_config(path: str | Path) -> Config:
         skills_dir=raw.get("skills_dir", "skills"),
         data_dir=raw.get("data_dir", "data"),
     )
+
+    _resolve_relative_paths(cfg, path.resolve().parent)
+    return cfg

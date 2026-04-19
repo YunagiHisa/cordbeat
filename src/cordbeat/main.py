@@ -50,6 +50,21 @@ async def main(config_path: str = "config.yaml") -> None:
         format=config.log.format,
     )
 
+    # Optional file logging with rotation
+    if config.log.file:
+        from logging.handlers import RotatingFileHandler
+
+        log_path = Path(config.log.file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            log_path,
+            maxBytes=config.log.max_bytes,
+            backupCount=config.log.backup_count,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(logging.Formatter(config.log.format))
+        logging.getLogger().addHandler(file_handler)
+
     # Suppress noisy websockets handshake errors (e.g. plain HTTP to WS)
     logging.getLogger("websockets.server").setLevel(logging.WARNING)
 

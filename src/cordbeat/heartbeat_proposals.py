@@ -16,6 +16,7 @@ from cordbeat.models import (
     ProposalStatus,
     ProposalType,
 )
+from cordbeat.skill_validator import SkillValidationError, validate_skill_source
 from cordbeat.skills import SkillRegistry
 from cordbeat.soul import Soul
 
@@ -286,33 +287,30 @@ class ProposalExecutor:
         if not code.strip():
             raise ValueError("Skill code is empty.")
 
-        compile(code, f"skills/{name}/main.py", "exec")
-
-        dangerous_patterns = {
-            r"\bsubprocess\b",
-            r"\bos\.system\b",
-            r"\b__import__\b",
-            r"\beval\s*\(",
-            r"\bexec\s*\(",
-            r"\bopen\s*\(.*/etc/",
-            r"\bshutil\.rmtree\b",
-        }
-        for pattern in dangerous_patterns:
-            if re.search(pattern, code):
-                raise ValueError(f"Skill code contains blocked pattern: {pattern}")
+        # Static validation: AST-based whitelist. Rejects dynamic imports,
+        # dangerous builtins, top-level side effects, and ensures an
+        # ``execute(**kwargs)`` function is defined. This replaces the prior
+        # regex pattern list which was trivially bypassable via string
+        # concatenation, getattr tricks, whitespace padding, etc.
+        try:
+            validate_skill_source(code, name)
+        except SkillValidationError as exc:
+            raise ValueError(str(exc)) from exc
 
         description = proposed.get("description", "AI-generated skill")
         usage = proposed.get("usage", "")
         parameters = proposed.get("parameters", [])
 
         safe_desc = description.replace("\\", "\\\\").replace('"', '\\"')
+        safe_usage = usage.replace("\r\n", "\n").replace("\r", "\n")
+        safe_usage = safe_usage.replace("\n", "\n  ")
         yaml_lines = [
             f"name: {name}",
             f'description: "{safe_desc}"',
             'version: "1.0.0"',
             'author: "cordbeat-ai"',
             "",
-            f"usage: |\n  {usage}",
+            f"usage: |\n  {safe_usage}",
             "",
         ]
         if parameters:

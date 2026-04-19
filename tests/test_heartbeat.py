@@ -308,7 +308,7 @@ class TestExecuteDecision:
             safety_level=SafetyLevel.DANGEROUS,
             enabled=True,
         )
-        skills._skills["danger_skill"] = Skill(meta=meta, module=module)
+        skills._skills["danger_skill"] = Skill(meta=meta, _test_callable=module.execute)
 
         decision = HeartbeatDecision(
             action=HeartbeatAction.SKILL,
@@ -333,7 +333,9 @@ class TestExecuteDecision:
             safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
             enabled=True,
         )
-        skills._skills["confirm_skill"] = Skill(meta=meta, module=module)
+        skills._skills["confirm_skill"] = Skill(
+            meta=meta, _test_callable=module.execute
+        )
 
         decision = HeartbeatDecision(
             action=HeartbeatAction.SKILL,
@@ -356,7 +358,9 @@ class TestExecuteDecision:
             usage="",
             enabled=False,
         )
-        skills._skills["disabled_skill"] = Skill(meta=meta, module=module)
+        skills._skills["disabled_skill"] = Skill(
+            meta=meta, _test_callable=module.execute
+        )
 
         decision = HeartbeatDecision(
             action=HeartbeatAction.SKILL,
@@ -667,7 +671,7 @@ class TestSkillExecution:
             safety_level=SafetyLevel.SAFE,
             enabled=True,
         )
-        skills._skills["safe_skill"] = Skill(meta=meta, module=module)
+        skills._skills["safe_skill"] = Skill(meta=meta, _test_callable=module.execute)
 
         decision = HeartbeatDecision(
             action=HeartbeatAction.SKILL,
@@ -697,7 +701,7 @@ class TestSkillExecution:
             safety_level=SafetyLevel.SAFE,
             enabled=True,
         )
-        skills._skills["bad_skill"] = Skill(meta=meta, module=module)
+        skills._skills["bad_skill"] = Skill(meta=meta, _test_callable=module.execute)
 
         decision = HeartbeatDecision(
             action=HeartbeatAction.SKILL,
@@ -1450,7 +1454,7 @@ class TestSkillProposal:
                 usage="deploy",
                 safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
             ),
-            module=module,
+            _test_callable=module.execute,
         )
         skills._skills["deploy"] = skill
 
@@ -1495,7 +1499,7 @@ class TestSkillProposal:
                 usage="cleanup",
                 safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
             ),
-            module=module,
+            _test_callable=module.execute,
         )
         skills._skills["cleanup"] = skill
 
@@ -1535,7 +1539,7 @@ class TestApprovedProposalExecution:
                 usage="test",
                 safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
             ),
-            module=module,
+            _test_callable=module.execute,
         )
         skills._skills["test_skill"] = skill
 
@@ -1605,7 +1609,7 @@ class TestApprovedProposalExecution:
                 description="Test",
                 usage="test",
             ),
-            module=module,
+            _test_callable=module.execute,
         )
         skills._skills["test_skill"] = skill
 
@@ -1668,7 +1672,7 @@ class TestApprovedProposalExecution:
                 description="Fails",
                 usage="fail",
             ),
-            module=module,
+            _test_callable=module.execute,
         )
         skills._skills["failing_skill"] = skill
 
@@ -1922,7 +1926,7 @@ class TestProposalExecutionNotification:
                 description="Test",
                 usage="test",
             ),
-            module=module,
+            _test_callable=module.execute,
         )
         skills._skills["test_skill"] = skill
 
@@ -1969,7 +1973,7 @@ class TestProposalExecutionNotification:
                 description="Fails",
                 usage="fail",
             ),
-            module=module,
+            _test_callable=module.execute,
         )
         skills._skills["bad_skill"] = skill
 
@@ -2253,7 +2257,7 @@ class TestSkillCreationProposal:
         self,
         heartbeat: HeartbeatLoop,
     ) -> None:
-        """Code with dangerous patterns is rejected."""
+        """Code importing disallowed modules is rejected by AST validator."""
         skills_dir = heartbeat._skills.skills_dir
         skills_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2263,7 +2267,7 @@ class TestSkillCreationProposal:
             "parameters": [],
             "code": "import subprocess\ndef execute(**kw):\n    pass\n",
         }
-        with pytest.raises(ValueError, match="blocked pattern"):
+        with pytest.raises(ValueError, match="subprocess"):
             await heartbeat._proposals.install_proposed_skill(proposed)
 
     async def test_install_rejects_invalid_syntax(
@@ -2280,7 +2284,7 @@ class TestSkillCreationProposal:
             "parameters": [],
             "code": "def execute(**kw)\n    pass\n",  # missing colon
         }
-        with pytest.raises(SyntaxError):
+        with pytest.raises(ValueError, match="syntax error"):
             await heartbeat._proposals.install_proposed_skill(proposed)
 
     async def test_install_rejects_empty_code(
@@ -2299,6 +2303,51 @@ class TestSkillCreationProposal:
         }
         with pytest.raises(ValueError, match="empty"):
             await heartbeat._proposals.install_proposed_skill(proposed)
+
+    async def test_install_sanitizes_usage_yaml_injection(
+        self,
+        heartbeat: HeartbeatLoop,
+    ) -> None:
+        """Malicious `usage` content cannot inject top-level YAML keys.
+
+        Regression test: before the fix, newlines in `usage` broke out of the
+        YAML literal block, letting an attacker override `safety`, `sandbox`,
+        etc. with arbitrary values.
+        """
+        import yaml
+
+        skills_dir = heartbeat._skills.skills_dir
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        malicious_usage = (
+            "Example usage\n"
+            "safety:\n"
+            "  level: safe\n"
+            "  sandbox: true\n"
+            "  network: true\n"
+            "  filesystem: true\n"
+        )
+        proposed = {
+            "name": "injected",
+            "description": "test",
+            "usage": malicious_usage,
+            "parameters": [],
+            "code": "def execute(**kw):\n    return {}\n",
+        }
+        await heartbeat._proposals.install_proposed_skill(proposed)
+
+        yaml_path = skills_dir / "injected" / "skill.yaml"
+        data = yaml.safe_load(yaml_path.read_text())
+
+        assert data["safety"]["level"] == "requires_confirmation"
+        assert data["safety"]["sandbox"] is False
+        assert data["safety"]["network"] is False
+        assert data["safety"]["filesystem"] is False
+        assert "safety:" in data["usage"]
+
+        skill = heartbeat._skills.get("injected")
+        assert skill is not None
+        assert skill.meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION
 
     async def test_execute_approved_skill_proposal(
         self,

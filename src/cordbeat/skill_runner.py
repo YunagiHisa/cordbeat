@@ -169,23 +169,23 @@ def _apply_resource_limits(
 
     try:
         mem_bytes = memory_mb * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))  # type: ignore[attr-defined]
+        resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))  # type: ignore[attr-defined,unused-ignore]
     except (ValueError, OSError):
         pass
 
     try:
-        resource.setrlimit(resource.RLIMIT_CPU, (timeout_seconds, timeout_seconds + 1))  # type: ignore[attr-defined]
+        resource.setrlimit(resource.RLIMIT_CPU, (timeout_seconds, timeout_seconds + 1))  # type: ignore[attr-defined,unused-ignore]
     except (ValueError, OSError):
         pass
 
     try:
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))  # type: ignore[attr-defined]
+        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))  # type: ignore[attr-defined,unused-ignore]
     except (ValueError, OSError):
         pass
 
     try:
         fsize = max_fsize_mb * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))  # type: ignore[attr-defined]
+        resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))  # type: ignore[attr-defined,unused-ignore]
     except (ValueError, OSError):
         pass
 

@@ -64,9 +64,9 @@ async def main(ws_url: str = "ws://localhost:8765", auth_token: str = "") -> Non
 
 
 if __name__ == "__main__":
-    from cordbeat.config import load_config
+    from cordbeat.config import cordbeat_home, load_config
 
-    _config = load_config()
+    _config = load_config(cordbeat_home() / "config.yaml")
     _ws_url = (
         sys.argv[1]
         if len(sys.argv) > 1

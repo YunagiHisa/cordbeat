@@ -598,37 +598,91 @@ class _RecordStore:
         proposal_id: str,
         status: str,
     ) -> bool:
-        """Update the status field inside a proposal's metadata.
+        """Atomically update a proposal's status with transition validation.
 
-        Returns True if the proposal was found and updated.
-        Raises ValueError on invalid status transitions.
+        Uses a conditional SQL UPDATE so that two concurrent callers racing
+        on the same proposal cannot both succeed (lost-update). The UPDATE
+        only matches rows whose current ``metadata.status`` is one of the
+        valid predecessors for the requested *status*. If the row exists
+        but no transition matches we distinguish:
+
+        * ``False`` — proposal does not exist
+        * ``ValueError`` — proposal exists, but transition is disallowed
+          (either because the current status is terminal or because another
+          concurrent caller already moved it away)
+
+        Returns
+        -------
+        bool
+            ``True`` if the UPDATE affected a row; ``False`` if the proposal
+            id does not exist.
         """
-        row_cursor = await self._db.execute(
-            "SELECT metadata FROM certain_records "
+        # Reverse map: which current statuses may transition to *status*?
+        valid_sources: list[str] = [
+            current
+            for current, targets in self._VALID_TRANSITIONS.items()
+            if status in targets
+        ]
+        if not valid_sources:
+            # The target status has no predecessor in the state machine.
+            # Treat this the same as any other disallowed transition so
+            # existing callers still see ``Invalid proposal transition``.
+            exists_cursor = await self._db.execute(
+                "SELECT "
+                "COALESCE(json_extract(metadata, '$.status'), 'pending') AS st "
+                "FROM certain_records "
+                "WHERE id = ? AND record_type = 'proposal'",
+                (proposal_id,),
+            )
+            row = await exists_cursor.fetchone()
+            if row is None:
+                return False
+            current = row["st"]
+            raise ValueError(
+                f"Invalid proposal transition: '{current}' → '{status}' "
+                f"(allowed: set())"
+            )
+
+        placeholders = ",".join("?" for _ in valid_sources)
+        # COALESCE so that rows whose metadata has no explicit status
+        # (treated as 'pending') are also matched.
+        sql = (
+            "UPDATE certain_records "
+            "SET metadata = json_set("
+            "    COALESCE(metadata, '{}'),"
+            "    '$.status', ?"
+            ") "
+            "WHERE id = ? AND record_type = 'proposal' "
+            f"AND COALESCE(json_extract(metadata, '$.status'), 'pending') "
+            f"IN ({placeholders})"
+        )
+        cursor = await self._db.execute(
+            sql,
+            (status, proposal_id, *valid_sources),
+        )
+        await self._db.commit()
+        if cursor.rowcount and cursor.rowcount > 0:
+            return True
+
+        # No row affected: is it because the proposal is missing, or because
+        # the current state disallows the transition?
+        exists_cursor = await self._db.execute(
+            "SELECT "
+            "COALESCE(json_extract(metadata, '$.status'), 'pending') AS st "
+            "FROM certain_records "
             "WHERE id = ? AND record_type = 'proposal'",
             (proposal_id,),
         )
-        row = await row_cursor.fetchone()
+        row = await exists_cursor.fetchone()
         if row is None:
             return False
 
-        meta = json.loads(row["metadata"]) if row["metadata"] else {}
-        current = meta.get("status", "pending")
+        current = row["st"]
         allowed = self._VALID_TRANSITIONS.get(current, set())
-        if status not in allowed:
-            msg = (
-                f"Invalid proposal transition: '{current}' → '{status}' "
-                f"(allowed: {allowed})"
-            )
-            raise ValueError(msg)
-
-        meta["status"] = status
-        await self._db.execute(
-            "UPDATE certain_records SET metadata = ? WHERE id = ?",
-            (json.dumps(meta), proposal_id),
+        raise ValueError(
+            f"Invalid proposal transition: '{current}' → '{status}' "
+            f"(allowed: {allowed})"
         )
-        await self._db.commit()
-        return True
 
     async def get_pending_proposals(
         self,

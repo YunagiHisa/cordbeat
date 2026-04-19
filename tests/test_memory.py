@@ -717,6 +717,39 @@ class TestProposalStatusTransitions:
         with pytest.raises(ValueError, match="Invalid proposal transition"):
             await memory.update_proposal_status(pid, "pending")
 
+    async def test_concurrent_approve_only_one_wins(
+        self, memory: MemoryStore
+    ) -> None:
+        """Two concurrent approvals on the same pending proposal must race
+        atomically: exactly one succeeds, the other raises
+        ``Invalid proposal transition`` (because the first one already
+        moved the status to 'approved', which has no 'approved' target).
+        """
+        import asyncio
+
+        pid = await memory.add_certain_record(
+            "u1", "Test", record_type="proposal", metadata={"status": "pending"}
+        )
+
+        results = await asyncio.gather(
+            memory.update_proposal_status(pid, "approved"),
+            memory.update_proposal_status(pid, "approved"),
+            return_exceptions=True,
+        )
+
+        successes = [r for r in results if r is True]
+        errors = [r for r in results if isinstance(r, Exception)]
+
+        assert len(successes) == 1, f"Exactly one must win, got {results!r}"
+        assert len(errors) == 1
+        assert isinstance(errors[0], ValueError)
+
+    async def test_update_nonexistent_proposal_returns_false(
+        self, memory: MemoryStore
+    ) -> None:
+        result = await memory.update_proposal_status("no-such-id", "approved")
+        assert result is False
+
     async def test_expire_old_proposals(self, memory: MemoryStore) -> None:
         """Pending proposals older than max_age_days are expired."""
         pid = await memory.add_certain_record(

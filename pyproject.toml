@@ -13,6 +13,7 @@ dependencies = [
     "chromadb>=1.0",
     "httpx>=0.27",
     "aiosqlite>=0.20",
+    "psutil>=5.9",
     "tzdata>=2024.1; sys_platform == 'win32'",
 ]
 
@@ -47,6 +48,10 @@ line-length = 88
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# ast.NodeVisitor requires specific method names (visit_Name, visit_Call, ...)
+"src/cordbeat/skill_validator.py" = ["N802"]
 
 [tool.mypy]
 python_version = "3.11"

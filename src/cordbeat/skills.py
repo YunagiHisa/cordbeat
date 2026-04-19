@@ -1,158 +1,131 @@
-"""SKILL system — pluggable action loader and executor."""
+"""SKILL system — subprocess-isolated action loader and executor.
+
+Skills are loaded purely from their YAML metadata; their Python source
+is validated with :mod:`cordbeat.skill_validator` but **never imported
+into the parent process**. All execution happens in a subprocess via
+:mod:`cordbeat.skill_sandbox`, providing strong isolation regardless
+of whether the skill code is trusted (built-in) or AI-proposed.
+"""
 
 from __future__ import annotations
 
-import builtins
-import contextlib
 import hashlib
-import importlib.util
 import logging
-import socket as _socket_module
 import tempfile
-from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from cordbeat.models import SafetyLevel, SkillContext, SkillMeta, SkillParam
+from cordbeat.models import SafetyLevel, SkillMeta, SkillParam
+from cordbeat.skill_sandbox import (
+    DEFAULT_CONFIG,
+    SandboxConfig,
+    SkillPermissionError,
+    SkillSandboxError,
+    run_skill_in_subprocess,
+)
+from cordbeat.skill_validator import validate_skill_source
 
 logger = logging.getLogger(__name__)
 
-
-class SkillPermissionError(Exception):
-    """Raised when a skill violates its sandbox permissions."""
-
-
-@contextlib.contextmanager
-def _block_network() -> Generator[None, None, None]:
-    """Block all network access by replacing ``socket.socket``.
-
-    While the context manager is active any attempt to create a socket
-    raises :class:`SkillPermissionError`.
-    """
-    original = _socket_module.socket
-
-    def _blocked(*args: Any, **kwargs: Any) -> None:  # noqa: ARG001
-        raise SkillPermissionError("Network access is not allowed for this skill")
-
-    setattr(_socket_module, "socket", _blocked)  # noqa: B010
-    try:
-        yield
-    finally:
-        setattr(_socket_module, "socket", original)  # noqa: B010
-
-
-@contextlib.contextmanager
-def _restrict_filesystem(work_dir: Path) -> Generator[None, None, None]:
-    """Restrict ``open()`` to paths inside *work_dir*.
-
-    Any call to the built-in ``open`` with a path outside the resolved
-    *work_dir* raises :class:`SkillPermissionError`.
-    """
-    resolved_root = work_dir.resolve()
-    original_open = builtins.open
-
-    def _restricted_open(
-        file: Any,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        try:
-            target = Path(file).resolve()
-        except (TypeError, ValueError):
-            # Non-path argument (e.g. file descriptor int) — pass through
-            return original_open(file, *args, **kwargs)
-        if not target.is_relative_to(resolved_root):
-            raise SkillPermissionError(
-                f"Filesystem access outside work directory is not allowed: {target}"
-            )
-        return original_open(file, *args, **kwargs)
-
-    builtins.open = _restricted_open
-    try:
-        yield
-    finally:
-        builtins.open = original_open
+__all__ = [
+    "Skill",
+    "SkillRegistry",
+    "SkillPermissionError",
+    "SkillSandboxError",
+]
 
 
 class Skill:
-    """A loaded skill instance with metadata and execute capability."""
+    """A loaded skill instance with metadata and subprocess execution."""
 
-    def __init__(self, meta: SkillMeta, module: Any) -> None:
+    def __init__(
+        self,
+        meta: SkillMeta,
+        skill_dir: Path | None = None,
+        sandbox_config: SandboxConfig | None = None,
+        *,
+        _test_callable: Any = None,
+    ) -> None:
         self.meta = meta
-        self._module = module
+        self._skill_dir = skill_dir
+        self._sandbox_config = sandbox_config or DEFAULT_CONFIG
+        self._test_callable = _test_callable
 
     async def execute(
-        self, params: dict[str, Any], memory: Any = None
-    ) -> dict[str, Any]:
-        """Execute the skill's main function with permission context."""
-        fn = getattr(self._module, "execute", None)
-        if fn is None:
-            msg = f"Skill '{self.meta.name}' has no execute() function"
-            raise RuntimeError(msg)
-
-        context = self._build_context(memory=memory)
-
-        # Inject context if the skill accepts it
-        import inspect
-
-        sig = inspect.signature(fn)
-        if "context" in sig.parameters:
-            params = {**params, "context": context}
-
-        if self.meta.sandbox:
-            return await self._execute_sandboxed(fn, params, context)
-
-        result = fn(**params)
-        if hasattr(result, "__await__"):
-            result = await result
-        if not isinstance(result, dict):
-            return {"result": result}
-        return result
-
-    async def _execute_sandboxed(
         self,
-        fn: Any,
         params: dict[str, Any],
-        context: SkillContext,
+        memory: Any = None,
     ) -> dict[str, Any]:
-        """Execute skill in a sandboxed context with enforced permissions."""
-        with tempfile.TemporaryDirectory(prefix="cordbeat_skill_") as tmpdir:
-            context.work_dir = Path(tmpdir)
+        """Execute the skill in an isolated subprocess.
 
-            guards: list[contextlib.AbstractContextManager[None]] = []
-            if not self.meta.network:
-                guards.append(_block_network())
-            if not self.meta.filesystem:
-                guards.append(_restrict_filesystem(context.work_dir))
+        ``memory`` is passed through to the sandbox only if provided;
+        the subprocess may then request whitelisted memory calls which
+        are executed against this object.
+        """
+        if self._test_callable is not None:
+            # Test-only in-process path. Never taken for skills loaded
+            # from disk via SkillRegistry.
+            import inspect  # noqa: PLC0415
 
-            with contextlib.ExitStack() as stack:
-                for guard in guards:
-                    stack.enter_context(guard)
-                result = fn(**params)
-                if hasattr(result, "__await__"):
-                    result = await result
+            call_kwargs = dict(params)
+            sig = inspect.signature(self._test_callable)
+            if "context" in sig.parameters:
+                from types import SimpleNamespace  # noqa: PLC0415
 
+                call_kwargs["context"] = SimpleNamespace(
+                    sandbox=self.meta.sandbox,
+                    network=self.meta.network,
+                    filesystem=self.meta.filesystem,
+                    work_dir=None,
+                    memory=memory,
+                )
+            result = self._test_callable(**call_kwargs)
+            if inspect.isawaitable(result):
+                result = await result
             if not isinstance(result, dict):
                 return {"result": result}
             return result
 
-    def _build_context(self, memory: Any = None) -> SkillContext:
-        return SkillContext(
-            sandbox=self.meta.sandbox,
-            network=self.meta.network,
-            filesystem=self.meta.filesystem,
-            memory=memory,
-        )
+        if self._skill_dir is None:
+            raise RuntimeError(
+                f"Skill {self.meta.name!r} has no skill_dir; cannot execute."
+            )
+
+        with tempfile.TemporaryDirectory(prefix="cordbeat_skill_") as tmpdir:
+            sandbox_params = {
+                "network": self.meta.network,
+                "filesystem": self.meta.filesystem,
+                "work_dir": str(tmpdir),
+            }
+            return await run_skill_in_subprocess(
+                skill_dir=self._skill_dir,
+                skill_name=self.meta.name,
+                params=params,
+                sandbox=sandbox_params,
+                memory=memory,
+                config=self._sandbox_config,
+            )
 
 
 class SkillRegistry:
-    """Discovers, loads, and manages skills from the skills directory."""
+    """Discovers and validates skills from the skills directory.
 
-    def __init__(self, skills_dir: str | Path) -> None:
+    Skills are loaded by parsing their ``skill.yaml`` metadata and
+    statically validating ``main.py`` via
+    :func:`cordbeat.skill_validator.validate_skill_source`. The source
+    is never imported into the parent process.
+    """
+
+    def __init__(
+        self,
+        skills_dir: str | Path,
+        sandbox_config: SandboxConfig | None = None,
+    ) -> None:
         self._skills_dir = Path(skills_dir)
         self._skills: dict[str, Skill] = {}
+        self._sandbox_config = sandbox_config or DEFAULT_CONFIG
 
     @property
     def skills_dir(self) -> Path:
@@ -168,6 +141,7 @@ class SkillRegistry:
 
     def load_all(self) -> None:
         """Scan the skills directory and load all valid skills."""
+        self._skills.clear()
         if not self._skills_dir.exists():
             logger.warning("Skills directory not found: %s", self._skills_dir)
             return
@@ -224,14 +198,14 @@ class SkillRegistry:
             enabled=raw.get("enabled", True),
         )
 
-        # Dangerous skills default to disabled
         if meta.safety_level == SafetyLevel.DANGEROUS and "enabled" not in raw:
             meta.enabled = False
 
         # Integrity check: verify main.py hash if declared in skill.yaml
+        source_bytes = main_path.read_bytes()
         expected_hash = raw.get("integrity", {}).get("sha256")
         if expected_hash:
-            actual_hash = hashlib.sha256(main_path.read_bytes()).hexdigest()
+            actual_hash = hashlib.sha256(source_bytes).hexdigest()
             if actual_hash != expected_hash:
                 msg = (
                     f"Skill '{meta.name}' integrity check failed: "
@@ -239,18 +213,16 @@ class SkillRegistry:
                 )
                 raise ValueError(msg)
 
-        # Load the Python module
-        spec = importlib.util.spec_from_file_location(
-            f"cordbeat_skill_{meta.name}",
-            str(main_path),
-        )
-        if spec is None or spec.loader is None:
-            msg = f"Cannot load module from {main_path}"
-            raise ImportError(msg)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        # Static AST validation — protects the subprocess from trivially
+        # malicious code and provides a fail-fast signal at load time.
+        source = source_bytes.decode("utf-8", errors="replace")
+        validate_skill_source(source, meta.name)
 
-        self._skills[meta.name] = Skill(meta=meta, module=module)
+        self._skills[meta.name] = Skill(
+            meta=meta,
+            skill_dir=skill_path,
+            sandbox_config=self._sandbox_config,
+        )
         logger.info(
             "Loaded skill: %s (safety=%s, enabled=%s)",
             meta.name,

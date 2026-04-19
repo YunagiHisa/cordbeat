@@ -14,6 +14,7 @@ from cordbeat.engine import CoreEngine
 from cordbeat.gateway import GatewayServer, MessageQueue
 from cordbeat.heartbeat import HeartbeatLoop
 from cordbeat.memory import MemoryStore
+from cordbeat.skill_sandbox import SandboxConfig
 from cordbeat.skills import SkillRegistry
 from cordbeat.soul import Soul
 
@@ -74,7 +75,14 @@ async def main(config_path: str = "config.yaml") -> None:
         config.ai_backend.model,
     )
 
-    skills = SkillRegistry(config.skills_dir)
+    skills = SkillRegistry(
+        config.skills_dir,
+        sandbox_config=SandboxConfig(
+            timeout_seconds=int(config.skills.sandbox.timeout_seconds),
+            memory_mb=config.skills.sandbox.memory_limit_mb,
+            max_stdout_bytes=config.skills.sandbox.max_output_bytes,
+        ),
+    )
     skills.load_all()
     logger.info("SKILL registry: %d skills loaded", len(skills.available_skills))
 

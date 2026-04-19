@@ -108,6 +108,19 @@ class AIBackendConfig:
 
 
 @dataclass
+class SkillSandboxConfig:
+    timeout_seconds: float = 30.0
+    memory_limit_mb: int = 256
+    max_output_bytes: int = 1_048_576  # 1 MiB
+    allow_network_by_default: bool = False
+
+
+@dataclass
+class SkillsConfig:
+    sandbox: SkillSandboxConfig = field(default_factory=SkillSandboxConfig)
+
+
+@dataclass
 class Config:
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
     adapters: dict[str, AdapterConfig] = field(default_factory=dict)
@@ -116,6 +129,7 @@ class Config:
     ai_backend: AIBackendConfig = field(default_factory=AIBackendConfig)
     soul: SoulConfig = field(default_factory=SoulConfig)
     log: LogConfig = field(default_factory=LogConfig)
+    skills: SkillsConfig = field(default_factory=SkillsConfig)
     skills_dir: str = "skills"
     data_dir: str = "data"
 
@@ -270,6 +284,16 @@ def load_config(path: str | Path) -> Config:
 
     log = _build_dataclass(LogConfig, raw.get("log", {}))
 
+    skills_raw = raw.get("skills", {})
+    if not isinstance(skills_raw, dict):
+        skills_raw = {}
+    sandbox_raw = skills_raw.get("sandbox", {})
+    if not isinstance(sandbox_raw, dict):
+        sandbox_raw = {}
+    skills = SkillsConfig(
+        sandbox=_build_dataclass(SkillSandboxConfig, sandbox_raw),
+    )
+
     return Config(
         gateway=gateway,
         adapters=adapters,
@@ -278,6 +302,7 @@ def load_config(path: str | Path) -> Config:
         ai_backend=ai_backend,
         soul=soul,
         log=log,
+        skills=skills,
         skills_dir=raw.get("skills_dir", "skills"),
         data_dir=raw.get("data_dir", "data"),
     )

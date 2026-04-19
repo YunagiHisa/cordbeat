@@ -8,6 +8,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+- **Skill sandbox rewritten as subprocess isolation.** All skills now run in a
+  separate Python process launched with `-I` (isolated mode), a pruned
+  environment, restricted `sys.path`, and a minimum set of runtime guards
+  installed before the skill module is imported. In-process monkey-patching
+  of `socket`/`open` (easily bypassed) has been removed.
+- **AST-based skill validator.** AI-proposed skill source is parsed and
+  checked against an allowlist (imports, constructs, builtins) in
+  `cordbeat.skill_validator`. The previous substring-regex check is gone.
+  Module-level code execution is forbidden; only a small set of pure
+  constructors (`frozenset`, `ipaddress.ip_network`, …) is permitted at
+  module scope.
+- **SSRF hardening in `api_call`.** Requests to private, loopback,
+  link-local, multicast, reserved, and cloud-metadata (169.254.169.254 /
+  fd00:ec2::254) addresses are rejected after DNS resolution. Redirects are
+  disabled. Only `http`/`https` schemes are allowed.
+- **Atomic proposal state transitions.** `MemoryStore.update_proposal_status`
+  is now a conditional `UPDATE` that requires the caller-observed previous
+  state, preventing lost updates under concurrent approval.
+
+### Added
+- `skills.sandbox` config block (`timeout_seconds`, `memory_limit_mb`,
+  `max_output_bytes`, `allow_network_by_default`).
+- `psutil` dependency for recursive subprocess termination.
+
+### Changed
+- `Skill.execute` signature: skills no longer run in-process by default.
+  The `_test_callable` hook exists purely for unit tests that exercise
+  skill interactions without subprocess overhead.
+- `SkillRegistry` never imports skill code at load time; it only parses
+  and validates it. Import happens inside the subprocess worker.
+
 ### Added
 - Core framework: SOUL, MEMORY, HEARTBEAT, SKILL, Engine, Gateway
 - AI backend abstraction (Ollama, OpenAI-compatible)

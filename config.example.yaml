@@ -87,6 +87,13 @@ soul:
 skills_dir: "skills"
 data_dir: "data"
 
+skills:
+  sandbox:
+    timeout_seconds: 30            # hard timeout per skill invocation
+    memory_limit_mb: 256           # address-space cap (Unix: RLIMIT_AS)
+    max_output_bytes: 1048576      # 1 MiB cap on skill stdout
+    allow_network_by_default: false  # default for skills without explicit network flag
+
 adapters:
   discord:
     core_ws_url: "ws://localhost:8765"

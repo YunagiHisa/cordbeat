@@ -211,11 +211,11 @@ class TestSkillSandbox:
         assert result["sandbox"] is True
 
     async def test_non_sandbox_skill_no_work_dir(self, tmp_path: Path) -> None:
-        """Non-sandboxed skills should not get a work_dir."""
+        """In the subprocess sandbox every skill gets a work_dir."""
         code = (
             "def execute(context=None, **kwargs):\n"
             "    return {'has_context': context is not None,\n"
-            "            'work_dir_is_none': context.work_dir is None}\n"
+            "            'work_dir_set': context.work_dir is not None}\n"
         )
         skills_dir = tmp_path / "skills"
         _create_skill(skills_dir, "normal", sandbox=False, main_code=code)
@@ -226,7 +226,7 @@ class TestSkillSandbox:
         assert skill is not None
         result = await skill.execute({})
         assert result["has_context"] is True
-        assert result["work_dir_is_none"] is True
+        assert result["work_dir_set"] is True
 
     async def test_skill_without_context_param(self, tmp_path: Path) -> None:
         """Skills that don't accept context should still work."""
@@ -291,16 +291,15 @@ class TestSkillDescriptions:
 
 class TestSkillExecution:
     async def test_skill_no_execute_function(self, tmp_path: Path) -> None:
-        """Skill module without execute() raises RuntimeError."""
+        """Skill without execute() is rejected at load time."""
         code = "def nope():\n    pass\n"
         skills_dir = tmp_path / "skills"
         _create_skill(skills_dir, "broken", main_code=code)
         registry = SkillRegistry(skills_dir)
         registry.load_all()
-        skill = registry.get("broken")
-        assert skill is not None
-        with pytest.raises(RuntimeError, match="no execute"):
-            await skill.execute({})
+        # The AST validator rejects skills that don't define execute(),
+        # so the skill never enters the registry.
+        assert registry.get("broken") is None
 
     async def test_async_skill(self, tmp_path: Path) -> None:
         """Async execute functions should be awaited."""
@@ -418,9 +417,9 @@ class TestSandboxEnforcement:
         """Sandboxed skill with filesystem=False cannot write outside work_dir."""
         outside_path = str(tmp_path / "outside.txt").replace("\\", "\\\\")
         code = (
+            f"from pathlib import Path\n"
             f"def execute(**kwargs):\n"
-            f"    with open('{outside_path}', 'w') as f:\n"
-            f"        f.write('escape')\n"
+            f"    Path('{outside_path}').write_text('escape')\n"
             f"    return {{'result': 'wrote'}}\n"
         )
         skills_dir = tmp_path / "skills"
@@ -444,8 +443,7 @@ class TestSandboxEnforcement:
             "from pathlib import Path\n"
             "def execute(context=None, **kwargs):\n"
             "    out = context.work_dir / 'output.txt'\n"
-            "    with open(str(out), 'w') as f:\n"
-            "        f.write('hello')\n"
+            "    out.write_text('hello')\n"
             "    return {'result': 'wrote'}\n"
         )
         skills_dir = tmp_path / "skills"
@@ -468,9 +466,9 @@ class TestSandboxEnforcement:
         outside = tmp_path / "output.txt"
         outside_path = str(outside).replace("\\", "\\\\")
         code = (
+            f"from pathlib import Path\n"
             f"def execute(**kwargs):\n"
-            f"    with open('{outside_path}', 'w') as f:\n"
-            f"        f.write('allowed')\n"
+            f"    Path('{outside_path}').write_text('allowed')\n"
             f"    return {{'result': 'wrote'}}\n"
         )
         skills_dir = tmp_path / "skills"
@@ -490,7 +488,11 @@ class TestSandboxEnforcement:
         assert outside.read_text() == "allowed"
 
     async def test_non_sandboxed_not_restricted(self, tmp_path: Path) -> None:
-        """Non-sandboxed skills are not restricted even with network=False."""
+        """In the new subprocess sandbox the ``sandbox`` flag is irrelevant:
+        network/filesystem restrictions apply based on their explicit
+        flags, so a sandbox=False, network=False skill still cannot open
+        sockets.
+        """
         code = (
             "import socket\n"
             "def execute(**kwargs):\n"
@@ -506,9 +508,8 @@ class TestSandboxEnforcement:
         registry.load_all()
         skill = registry.get("unrestricted")
         assert skill is not None
-        # Non-sandboxed: enforcement is not applied
-        result = await skill.execute({})
-        assert result["result"] == "ok"
+        with pytest.raises(SkillPermissionError, match="Network access"):
+            await skill.execute({})
 
     async def test_network_guard_restores_socket(self, tmp_path: Path) -> None:
         """After sandbox execution, socket module is restored."""
@@ -569,11 +570,10 @@ class TestMemoryInjection:
     """Tests for memory parameter injection into SkillContext."""
 
     async def test_memory_passed_to_context(self, tmp_path: Path) -> None:
-        """Memory object is accessible via context.memory inside the skill."""
+        """Memory proxy is accessible via context.memory inside the skill."""
         code = (
             "def execute(context=None, **kwargs):\n"
-            "    return {'has_memory': context.memory is not None,\n"
-            "            'memory_type': type(context.memory).__name__}\n"
+            "    return {'has_memory': context.memory is not None}\n"
         )
         skills_dir = tmp_path / "skills"
         _create_skill(skills_dir, "mem_skill", main_code=code)
@@ -584,8 +584,9 @@ class TestMemoryInjection:
 
         mock_memory = MagicMock()
         result = await skill.execute({}, memory=mock_memory)
+        # In subprocess execution the skill sees a proxy, not the
+        # parent's object; we only assert it is not None.
         assert result["has_memory"] is True
-        assert result["memory_type"] == "MagicMock"
 
     async def test_memory_none_by_default(self, tmp_path: Path) -> None:
         """When memory is not passed, context.memory is None."""

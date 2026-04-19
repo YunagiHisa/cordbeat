@@ -71,7 +71,8 @@ class TestLoadConfig:
             encoding="utf-8",
         )
         config = load_config(cfg_file)
-        assert config.memory.sqlite_path == "custom.db"
+        # Relative paths are resolved against the config file's directory
+        assert config.memory.sqlite_path == str((tmp_path / "custom.db").resolve())
         assert config.memory.decay_rate == 0.5
 
     def test_ai_backend_config(self, tmp_path: Path) -> None:
@@ -103,9 +104,10 @@ class TestLoadConfig:
             encoding="utf-8",
         )
         config = load_config(cfg_file)
-        assert config.soul_dir == "custom/soul"
-        assert config.skills_dir == "custom/skills"
-        assert config.data_dir == "custom/data"
+        # Relative paths are resolved against the config file's directory
+        assert config.soul_dir == str((tmp_path / "custom/soul").resolve())
+        assert config.skills_dir == str((tmp_path / "custom/skills").resolve())
+        assert config.data_dir == str((tmp_path / "custom/data").resolve())
 
 
 class TestCoerceValue:
@@ -250,3 +252,92 @@ class TestLogConfig:
             assert config.log.level == "WARNING"
         finally:
             os.environ.pop("CORDBEAT_LOG__LEVEL", None)
+
+
+class TestPathResolution:
+    """Relative paths in config are resolved relative to the config file."""
+
+    def test_memory_paths_resolved_to_config_dir(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "memory:\n  sqlite_path: db/app.db\n  chroma_path: db/chroma\n",
+            encoding="utf-8",
+        )
+        config = load_config(cfg_file)
+        assert config.memory.sqlite_path == str((tmp_path / "db/app.db").resolve())
+        assert config.memory.chroma_path == str((tmp_path / "db/chroma").resolve())
+
+    def test_soul_dir_resolved(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text("soul:\n  soul_dir: my_soul\n", encoding="utf-8")
+        config = load_config(cfg_file)
+        assert config.soul.soul_dir == str((tmp_path / "my_soul").resolve())
+
+    def test_absolute_paths_unchanged(self, tmp_path: Path) -> None:
+        abs_path = str(tmp_path / "absolute" / "path.db")
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            f"memory:\n  sqlite_path: {abs_path}\n",
+            encoding="utf-8",
+        )
+        config = load_config(cfg_file)
+        assert config.memory.sqlite_path == abs_path
+
+    def test_nested_config_dir(self, tmp_path: Path) -> None:
+        sub_dir = tmp_path / "conf" / "sub"
+        sub_dir.mkdir(parents=True)
+        cfg_file = sub_dir / "config.yaml"
+        cfg_file.write_text(
+            "data_dir: ../data\nskills_dir: ../../skills\n",
+            encoding="utf-8",
+        )
+        config = load_config(cfg_file)
+        assert config.data_dir == str((sub_dir / "../data").resolve())
+        assert config.skills_dir == str((sub_dir / "../../skills").resolve())
+
+    def test_log_file_resolved(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "log:\n  file: logs/cordbeat.log\n",
+            encoding="utf-8",
+        )
+        config = load_config(cfg_file)
+        assert config.log.file == str((tmp_path / "logs/cordbeat.log").resolve())
+
+    def test_empty_log_file_not_resolved(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text("log:\n  level: DEBUG\n", encoding="utf-8")
+        config = load_config(cfg_file)
+        assert config.log.file == ""
+
+    def test_default_paths_resolved_to_config_dir(self, tmp_path: Path) -> None:
+        """Even default values like 'data/cordbeat.db' get resolved."""
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text("", encoding="utf-8")
+        config = load_config(cfg_file)
+        assert config.memory.sqlite_path == str(
+            (tmp_path / "data/cordbeat.db").resolve()
+        )
+        assert config.data_dir == str((tmp_path / "data").resolve())
+
+
+class TestLogRotationConfig:
+    """LogConfig rotation fields are parsed correctly."""
+
+    def test_default_rotation_values(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text("", encoding="utf-8")
+        config = load_config(cfg_file)
+        assert config.log.file == ""
+        assert config.log.max_bytes == 10_485_760
+        assert config.log.backup_count == 5
+
+    def test_custom_rotation_values(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "log:\n  file: app.log\n  max_bytes: 5242880\n  backup_count: 3\n",
+            encoding="utf-8",
+        )
+        config = load_config(cfg_file)
+        assert config.log.max_bytes == 5_242_880
+        assert config.log.backup_count == 3

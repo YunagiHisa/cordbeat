@@ -62,6 +62,16 @@ adapters:
 
 ## Field Reference
 
+### `log`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `level` | string | `"INFO"` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `format` | string | `"%(asctime)s [%(name)s] %(levelname)s: %(message)s"` | Python `logging` format string |
+| `file` | string | `""` | Path to a log file. Empty = stderr only. When set, a `RotatingFileHandler` is attached. |
+| `max_bytes` | int | `10485760` | Maximum log file size in bytes before rotation (10 MiB) |
+| `backup_count` | int | `5` | Number of rotated backup files to keep |
+
 ### `gateway`
 
 | Field | Type | Default | Description |

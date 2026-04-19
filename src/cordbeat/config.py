@@ -27,9 +27,10 @@ def cordbeat_home() -> Path:
 
 @dataclass
 class GatewayConfig:
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8765
     handshake_timeout: float = 10.0
+    auth_token: str = ""
 
 
 @dataclass

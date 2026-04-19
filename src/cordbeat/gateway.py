@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 from abc import ABC, abstractmethod
@@ -191,6 +192,16 @@ class GatewayServer:
             if not adapter_id:
                 await websocket.close(1008, "Missing adapter_id")
                 return
+
+            # Validate auth token if configured
+            if self._config.auth_token:
+                token = data.get("auth_token", "")
+                if not hmac.compare_digest(token, self._config.auth_token):
+                    await websocket.close(1008, "Invalid auth_token")
+                    logger.warning(
+                        "Rejected adapter '%s': invalid auth token", adapter_id
+                    )
+                    return
 
             self._connections[adapter_id] = websocket
             logger.info("Adapter connected: %s", adapter_id)

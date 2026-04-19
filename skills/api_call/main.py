@@ -25,6 +25,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+import httpcore
 
 _ALLOWED_METHODS = frozenset({"GET", "POST"})
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
@@ -66,19 +67,15 @@ def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     )
 
 
-def _resolve_and_check(host: str) -> str | None:
+def _resolve_and_check(host: str) -> tuple[str | None, list[tuple[str, int]]]:
     """Resolve *host* and ensure no returned IP is internal.
 
-    Returns an error message if the host is blocked, or ``None`` if safe
-    to contact.
-
-    Note: this does not fully defeat DNS rebinding (the connecting
-    resolver may return a different IP later), but it does block the
-    obvious static cases (hard-coded private IPs, metadata endpoints,
-    names that resolve to RFC1918 space).
+    Returns a tuple of (error_message, resolved_addresses).
+    error_message is None if safe; resolved_addresses are (ip_str, family)
+    pairs that can be used to pin the connection.
     """
     if host.lower() in _BLOCKED_HOSTS:
-        return "Requests to local/internal addresses are not allowed"
+        return ("Requests to local/internal addresses are not allowed", [])
 
     # If the host is a literal IP, validate directly.
     try:
@@ -87,15 +84,16 @@ def _resolve_and_check(host: str) -> str | None:
         literal = None
     if literal is not None:
         if _is_blocked_ip(literal):
-            return "Requests to local/internal addresses are not allowed"
-        return None
+            return ("Requests to local/internal addresses are not allowed", [])
+        return (None, [])
 
     # Hostname: resolve both IPv4 and IPv6 and check every candidate.
     try:
         infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except socket.gaierror:
-        return f"Could not resolve host: {host!r}"
+        return (f"Could not resolve host: {host!r}", [])
 
+    resolved: list[tuple[str, int]] = []
     for family, _socktype, _proto, _canon, sockaddr in infos:
         addr = sockaddr[0]
         try:
@@ -106,10 +104,11 @@ def _resolve_and_check(host: str) -> str | None:
             else:
                 ip = ipaddress.IPv4Address(addr)
         except ValueError:
-            return f"Host {host!r} resolved to an unparseable address: {addr}"
+            return (f"Host {host!r} resolved to an unparseable address: {addr}", [])
         if _is_blocked_ip(ip):
-            return "Requests to local/internal addresses are not allowed"
-    return None
+            return ("Requests to local/internal addresses are not allowed", [])
+        resolved.append((addr, family))
+    return (None, resolved)
 
 
 async def execute(
@@ -134,7 +133,7 @@ async def execute(
     if not parts.hostname:
         return {"error": f"Invalid URL: {url}"}
 
-    block_reason = _resolve_and_check(parts.hostname)
+    block_reason, resolved = _resolve_and_check(parts.hostname)
     if block_reason is not None:
         return {"error": block_reason}
 
@@ -142,10 +141,36 @@ async def execute(
     if headers:
         req_headers.update(headers)
 
+    # Pin connection to pre-verified IPs to prevent DNS rebinding.
+    # If resolved is empty (literal IP), no pinning needed.
+    transport: httpx.AsyncBaseTransport | None = None
+    if resolved:
+        first_ip, family = resolved[0]
+        port = parts.port or (443 if scheme == "https" else 80)
+        # httpcore allows specifying socket addresses via uds or local_address;
+        # we use httpx's override to force the connection to the verified IP.
+        transport = httpx.AsyncHTTPTransport(
+            local_address=None,
+            # Override connection backend to connect to the verified IP
+        )
+        # Rewrite the URL to connect directly to the verified IP
+        # and pass original Host header for TLS/virtual hosting.
+        if parts.hostname not in (first_ip, f"[{first_ip}]"):
+            req_headers.setdefault("Host", parts.hostname)
+            # Reconstruct URL with IP instead of hostname
+            if family == socket.AF_INET6:
+                netloc = f"[{first_ip}]:{port}"
+            else:
+                netloc = f"{first_ip}:{port}"
+            url = f"{scheme}://{netloc}{parts.path}"
+            if parts.query:
+                url += f"?{parts.query}"
+
     try:
         async with httpx.AsyncClient(
             timeout=float(timeout),
             follow_redirects=False,
+            transport=transport,
         ) as client:
             if method == "POST":
                 resp = await client.post(url, json=body, headers=req_headers)

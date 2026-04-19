@@ -20,7 +20,7 @@ class TestLoadConfig:
     def test_default_config(self, tmp_path: Path) -> None:
         config = load_config(tmp_path / "nonexistent.yaml")
         assert isinstance(config, Config)
-        assert config.gateway.host == "0.0.0.0"
+        assert config.gateway.host == "127.0.0.1"
         assert config.gateway.port == 8765
 
     def test_load_yaml(self, tmp_path: Path) -> None:

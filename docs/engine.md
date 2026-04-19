@@ -59,11 +59,18 @@ SOUL snapshot:
 The user context is assembled via `prompt.build_context()`:
 
 - **User context**: Display name and known profile data
-- **Semantic memories**: Known preferences and facts (via ChromaDB search)
-- **Episodic memories**: Related past moments (via ChromaDB search)
+- **Semantic memories**: Known preferences and facts (via ChromaDB search),
+  wrapped in `[BEGIN RECALLED FACTS]` / `[END RECALLED FACTS]` delimiters
+- **Episodic memories**: Related past moments (via ChromaDB search),
+  wrapped in `[BEGIN RECALLED EPISODES]` / `[END RECALLED EPISODES]` delimiters
+- **Procedural hints**: Wrapped in `[BEGIN RECALLED HINTS]` / `[END RECALLED HINTS]`
 - **Conversation history**: Last N messages (configurable via
   `memory.conversation_history_limit`, default 20)
 - **Current message**: The new user input (sanitized)
+
+Each recalled memory entry is truncated to 500 characters to limit prompt
+injection attack surface. The system prompt includes a directive instructing
+the AI to treat delimited data as passive context, not as instructions.
 
 ### 4. AI Generation
 

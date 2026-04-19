@@ -72,7 +72,7 @@ class TestForbiddenConstructs:
 
     def test_compile_call(self) -> None:
         src = (
-            'def execute(**kw):\n'
+            "def execute(**kw):\n"
             '    c = compile("1", "x", "eval")\n'
             '    return {"c": c}\n'
         )
@@ -80,17 +80,13 @@ class TestForbiddenConstructs:
             validate_skill_source(src, "x")
 
     def test_dunder_import(self) -> None:
-        src = (
-            'def execute(**kw):\n'
-            '    m = __import__("os")\n'
-            '    return {"m": m}\n'
-        )
+        src = 'def execute(**kw):\n    m = __import__("os")\n    return {"m": m}\n'
         with pytest.raises(SkillValidationError, match="__import__"):
             validate_skill_source(src, "x")
 
     def test_getattr_call(self) -> None:
         src = (
-            'def execute(**kw):\n'
+            "def execute(**kw):\n"
             '    x = getattr(object(), "foo", None)\n'
             '    return {"x": x}\n'
         )
@@ -103,17 +99,14 @@ class TestForbiddenConstructs:
             validate_skill_source(src, "x")
 
     def test_builtins_access(self) -> None:
-        src = (
-            'def execute(**kw):\n'
-            '    return {"b": __builtins__}\n'
-        )
+        src = 'def execute(**kw):\n    return {"b": __builtins__}\n'
         with pytest.raises(SkillValidationError, match="__builtins__"):
             validate_skill_source(src, "x")
 
     def test_class_traversal(self) -> None:
         src = (
-            'def execute(**kw):\n'
-            '    subs = object.__subclasses__()\n'
+            "def execute(**kw):\n"
+            "    subs = object.__subclasses__()\n"
             '    return {"n": len(subs)}\n'
         )
         with pytest.raises(SkillValidationError, match="__subclasses__"):
@@ -183,11 +176,7 @@ class TestImportRestrictions:
 
 class TestTopLevelRestrictions:
     def test_toplevel_call_rejected(self) -> None:
-        src = (
-            'import json\n'
-            'print("hi")\n'
-            'def execute(**kw): return {}\n'
-        )
+        src = 'import json\nprint("hi")\ndef execute(**kw): return {}\n'
         with pytest.raises(SkillValidationError, match="module level"):
             validate_skill_source(src, "x")
 
@@ -210,11 +199,7 @@ class TestTopLevelRestrictions:
         validate_skill_source(src, "ok")
 
     def test_toplevel_nonconstant_assign_rejected(self) -> None:
-        src = (
-            "import json\n"
-            'X = json.loads("{}")\n'
-            "def execute(**kw): return {}\n"
-        )
+        src = 'import json\nX = json.loads("{}")\ndef execute(**kw): return {}\n'
         with pytest.raises(SkillValidationError, match="module level"):
             validate_skill_source(src, "x")
 

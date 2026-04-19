@@ -717,9 +717,7 @@ class TestProposalStatusTransitions:
         with pytest.raises(ValueError, match="Invalid proposal transition"):
             await memory.update_proposal_status(pid, "pending")
 
-    async def test_concurrent_approve_only_one_wins(
-        self, memory: MemoryStore
-    ) -> None:
+    async def test_concurrent_approve_only_one_wins(self, memory: MemoryStore) -> None:
         """Two concurrent approvals on the same pending proposal must race
         atomically: exactly one succeeds, the other raises
         ``Invalid proposal transition`` (because the first one already

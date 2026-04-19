@@ -289,10 +289,18 @@ def run_wizard(home: Path | None = None) -> Path:
 
     # ── Done ──────────────────────────────────────────────────────
     print(f"\n  ✨ {name} is ready to come alive!")
-    print("  Run 'cordbeat' to start.\n")
+    print("  Starting CordBeat...\n")
     return config_path
 
 
 def cordbeat_init_cli() -> None:
-    """CLI entry point for ``cordbeat-init``."""
-    run_wizard()
+    """CLI entry point for ``cordbeat-init``.
+
+    Runs the setup wizard and then starts CordBeat with the new config.
+    """
+    import asyncio
+
+    from cordbeat.main import main
+
+    config_path = run_wizard()
+    asyncio.run(main(str(config_path)))

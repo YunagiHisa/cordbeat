@@ -100,6 +100,7 @@ ALLOWED_IMPORTS: frozenset[str] = frozenset(
         # HTTP client (skills requiring network must also set
         # safety.network=true and pass host checks in the skill runner).
         "httpx",
+        "httpcore",
         # Markdown / YAML / other lightweight parsers often useful
         "yaml",
     }

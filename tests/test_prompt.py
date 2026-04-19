@@ -111,9 +111,9 @@ class TestBuildContext:
             semantic_memories=[{"content": "Likes Python"}],
             episodic_memories=[{"content": "Got a new job"}],
         )
-        assert "Known preferences/facts:" in result
+        assert "[BEGIN RECALLED FACTS]" in result
         assert "Likes Python" in result
-        assert "Related past moments:" in result
+        assert "[BEGIN RECALLED EPISODES]" in result
         assert "Got a new job" in result
 
     def test_with_recall_hints(self) -> None:
@@ -121,7 +121,7 @@ class TestBuildContext:
             user_display_name="Alice",
             recall_hints=["7 days ago Alice talked about: OSS design"],
         )
-        assert "Recall hints:" in result
+        assert "[BEGIN RECALL HINTS]" in result
         assert "OSS design" in result
 
     def test_recall_hints_none_omitted(self) -> None:

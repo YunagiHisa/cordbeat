@@ -10,11 +10,14 @@ from datetime import UTC, datetime
 import websockets
 
 
-async def main(ws_url: str = "ws://localhost:8765") -> None:
+async def main(ws_url: str = "ws://localhost:8765", auth_token: str = "") -> None:
     print(f"Connecting to CordBeat Core at {ws_url}...")
     async with websockets.connect(ws_url) as ws:
         # Handshake: identify as CLI adapter
-        await ws.send(json.dumps({"adapter_id": "cli"}))
+        handshake: dict[str, str] = {"adapter_id": "cli"}
+        if auth_token:
+            handshake["auth_token"] = auth_token
+        await ws.send(json.dumps(handshake))
         ack = json.loads(await ws.recv())
         print(f"Connected: {ack.get('content', 'OK')}")
         print("Type a message and press Enter. Ctrl+C to quit.\n")
@@ -61,5 +64,12 @@ async def main(ws_url: str = "ws://localhost:8765") -> None:
 
 
 if __name__ == "__main__":
-    url = sys.argv[1] if len(sys.argv) > 1 else "ws://localhost:8765"
-    asyncio.run(main(url))
+    from cordbeat.config import load_config
+
+    _config = load_config()
+    _ws_url = (
+        sys.argv[1]
+        if len(sys.argv) > 1
+        else f"ws://{_config.gateway.host}:{_config.gateway.port}"
+    )
+    asyncio.run(main(_ws_url, auth_token=_config.gateway.auth_token))

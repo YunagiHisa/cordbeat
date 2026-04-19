@@ -154,8 +154,14 @@ def _build_config(
     api_key: str = "",
 ) -> dict[str, Any]:
     """Build a config dict with paths anchored to *home*."""
+    import secrets
+
     cfg: dict[str, Any] = {
-        "gateway": {"host": "0.0.0.0", "port": 8765},
+        "gateway": {
+            "host": "127.0.0.1",
+            "port": 8765,
+            "auth_token": secrets.token_urlsafe(32),
+        },
         "log": {"level": "INFO"},
         "ai_backend": {
             "provider": provider,

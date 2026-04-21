@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from cordbeat.exceptions import OutputValidationError
 from cordbeat.validation import (
     validate_heartbeat_decision,
     validate_heartbeat_triage,
@@ -250,7 +251,7 @@ class TestValidatedAiJson:
     async def test_raises_without_fallback(self) -> None:
         backend = AsyncMock()
         backend.generate_json = AsyncMock(return_value={"action": "destroy"})
-        with pytest.raises(ValueError, match="Validation failed"):
+        with pytest.raises(OutputValidationError, match="Validation failed"):
             await validated_ai_json(
                 backend,
                 prompt="test",

@@ -46,12 +46,17 @@ def test_validation_error_keeps_value_error() -> None:
     assert issubclass(SkillValidationError, ValueError)
 
 
+def test_skill_execution_error_is_skill_error() -> None:
+    assert issubclass(exceptions.SkillExecutionError, exceptions.SkillError)
+
+
 def test_catch_all_cordbeat_errors() -> None:
     for exc in (
         SoulPermissionError("x"),
         SkillPermissionError("x"),
         SkillSandboxError("x"),
         SkillValidationError("x"),
+        exceptions.SkillExecutionError("x"),
         exceptions.MemorySubsystemError("x"),
         exceptions.AIBackendError("x"),
         exceptions.OutputValidationError("x"),

@@ -14,6 +14,7 @@ from typing import Any
 import aiosqlite
 
 from cordbeat.config import MemoryConfig
+from cordbeat.exceptions import MemorySubsystemError
 from cordbeat.models import MemoryEntry, MemoryLayer, UserSummary
 
 logger = logging.getLogger(__name__)
@@ -850,31 +851,41 @@ class MemoryStore:
     @property
     def _conn(self) -> aiosqlite.Connection:
         if self.__conn is None:
-            raise RuntimeError("MemoryStore not initialized: call initialize() first")
+            raise MemorySubsystemError(
+                "MemoryStore not initialized: call initialize() first"
+            )
         return self.__conn
 
     @property
     def _users(self) -> _UserStore:
         if self.__users is None:
-            raise RuntimeError("MemoryStore not initialized: call initialize() first")
+            raise MemorySubsystemError(
+                "MemoryStore not initialized: call initialize() first"
+            )
         return self.__users
 
     @property
     def _records(self) -> _RecordStore:
         if self.__records is None:
-            raise RuntimeError("MemoryStore not initialized: call initialize() first")
+            raise MemorySubsystemError(
+                "MemoryStore not initialized: call initialize() first"
+            )
         return self.__records
 
     @property
     def _conversations(self) -> _ConversationStore:
         if self.__conversations is None:
-            raise RuntimeError("MemoryStore not initialized: call initialize() first")
+            raise MemorySubsystemError(
+                "MemoryStore not initialized: call initialize() first"
+            )
         return self.__conversations
 
     @property
     def _vectors(self) -> _VectorMemory:
         if self.__vectors is None:
-            raise RuntimeError("MemoryStore not initialized: call initialize() first")
+            raise MemorySubsystemError(
+                "MemoryStore not initialized: call initialize() first"
+            )
         return self.__vectors
 
     async def initialize(self) -> None:

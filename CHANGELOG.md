@@ -8,6 +8,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Exception hierarchy.** New `cordbeat.exceptions` module introduces a
+  `CordBeatError` root with typed subclasses (`SkillError`,
+  `SkillValidationError`, `SkillExecutionError`, `SkillTimeoutError`,
+  `SkillSandboxError`, `SoulPermissionError`, `AdapterError`,
+  `ConfigurationError`). Internal raise sites now use these instead of bare
+  `RuntimeError`/`ValueError`, making catch-by-type cleaner for integrators.
+- **Platform adapter scaffolds.** Added `slack_adapter`, `line_adapter`,
+  `whatsapp_adapter`, and `signal_adapter` modules wired into
+  `adapter_runner` with dedicated CLI entry points
+  (`cordbeat-slack-adapter`, `cordbeat-line-adapter`,
+  `cordbeat-whatsapp-adapter`, `cordbeat-signal-adapter`) and matching
+  `[project.optional-dependencies]` extras. Each scaffold early-returns on
+  missing SDK so the base install stays slim.
+
+### Changed
+- **SOUL permission matrix is now enforced.** `Soul.add_memory`,
+  `set_emotion`, `update_self_image`, `record_decision`, and
+  `record_reflection` require a keyword-only `caller` argument matched
+  against an internal `_PERMISSIONS` matrix; unauthorized writers raise
+  `SoulPermissionError`. **Breaking change** for anyone calling these
+  methods directly from external Python code — pass
+  `caller="engine"` / `"extraction"` / `"heartbeat_proposals"` (or whatever
+  component is legitimately writing).
+
+### Fixed
+- Removed unused-import ruff violation in `skills/api_call/main.py`.
+
 ### Security
 - **Skill sandbox rewritten as subprocess isolation.** All skills now run in a
   separate Python process launched with `-I` (isolated mode), a pruned

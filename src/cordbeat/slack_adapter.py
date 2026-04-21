@@ -118,9 +118,7 @@ class SlackAdapter(RetryableConnection):
     async def _dispatch_core_message(self, platform_user_id: str, content: str) -> None:
         await self._send_to_slack(platform_user_id, content)
 
-    async def _forward_to_core(
-        self, *, user_id: str, text: str, channel: str
-    ) -> None:
+    async def _forward_to_core(self, *, user_id: str, text: str, channel: str) -> None:
         if self._ws is None or not user_id:
             return
 
@@ -148,9 +146,7 @@ class SlackAdapter(RetryableConnection):
         if not channel:
             # Fall back to opening a DM
             try:
-                resp = await self._web_client.conversations_open(
-                    users=platform_user_id
-                )
+                resp = await self._web_client.conversations_open(users=platform_user_id)
                 channel = resp["channel"]["id"]
             except Exception:
                 logger.exception(

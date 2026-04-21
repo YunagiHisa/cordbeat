@@ -49,9 +49,7 @@ class SignalAdapter(RetryableConnection):
         self._config = config
         self._ws_url = config.core_ws_url
         opts = config.options
-        self._rpc_url: str = opts.get(
-            "rpc_url", "http://localhost:8088/api/v1/rpc"
-        )
+        self._rpc_url: str = opts.get("rpc_url", "http://localhost:8088/api/v1/rpc")
         self._phone_number: str = opts.get("phone_number", "")
         self._poll_interval: float = float(opts.get("poll_interval", 2))
         self._http_client: Any = None
@@ -64,9 +62,7 @@ class SignalAdapter(RetryableConnection):
         try:
             import httpx
         except ImportError:
-            logger.error(
-                "httpx is not installed. Install with: uv sync --extra signal"
-            )
+            logger.error("httpx is not installed. Install with: uv sync --extra signal")
             return
 
         if not self._phone_number:

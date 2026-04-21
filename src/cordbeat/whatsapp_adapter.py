@@ -65,8 +65,7 @@ class WhatsAppAdapter(RetryableConnection):
             from aiohttp import web
         except ImportError:
             logger.error(
-                "httpx / aiohttp not installed. "
-                "Install with: uv sync --extra whatsapp"
+                "httpx / aiohttp not installed. Install with: uv sync --extra whatsapp"
             )
             return
 

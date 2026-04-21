@@ -168,6 +168,4 @@ class LineAdapter(RetryableConnection):
             )
             await self._messaging_api.push_message(request)
         except Exception:
-            logger.exception(
-                "Failed to send message to LINE user %s", platform_user_id
-            )
+            logger.exception("Failed to send message to LINE user %s", platform_user_id)

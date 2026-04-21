@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Composite index on ``certain_records``.** New
+  ``idx_certain_user_type_time`` covering ``(user_id, record_type,
+  created_at DESC)`` to keep sleep-phase queries fast as record volume
+  grows.
 - **CI Windows coverage + coverage artifact uploads.** CI now runs on both
   ``ubuntu-latest`` and ``windows-latest`` across Python 3.11/3.12/3.13
   (6 jobs total). ``coverage.xml`` is uploaded as a per-job artifact for
@@ -51,6 +55,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   component is legitimately writing).
 
 ### Fixed
+- **`api_call` skill: clarified SSRF pinning intent.** Removed the dead
+  ``transport=httpx.AsyncHTTPTransport(local_address=None)`` shim
+  (``local_address`` binds the *source* interface, not the destination
+  and was not contributing to pinning). URL rewriting to the
+  pre-verified resolved IP with ``Host`` header restoration is now the
+  single source of truth for DNS-rebinding mitigation, with an updated
+  comment explaining the mechanism.
+- **Heartbeat timezone fallback logs a warning.** When
+  ``zoneinfo.ZoneInfo(self._config.timezone)`` raises
+  ``ZoneInfoNotFoundError`` (missing ``tzdata`` on Windows) or an
+  invalid zone name is given, the loop now logs a ``WARNING`` naming
+  the offending zone and pointing at the ``tzdata`` package, instead of
+  silently dropping to UTC via a bare ``except Exception``.
+- **Adapter user→channel caches are now bounded LRUs.**
+  ``DiscordAdapter`` and ``SlackAdapter`` previously grew their
+  ``_user_channels`` dicts without bound for long-running bot
+  processes. Both now use an ``OrderedDict`` capped at 10,000 entries
+  with least-recently-used eviction on insertion.
 - Removed unused-import ruff violation in `skills/api_call/main.py`.
 
 ### Security

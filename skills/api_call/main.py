@@ -140,23 +140,18 @@ async def execute(
     if headers:
         req_headers.update(headers)
 
-    # Pin connection to pre-verified IPs to prevent DNS rebinding.
-    # If resolved is empty (literal IP), no pinning needed.
-    transport: httpx.AsyncBaseTransport | None = None
+    # DNS-rebinding mitigation: connect directly to the address we already
+    # verified in ``_resolve_and_check``. We rewrite the URL to the resolved
+    # IP and preserve the original hostname via the Host header so virtual
+    # hosting (and, for HTTPS, SNI-less servers) still work. This is the
+    # single source of truth for pinning — we intentionally do *not* pass
+    # a custom httpx transport: ``local_address`` only binds the source
+    # address, it does not pin the destination.
     if resolved:
         first_ip, family = resolved[0]
         port = parts.port or (443 if scheme == "https" else 80)
-        # httpcore allows specifying socket addresses via uds or local_address;
-        # we use httpx's override to force the connection to the verified IP.
-        transport = httpx.AsyncHTTPTransport(
-            local_address=None,
-            # Override connection backend to connect to the verified IP
-        )
-        # Rewrite the URL to connect directly to the verified IP
-        # and pass original Host header for TLS/virtual hosting.
         if parts.hostname not in (first_ip, f"[{first_ip}]"):
             req_headers.setdefault("Host", parts.hostname)
-            # Reconstruct URL with IP instead of hostname
             if family == socket.AF_INET6:
                 netloc = f"[{first_ip}]:{port}"
             else:
@@ -169,7 +164,6 @@ async def execute(
         async with httpx.AsyncClient(
             timeout=float(timeout),
             follow_redirects=False,
-            transport=transport,
         ) as client:
             if method == "POST":
                 resp = await client.post(url, json=body, headers=req_headers)

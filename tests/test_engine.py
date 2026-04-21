@@ -18,6 +18,7 @@ from cordbeat.models import (
     MemoryLayer,
     MessageType,
     ProposalStatus,
+    SoulCaller,
 )
 from cordbeat.skills import SkillRegistry
 from cordbeat.soul import Soul
@@ -877,7 +878,7 @@ class TestRecallModel:
         ai.generate = AsyncMock(side_effect=_generate)
 
         # Set emotion to joy before the message
-        soul.update_emotion(Emotion.JOY, 0.8)
+        soul.update_emotion(Emotion.JOY, 0.8, caller=SoulCaller.AI)
 
         await memory.get_or_create_user("u1", "Alice")
         await memory.link_platform("u1", "test", "user1")

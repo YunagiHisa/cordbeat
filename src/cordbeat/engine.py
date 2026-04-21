@@ -18,6 +18,7 @@ from cordbeat.models import (
     GatewayMessage,
     MessageType,
     ProposalStatus,
+    SoulCaller,
     UserSummary,
 )
 from cordbeat.prompt import build_context, build_soul_system_prompt, sanitize
@@ -516,7 +517,7 @@ class CoreEngine:
             )
             return
 
-        self._soul.update_name(name)
+        self._soul.update_name(name, caller=SoulCaller.USER)
         await self._send_reply(message, f"✅ Name updated to: {name}")
         logger.info("SOUL name changed to '%s'", name)
 
@@ -549,7 +550,7 @@ class CoreEngine:
             )
             return
 
-        self._soul.update_quiet_hours(start, end)
+        self._soul.update_quiet_hours(start, end, caller=SoulCaller.USER)
         await self._send_reply(message, f"✅ Quiet hours updated: {start} - {end}")
         logger.info("Quiet hours changed to %s - %s", start, end)
 

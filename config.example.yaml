@@ -138,6 +138,7 @@ adapters:
     #   access_token: "..."
     #   phone_number_id: "..."
     #   verify_token: "your-verify-token"
+    #   app_secret: "meta-app-secret"  # verifies X-Hub-Signature-256 on inbound webhooks
     #   webhook_host: "0.0.0.0"
     #   webhook_port: 8081
     #   webhook_path: "/webhook"

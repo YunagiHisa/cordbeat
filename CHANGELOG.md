@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **WhatsApp webhook signature verification.** `whatsapp_adapter` now
+  verifies the Meta `X-Hub-Signature-256` header using a constant-time HMAC
+  comparison against a new `app_secret` option. Missing or mismatched
+  signatures are rejected with HTTP 401. When `app_secret` is empty the
+  adapter logs a warning and runs in permissive mode (for local dev only).
 - **Exception hierarchy.** New `cordbeat.exceptions` module introduces a
   `CordBeatError` root with typed subclasses (`SkillError`,
   `SkillValidationError`, `SkillExecutionError`, `SkillTimeoutError`,

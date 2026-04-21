@@ -9,6 +9,9 @@ Configure in ``adapters.whatsapp.options``:
 * ``access_token``      — permanent or short-lived access token
 * ``phone_number_id``   — Meta phone number ID (numeric string)
 * ``verify_token``      — user-chosen string used for webhook subscription verify
+* ``app_secret``        — Meta App Secret, used to verify ``X-Hub-Signature-256``
+  on inbound webhook POSTs. **Strongly recommended** in production; when empty
+  the adapter will log a warning and accept all inbound webhook requests.
 * ``webhook_host``      — bind host (default ``0.0.0.0``)
 * ``webhook_port``      — bind port (default ``8081``)
 * ``webhook_path``      — URL path (default ``/webhook``)
@@ -23,6 +26,8 @@ Install with::
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 from datetime import UTC, datetime
@@ -36,6 +41,30 @@ logger = logging.getLogger(__name__)
 ADAPTER_ID = "whatsapp"
 
 _GRAPH_API_BASE = "https://graph.facebook.com/v20.0"
+_SIGNATURE_HEADER = "X-Hub-Signature-256"
+_SIGNATURE_PREFIX = "sha256="
+
+
+def verify_whatsapp_signature(
+    app_secret: str, body: bytes, signature_header: str | None
+) -> bool:
+    """Verify Meta WhatsApp ``X-Hub-Signature-256`` header.
+
+    The header value must be of the form ``sha256=<hex>`` where ``<hex>`` is
+    the lowercase HMAC-SHA256 of the raw request body, keyed by the App
+    Secret. Comparison is constant-time via :func:`hmac.compare_digest`.
+
+    Returns ``False`` for any missing/malformed input so callers can simply
+    reject the request when the function returns falsy.
+    """
+
+    if not app_secret or not signature_header:
+        return False
+    if not signature_header.startswith(_SIGNATURE_PREFIX):
+        return False
+    provided = signature_header[len(_SIGNATURE_PREFIX) :]
+    expected = hmac.new(app_secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(provided, expected)
 
 
 class WhatsAppAdapter(RetryableConnection):
@@ -50,6 +79,7 @@ class WhatsAppAdapter(RetryableConnection):
         self._access_token: str = opts.get("access_token", "")
         self._phone_number_id: str = opts.get("phone_number_id", "")
         self._verify_token: str = opts.get("verify_token", "")
+        self._app_secret: str = opts.get("app_secret", "")
         self._webhook_host: str = opts.get("webhook_host", "0.0.0.0")
         self._webhook_port: int = int(opts.get("webhook_port", 8081))
         self._webhook_path: str = opts.get("webhook_path", "/webhook")
@@ -76,6 +106,13 @@ class WhatsAppAdapter(RetryableConnection):
             )
             return
 
+        if not self._app_secret:
+            logger.warning(
+                "WhatsApp app_secret not configured; inbound webhook signatures "
+                "will NOT be verified. Set adapters.whatsapp.options.app_secret "
+                "in production."
+            )
+
         self._running = True
         self._http_client = httpx.AsyncClient(
             headers={"Authorization": f"Bearer {self._access_token}"},
@@ -92,8 +129,17 @@ class WhatsAppAdapter(RetryableConnection):
             return web.Response(status=403, text="Verification failed")
 
         async def handle_webhook(request: web.Request) -> web.Response:
+            raw_body = await request.read()
+            if self._app_secret:
+                signature = request.headers.get(_SIGNATURE_HEADER)
+                if not verify_whatsapp_signature(self._app_secret, raw_body, signature):
+                    logger.warning(
+                        "Rejected WhatsApp webhook: missing or invalid %s",
+                        _SIGNATURE_HEADER,
+                    )
+                    return web.Response(status=401, text="Invalid signature")
             try:
-                payload = await request.json()
+                payload = json.loads(raw_body.decode("utf-8") or "{}")
             except Exception:
                 logger.exception("Invalid WhatsApp webhook payload")
                 return web.Response(status=400)

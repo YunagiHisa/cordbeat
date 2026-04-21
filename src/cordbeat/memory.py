@@ -78,6 +78,9 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 
 CREATE INDEX IF NOT EXISTS idx_conv_user_time
     ON conversation_messages (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_certain_user_type_time
+    ON certain_records (user_id, record_type, created_at DESC);
 """
 
 

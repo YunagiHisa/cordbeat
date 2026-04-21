@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import OrderedDict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -30,6 +31,10 @@ from cordbeat.gateway import RetryableConnection
 logger = logging.getLogger(__name__)
 
 ADAPTER_ID = "slack"
+
+# Upper bound on cached user → channel entries. Prevents unbounded growth
+# over long-running bot uptimes; oldest entries are evicted on insertion.
+_USER_CHANNEL_CACHE_MAX = 10_000
 
 
 class SlackAdapter(RetryableConnection):
@@ -47,8 +52,8 @@ class SlackAdapter(RetryableConnection):
         self._ws: Any = None
         self._running = False
         self._max_backoff = config.reconnect_max_backoff
-        # Map platform_user_id → channel for reply routing
-        self._user_channels: dict[str, str] = {}
+        # Bounded LRU of platform_user_id → channel for reply routing.
+        self._user_channels: OrderedDict[str, str] = OrderedDict()
 
     async def start(self) -> None:
         try:
@@ -123,6 +128,9 @@ class SlackAdapter(RetryableConnection):
             return
 
         self._user_channels[user_id] = channel
+        self._user_channels.move_to_end(user_id)
+        if len(self._user_channels) > _USER_CHANNEL_CACHE_MAX:
+            self._user_channels.popitem(last=False)
 
         payload = json.dumps(
             {

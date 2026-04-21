@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import OrderedDict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -14,6 +15,10 @@ from cordbeat.gateway import RetryableConnection
 logger = logging.getLogger(__name__)
 
 ADAPTER_ID = "discord"
+
+# Upper bound on cached user → channel entries. Prevents unbounded growth
+# over long-running bot uptimes; oldest entries are evicted on insertion.
+_USER_CHANNEL_CACHE_MAX = 10_000
 
 
 class DiscordAdapter(RetryableConnection):
@@ -29,8 +34,10 @@ class DiscordAdapter(RetryableConnection):
         self._ws: Any = None
         self._running = False
         self._max_backoff = config.reconnect_max_backoff
-        # Cache last channel per user for guild replies
-        self._user_channels: dict[str, int] = {}
+        # Bounded LRU of last channel per user for guild replies. Inserts
+        # beyond the cap evict the least-recently-used entry so that the
+        # process does not grow without bound over time.
+        self._user_channels: OrderedDict[str, int] = OrderedDict()
 
     async def start(self) -> None:
         try:
@@ -88,8 +95,11 @@ class DiscordAdapter(RetryableConnection):
         user_id = str(message.author.id)
         channel_id = message.channel.id
 
-        # Cache channel for reply routing
+        # Cache channel for reply routing (LRU-bounded).
         self._user_channels[user_id] = channel_id
+        self._user_channels.move_to_end(user_id)
+        if len(self._user_channels) > _USER_CHANNEL_CACHE_MAX:
+            self._user_channels.popitem(last=False)
 
         payload = json.dumps(
             {

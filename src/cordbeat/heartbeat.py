@@ -187,7 +187,18 @@ class HeartbeatLoop:
         quiet_start, quiet_end = self._soul.quiet_hours
         try:
             tz: tzinfo = zoneinfo.ZoneInfo(self._config.timezone)
-        except (KeyError, zoneinfo.ZoneInfoNotFoundError, Exception):
+        except zoneinfo.ZoneInfoNotFoundError:
+            logger.warning(
+                "Timezone %r not found (missing tzdata?); falling back to UTC. "
+                "On Windows install the `tzdata` package to get IANA zones.",
+                self._config.timezone,
+            )
+            tz = UTC
+        except (KeyError, ValueError):
+            logger.warning(
+                "Timezone %r is invalid; falling back to UTC.",
+                self._config.timezone,
+            )
             tz = UTC
         if _in_quiet_hours(quiet_start, quiet_end, tz=tz):
             if not self._sleep_done_today:

@@ -25,7 +25,6 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-import httpcore
 
 _ALLOWED_METHODS = frozenset({"GET", "POST"})
 _ALLOWED_SCHEMES = frozenset({"http", "https"})

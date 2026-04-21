@@ -33,8 +33,10 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from .exceptions import SkillError
 
-class SkillPermissionError(Exception):
+
+class SkillPermissionError(SkillError):
     """Raised when a skill violates its sandbox permissions."""
 
 

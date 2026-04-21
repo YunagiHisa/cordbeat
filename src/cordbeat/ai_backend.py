@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from cordbeat.config import AIBackendConfig
+from cordbeat.exceptions import AIBackendError
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +136,7 @@ class OpenAICompatBackend(AIBackend):
             return str(data["choices"][0]["message"]["content"])
         except (KeyError, IndexError) as exc:
             msg = f"Unexpected response format from {self._base_url}"
-            raise RuntimeError(msg) from exc
+            raise AIBackendError(msg) from exc
 
 
 def create_backend(config: AIBackendConfig) -> AIBackend:

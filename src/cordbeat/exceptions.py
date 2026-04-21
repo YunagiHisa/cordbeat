@@ -34,6 +34,14 @@ class SkillError(CordBeatError):
     """Base class for skill subsystem errors."""
 
 
+class SkillExecutionError(SkillError):
+    """Raised when a skill fails to execute for an infrastructural reason
+    (missing ``execute()``, memory proxy failure, subprocess transport
+    failure, etc.). Distinct from :class:`SkillValidationError`, which is
+    raised for static problems in the skill source.
+    """
+
+
 class MemorySubsystemError(CordBeatError):
     """Raised when the memory subsystem fails irrecoverably.
 
@@ -57,6 +65,7 @@ class OutputValidationError(CordBeatError):
 __all__ = [
     "CordBeatError",
     "SkillError",
+    "SkillExecutionError",
     "MemorySubsystemError",
     "AIBackendError",
     "OutputValidationError",

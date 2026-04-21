@@ -29,6 +29,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   missing SDK so the base install stays slim.
 
 ### Changed
+- **Typed exceptions adopted at internal raise sites.** Infrastructural
+  failures in `memory.py` (store-not-initialized guards, 5 sites),
+  `ai_backend.py` (malformed backend response), `validation.py`
+  (post-retry validation failure), and `skill_runner.py` (missing
+  `execute()` / memory-proxy RPC failure) now raise the typed
+  `CordBeatError` subclasses introduced in the prior release instead of
+  bare `RuntimeError` / `ValueError`. New `SkillExecutionError` subclass
+  added for the skill-runner cases.
 - **SOUL permission matrix is now enforced.** `Soul.add_memory`,
   `set_emotion`, `update_self_image`, `record_decision`, and
   `record_reflection` require a keyword-only `caller` argument matched

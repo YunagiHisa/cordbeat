@@ -33,7 +33,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from .exceptions import SkillError
+from .exceptions import SkillError, SkillExecutionError
 
 
 class SkillPermissionError(SkillError):
@@ -299,7 +299,7 @@ class _MemoryProxy:
             if rtype == "memory_result" and resp.get("id") == msg_id:
                 return resp.get("result")
             if rtype == "memory_error" and resp.get("id") == msg_id:
-                raise RuntimeError(resp.get("error", "memory call failed"))
+                raise SkillExecutionError(resp.get("error", "memory call failed"))
             # Unexpected message — drop it.
 
     def __getattr__(self, name: str) -> Any:
@@ -359,7 +359,7 @@ def _run_skill(
     module = _load_skill_module(skill_dir, skill_name)
     fn = getattr(module, "execute", None)
     if fn is None:
-        raise RuntimeError(f"Skill {skill_name!r} has no execute() function")
+        raise SkillExecutionError(f"Skill {skill_name!r} has no execute() function")
 
     sig = inspect.signature(fn)
     if "context" in sig.parameters:

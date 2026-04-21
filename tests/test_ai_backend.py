@@ -13,6 +13,7 @@ from cordbeat.ai_backend import (
     create_backend,
 )
 from cordbeat.config import AIBackendConfig
+from cordbeat.exceptions import AIBackendError
 
 # ── Factory ───────────────────────────────────────────────────────────
 
@@ -157,5 +158,5 @@ class TestOpenAICompatBackend:
         backend._client = AsyncMock()
         backend._client.post = AsyncMock(return_value=mock_response)
 
-        with pytest.raises(RuntimeError, match="Unexpected response format"):
+        with pytest.raises(AIBackendError, match="Unexpected response format"):
             await backend.generate("test")

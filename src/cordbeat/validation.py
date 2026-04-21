@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from cordbeat.ai_backend import AIBackend
+from cordbeat.exceptions import OutputValidationError
 from cordbeat.models import ValidationError, ValidationResult
 
 logger = logging.getLogger(__name__)
@@ -264,4 +265,4 @@ async def validated_ai_json(
     if fallback is not None:
         return fallback
     msg = f"Validation failed after retries: {last_errors}"
-    raise ValueError(msg)
+    raise OutputValidationError(msg)

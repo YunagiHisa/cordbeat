@@ -8,6 +8,8 @@ from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any
 
+from .exceptions import CordBeatError
+
 # ── Emotions ──────────────────────────────────────────────────────────
 
 
@@ -136,7 +138,7 @@ class SoulCaller(StrEnum):
     USER = "user"  # Direct user command
 
 
-class SoulPermissionError(Exception):
+class SoulPermissionError(CordBeatError):
     """Raised when a caller lacks permission for a SOUL mutation."""
 
 

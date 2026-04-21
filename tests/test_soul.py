@@ -20,7 +20,7 @@ class TestSoul:
 
     def test_update_emotion(self, tmp_path: Path) -> None:
         soul = Soul(tmp_path / "soul")
-        soul.update_emotion(Emotion.JOY, 0.9)
+        soul.update_emotion(Emotion.JOY, 0.9, caller=SoulCaller.AI)
         assert soul.emotion.primary == Emotion.JOY
         assert soul.emotion.primary_intensity == 0.9
         # Old CALM should become secondary (halved intensity)
@@ -30,8 +30,8 @@ class TestSoul:
     def test_persistence(self, tmp_path: Path) -> None:
         soul_dir = tmp_path / "soul"
         soul = Soul(soul_dir)
-        soul.update_name("テスト")
-        soul.update_emotion(Emotion.EXCITEMENT, 0.8)
+        soul.update_name("テスト", caller=SoulCaller.USER)
+        soul.update_emotion(Emotion.EXCITEMENT, 0.8, caller=SoulCaller.AI)
 
         # Reload
         soul2 = Soul(soul_dir)
@@ -47,7 +47,7 @@ class TestSoul:
 
     def test_apply_trait_change(self, tmp_path: Path) -> None:
         soul = Soul(tmp_path / "soul")
-        soul.apply_trait_change(add=["talkative"])
+        soul.apply_trait_change(add=["talkative"], caller=SoulCaller.SYSTEM)
         assert "talkative" in soul.traits
 
     def test_soul_snapshot(self, tmp_path: Path) -> None:
@@ -70,7 +70,7 @@ class TestEmotionTransition:
     def test_primary_change_moves_old_to_secondary(self, tmp_path: Path) -> None:
         soul = Soul(tmp_path / "soul")
         # Start: CALM 0.5, secondary: CURIOSITY 0.3 (default)
-        soul.update_emotion(Emotion.JOY, 0.8)
+        soul.update_emotion(Emotion.JOY, 0.8, caller=SoulCaller.AI)
         assert soul.emotion.primary == Emotion.JOY
         assert soul.emotion.primary_intensity == pytest.approx(0.8)
         # Old primary (CALM 0.5) → secondary at half intensity
@@ -80,7 +80,7 @@ class TestEmotionTransition:
     def test_same_emotion_keeps_secondary(self, tmp_path: Path) -> None:
         soul = Soul(tmp_path / "soul")
         # Default secondary is CURIOSITY 0.3
-        soul.update_emotion(Emotion.CALM, 0.7)
+        soul.update_emotion(Emotion.CALM, 0.7, caller=SoulCaller.AI)
         # Primary didn't change, secondary should remain
         assert soul.emotion.secondary == Emotion.CURIOSITY
         assert soul.emotion.secondary_intensity == pytest.approx(0.3)
@@ -92,6 +92,7 @@ class TestEmotionTransition:
             0.9,
             secondary=Emotion.WARMTH,
             secondary_intensity=0.6,
+            caller=SoulCaller.AI,
         )
         assert soul.emotion.primary == Emotion.EXCITEMENT
         assert soul.emotion.secondary == Emotion.WARMTH
@@ -99,8 +100,8 @@ class TestEmotionTransition:
 
     def test_chained_transitions(self, tmp_path: Path) -> None:
         soul = Soul(tmp_path / "soul")
-        soul.update_emotion(Emotion.JOY, 0.8)
-        soul.update_emotion(Emotion.SADNESS, 0.6)
+        soul.update_emotion(Emotion.JOY, 0.8, caller=SoulCaller.AI)
+        soul.update_emotion(Emotion.SADNESS, 0.6, caller=SoulCaller.AI)
         # JOY should be the secondary now (halved)
         assert soul.emotion.primary == Emotion.SADNESS
         assert soul.emotion.secondary == Emotion.JOY
@@ -108,9 +109,9 @@ class TestEmotionTransition:
 
     def test_intensity_clamped(self, tmp_path: Path) -> None:
         soul = Soul(tmp_path / "soul")
-        soul.update_emotion(Emotion.JOY, 1.5)
+        soul.update_emotion(Emotion.JOY, 1.5, caller=SoulCaller.AI)
         assert soul.emotion.primary_intensity == 1.0
-        soul.update_emotion(Emotion.SADNESS, -0.5)
+        soul.update_emotion(Emotion.SADNESS, -0.5, caller=SoulCaller.AI)
         assert soul.emotion.primary_intensity == 0.0
 
 
@@ -119,7 +120,7 @@ class TestEmotionDecay:
 
     def test_decay_reduces_intensity(self, tmp_path: Path) -> None:
         soul = Soul(tmp_path / "soul")
-        soul.update_emotion(Emotion.JOY, 0.9)
+        soul.update_emotion(Emotion.JOY, 0.9, caller=SoulCaller.AI)
         soul.decay_emotion()
         assert soul.emotion.primary == Emotion.JOY
         assert soul.emotion.primary_intensity == pytest.approx(0.9 - _DECAY_RATE)
@@ -127,7 +128,9 @@ class TestEmotionDecay:
     def test_decay_reverts_to_calm(self, tmp_path: Path) -> None:
         soul = Soul(tmp_path / "soul")
         # Set intensity just above baseline + decay rate
-        soul.update_emotion(Emotion.JOY, _BASELINE_INTENSITY + _DECAY_RATE)
+        soul.update_emotion(
+            Emotion.JOY, _BASELINE_INTENSITY + _DECAY_RATE, caller=SoulCaller.AI
+        )
         soul.decay_emotion()
         # Should revert to CALM at baseline
         assert soul.emotion.primary == Emotion.CALM
@@ -149,6 +152,7 @@ class TestEmotionDecay:
             0.8,
             secondary=Emotion.WARMTH,
             secondary_intensity=0.08,
+            caller=SoulCaller.AI,
         )
         soul.decay_emotion()
         # Secondary was below threshold after decay → cleared
@@ -157,7 +161,7 @@ class TestEmotionDecay:
 
     def test_multiple_decay_cycles(self, tmp_path: Path) -> None:
         soul = Soul(tmp_path / "soul")
-        soul.update_emotion(Emotion.EXCITEMENT, 0.9)
+        soul.update_emotion(Emotion.EXCITEMENT, 0.9, caller=SoulCaller.AI)
         # Apply many decay cycles
         for _ in range(50):
             soul.decay_emotion()
@@ -170,7 +174,7 @@ class TestEmotionHistory:
 
     def test_history_recorded(self, tmp_path: Path) -> None:
         soul = Soul(tmp_path / "soul")
-        soul.update_emotion(Emotion.JOY, 0.8)
+        soul.update_emotion(Emotion.JOY, 0.8, caller=SoulCaller.AI)
         history = soul.emotion_history
         assert len(history) == 1
         assert history[0]["emotion"] == "joy"
@@ -179,21 +183,21 @@ class TestEmotionHistory:
 
     def test_history_accumulates(self, tmp_path: Path) -> None:
         soul = Soul(tmp_path / "soul")
-        soul.update_emotion(Emotion.JOY, 0.8)
-        soul.update_emotion(Emotion.SADNESS, 0.3)
-        soul.update_emotion(Emotion.CALM, 0.5)
+        soul.update_emotion(Emotion.JOY, 0.8, caller=SoulCaller.AI)
+        soul.update_emotion(Emotion.SADNESS, 0.3, caller=SoulCaller.AI)
+        soul.update_emotion(Emotion.CALM, 0.5, caller=SoulCaller.AI)
         assert len(soul.emotion_history) == 3
 
     def test_history_capped_at_50(self, tmp_path: Path) -> None:
         soul = Soul(tmp_path / "soul")
         for i in range(60):
-            soul.update_emotion(Emotion.JOY, i / 100)
+            soul.update_emotion(Emotion.JOY, i / 100, caller=SoulCaller.AI)
         assert len(soul.emotion_history) == 50
 
     def test_history_persists(self, tmp_path: Path) -> None:
         soul_dir = tmp_path / "soul"
         soul = Soul(soul_dir)
-        soul.update_emotion(Emotion.WARMTH, 0.7)
+        soul.update_emotion(Emotion.WARMTH, 0.7, caller=SoulCaller.AI)
         # Reload
         soul2 = Soul(soul_dir)
         assert len(soul2.emotion_history) == 1
@@ -241,7 +245,7 @@ class TestSoulNotes:
         """update_notes() saves content to soul_notes.md."""
         soul_dir = tmp_path / "soul"
         soul = Soul(soul_dir)
-        soul.update_notes("Speak casually with lots of emoji")
+        soul.update_notes("Speak casually with lots of emoji", caller=SoulCaller.USER)
 
         assert soul.notes == "Speak casually with lots of emoji"
         # Verify persistence
@@ -252,7 +256,7 @@ class TestSoulNotes:
         """get_soul_snapshot() includes notes field."""
         soul_dir = tmp_path / "soul"
         soul = Soul(soul_dir)
-        soul.update_notes("Be friendly and supportive")
+        soul.update_notes("Be friendly and supportive", caller=SoulCaller.USER)
 
         snap = soul.get_soul_snapshot()
         assert "notes" in snap
@@ -262,7 +266,7 @@ class TestSoulNotes:
         """Empty notes do not cause errors."""
         soul_dir = tmp_path / "soul"
         soul = Soul(soul_dir)
-        soul.update_notes("")
+        soul.update_notes("", caller=SoulCaller.USER)
 
         assert soul.notes == ""
         snap = soul.get_soul_snapshot()

@@ -15,6 +15,7 @@ from cordbeat.models import (
     MessageType,
     ProposalStatus,
     ProposalType,
+    SoulCaller,
 )
 from cordbeat.skill_validator import SkillValidationError, validate_skill_source
 from cordbeat.skills import SkillRegistry
@@ -444,7 +445,11 @@ class ProposalExecutor:
         trait_add = meta.get("trait_add", [])
         trait_remove = meta.get("trait_remove", [])
         try:
-            self._soul.apply_trait_change(add=trait_add, remove=trait_remove)
+            self._soul.apply_trait_change(
+                add=trait_add,
+                remove=trait_remove,
+                caller=SoulCaller.SYSTEM,
+            )
             logger.info(
                 "Approved trait change applied: add=%s remove=%s",
                 trait_add,

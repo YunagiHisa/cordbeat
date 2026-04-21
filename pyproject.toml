@@ -22,10 +22,18 @@ cordbeat = "cordbeat.main:cli"
 cordbeat-init = "cordbeat.setup_wizard:cordbeat_init_cli"
 cordbeat-discord = "cordbeat.adapter_runner:discord_cli"
 cordbeat-telegram = "cordbeat.adapter_runner:telegram_cli"
+cordbeat-slack = "cordbeat.adapter_runner:slack_cli"
+cordbeat-line = "cordbeat.adapter_runner:line_cli"
+cordbeat-whatsapp = "cordbeat.adapter_runner:whatsapp_cli"
+cordbeat-signal = "cordbeat.adapter_runner:signal_cli"
 
 [project.optional-dependencies]
 discord = ["discord.py>=2.0"]
 telegram = ["python-telegram-bot>=21.0"]
+slack = ["slack-sdk>=3.27", "aiohttp>=3.9"]
+line = ["line-bot-sdk>=3.11", "aiohttp>=3.9"]
+whatsapp = ["aiohttp>=3.9"]
+signal = []
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -61,6 +69,10 @@ strict = true
 module = [
     "cordbeat.discord_adapter",
     "cordbeat.telegram_adapter",
+    "cordbeat.slack_adapter",
+    "cordbeat.line_adapter",
+    "cordbeat.whatsapp_adapter",
+    "cordbeat.signal_adapter",
 ]
 ignore_errors = true
 

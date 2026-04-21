@@ -16,14 +16,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .exceptions import SkillError
+
 logger = logging.getLogger(__name__)
 
 
-class SkillPermissionError(Exception):
+class SkillPermissionError(SkillError):
     """Raised when a sandboxed skill violates its permissions."""
 
 
-class SkillSandboxError(Exception):
+class SkillSandboxError(SkillError):
     """Raised when the sandbox itself fails (timeout, crash, protocol error)."""
 
 

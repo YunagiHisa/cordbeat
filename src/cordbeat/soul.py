@@ -166,13 +166,17 @@ class Soul:
         *,
         secondary: Emotion | None = None,
         secondary_intensity: float | None = None,
-        caller: SoulCaller = SoulCaller.AI,
+        caller: SoulCaller,
     ) -> None:
         """Update emotion with automatic transition logic.
 
         When the primary emotion changes, the old primary becomes the
         secondary (with its intensity halved) unless an explicit secondary
         is provided.
+
+        ``caller`` is required and must be one of :class:`SoulCaller`.
+        Only ``AI`` and ``SYSTEM`` are authorised to mutate emotion;
+        ``USER`` calls raise :class:`SoulPermissionError`.
         """
         _check_permission("emotion", caller)
         intensity = max(0.0, min(1.0, intensity))
@@ -251,7 +255,12 @@ class Soul:
         if len(history) > 50:
             self._soul["emotion_history"] = history[-50:]
 
-    def update_name(self, name: str, *, caller: SoulCaller = SoulCaller.USER) -> None:
+    def update_name(self, name: str, *, caller: SoulCaller) -> None:
+        """Rename the agent.
+
+        Only ``USER`` is authorised; AI-driven paths are rejected to
+        prevent the agent from silently rebranding itself.
+        """
         _check_permission("name", caller)
         self._soul.setdefault("identity", {})
         self._soul["identity"]["name"] = name
@@ -261,9 +270,13 @@ class Soul:
         self,
         notes: str,
         *,
-        caller: SoulCaller = SoulCaller.USER,
+        caller: SoulCaller,
     ) -> None:
-        """Update soul_notes.md content."""
+        """Update soul_notes.md content.
+
+        Authorised callers: ``USER`` (direct edit) and ``SYSTEM``
+        (approved proposal). ``AI`` is rejected.
+        """
         _check_permission("notes", caller)
         self._notes = notes
         self._save_notes()
@@ -287,9 +300,15 @@ class Soul:
         add: list[str] | None = None,
         remove: list[str] | None = None,
         *,
-        caller: SoulCaller = SoulCaller.SYSTEM,
+        caller: SoulCaller,
     ) -> None:
-        """Apply an approved trait change."""
+        """Apply an approved trait change.
+
+        Only ``SYSTEM`` (i.e. the approved-proposal executor) is
+        authorised; direct AI or USER mutation is rejected. The
+        expected flow is: AI proposes → USER approves → heartbeat
+        applies with ``caller=SoulCaller.SYSTEM``.
+        """
         _check_permission("traits", caller)
         traits = self.traits
         for t in remove or []:
@@ -307,9 +326,13 @@ class Soul:
         start: str,
         end: str,
         *,
-        caller: SoulCaller = SoulCaller.USER,
+        caller: SoulCaller,
     ) -> None:
-        """Update heartbeat quiet-hours window."""
+        """Update heartbeat quiet-hours window.
+
+        Authorised callers: ``USER`` (direct command) and ``SYSTEM``
+        (approved proposal). ``AI`` is rejected.
+        """
         _check_permission("quiet_hours", caller)
         hb = self._soul.setdefault("heartbeat", {})
         hb["quiet_hours"] = {"start": start, "end": end}

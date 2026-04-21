@@ -9,7 +9,7 @@ import uuid
 from cordbeat.ai_backend import AIBackend
 from cordbeat.config import MemoryConfig
 from cordbeat.memory import MemoryStore
-from cordbeat.models import Emotion, MemoryEntry, MemoryLayer
+from cordbeat.models import Emotion, MemoryEntry, MemoryLayer, SoulCaller
 from cordbeat.soul import Soul
 
 logger = logging.getLogger(__name__)
@@ -139,7 +139,7 @@ class MemoryExtractor:
             data = json.loads(raw)
             emotion = Emotion(data["emotion"])
             intensity = float(data["intensity"])
-            self._soul.update_emotion(emotion, intensity)
+            self._soul.update_emotion(emotion, intensity, caller=SoulCaller.AI)
             logger.debug("Emotion updated: %s (%.2f)", emotion, intensity)
 
             # High-intensity emotion → flashbulb memory

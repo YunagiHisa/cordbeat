@@ -27,6 +27,8 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 
+from .exceptions import SkillError
+
 __all__ = [
     "SkillValidationError",
     "validate_skill_source",
@@ -34,7 +36,7 @@ __all__ = [
 ]
 
 
-class SkillValidationError(ValueError):
+class SkillValidationError(SkillError, ValueError):
     """Raised when skill source code fails static validation."""
 
 

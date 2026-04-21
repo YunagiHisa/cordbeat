@@ -42,6 +42,22 @@ async def _run_adapter(adapter_name: str, config_path: str) -> None:
         from cordbeat.telegram_adapter import TelegramAdapter
 
         adapter = TelegramAdapter(adapter_cfg)
+    elif adapter_name == "slack":
+        from cordbeat.slack_adapter import SlackAdapter
+
+        adapter = SlackAdapter(adapter_cfg)
+    elif adapter_name == "line":
+        from cordbeat.line_adapter import LineAdapter
+
+        adapter = LineAdapter(adapter_cfg)
+    elif adapter_name == "whatsapp":
+        from cordbeat.whatsapp_adapter import WhatsAppAdapter
+
+        adapter = WhatsAppAdapter(adapter_cfg)
+    elif adapter_name == "signal":
+        from cordbeat.signal_adapter import SignalAdapter
+
+        adapter = SignalAdapter(adapter_cfg)
     else:
         logger.error("Unknown adapter: %s", adapter_name)
         return
@@ -64,6 +80,26 @@ def discord_cli() -> None:
 def telegram_cli() -> None:
     config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
     asyncio.run(_run_adapter("telegram", config_path))
+
+
+def slack_cli() -> None:
+    config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
+    asyncio.run(_run_adapter("slack", config_path))
+
+
+def line_cli() -> None:
+    config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
+    asyncio.run(_run_adapter("line", config_path))
+
+
+def whatsapp_cli() -> None:
+    config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
+    asyncio.run(_run_adapter("whatsapp", config_path))
+
+
+def signal_cli() -> None:
+    config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
+    asyncio.run(_run_adapter("signal", config_path))
 
 
 if __name__ == "__main__":

@@ -76,10 +76,11 @@ Self-contained and easy to add or remove.
  llama.cpp  Ollama   OpenAI-compatible
  (primary) (primary)   (optional)
 
-┌─────────────────────────────────────────┐
-│          Platform Adapters              │
-│  Discord │ Telegram │ CLI │ (more...)   │
-└─────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                   Platform Adapters                     │
+│  Discord │ Telegram │ Slack │ LINE │ WhatsApp │ Signal  │
+│                          │ CLI                          │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -188,6 +189,22 @@ cordbeat-discord
 # Telegram (requires python-telegram-bot)
 uv sync --extra telegram
 cordbeat-telegram
+
+# Slack (requires slack-sdk; Socket Mode — no public webhook needed)
+uv sync --extra slack
+cordbeat-slack
+
+# LINE (requires line-bot-sdk; exposes a webhook HTTP server)
+uv sync --extra line
+cordbeat-line
+
+# WhatsApp (Meta Cloud API; exposes a webhook HTTP server)
+uv sync --extra whatsapp
+cordbeat-whatsapp
+
+# Signal (requires a local signal-cli JSON-RPC daemon)
+uv sync --extra signal
+cordbeat-signal
 ```
 
 Configure tokens in `config.yaml`:
@@ -201,7 +218,40 @@ adapters:
     enabled: true
     options:
       token: "YOUR_TELEGRAM_BOT_TOKEN"
+  slack:
+    enabled: true
+    options:
+      bot_token: "xoxb-..."    # Bot User OAuth Token
+      app_token: "xapp-..."    # App-Level Token (connections:write)
+  line:
+    enabled: true
+    options:
+      channel_access_token: "..."
+      channel_secret: "..."
+      webhook_host: "0.0.0.0"
+      webhook_port: 8080
+      webhook_path: "/webhook"
+  whatsapp:
+    enabled: true
+    options:
+      access_token: "..."
+      phone_number_id: "..."
+      verify_token: "your-verify-token"
+      webhook_host: "0.0.0.0"
+      webhook_port: 8081
+      webhook_path: "/webhook"
+  signal:
+    enabled: true
+    options:
+      rpc_url: "http://localhost:8088/api/v1/rpc"
+      phone_number: "+1234567890"
+      poll_interval: 2
 ```
+
+> **Note:** Slack/LINE/WhatsApp/Signal adapters are v1.0+ scaffolds —
+> platform-side plumbing is complete and reconnects to Core via
+> WebSocket automatically, but each requires platform-specific setup
+> (tokens, webhook registration, or a running `signal-cli` daemon).
 
 ### Development
 
@@ -247,6 +297,10 @@ cordbeat/
 │   ├── cli_adapter.py     # Interactive CLI client
 │   ├── discord_adapter.py # Discord bot adapter
 │   ├── telegram_adapter.py# Telegram bot adapter
+│   ├── slack_adapter.py   # Slack adapter (Socket Mode)
+│   ├── line_adapter.py    # LINE adapter (webhook)
+│   ├── whatsapp_adapter.py# WhatsApp Cloud API adapter (webhook)
+│   ├── signal_adapter.py  # Signal adapter (signal-cli JSON-RPC)
 │   └── adapter_runner.py  # Standalone adapter launcher
 ├── tests/                 # Test suite (536+ tests)
 ├── docs/                  # Design & architecture documentation

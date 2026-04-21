@@ -93,3 +93,32 @@ class TestRunAdapter:
                 await _run_adapter("telegram", config_path)
                 mock_adapter.start.assert_called_once()
                 mock_adapter.stop.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "adapter_name,module_path,class_name",
+        [
+            ("slack", "cordbeat.slack_adapter", "SlackAdapter"),
+            ("line", "cordbeat.line_adapter", "LineAdapter"),
+            ("whatsapp", "cordbeat.whatsapp_adapter", "WhatsAppAdapter"),
+            ("signal", "cordbeat.signal_adapter", "SignalAdapter"),
+        ],
+    )
+    async def test_v1_adapter_created(
+        self,
+        tmp_path: Path,
+        adapter_name: str,
+        module_path: str,
+        class_name: str,
+    ) -> None:
+        """v1.0+ scaffold adapters are instantiated and started."""
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            "gateway:\n  host: 127.0.0.1\n  port: 8765\n"
+            f"adapters:\n  {adapter_name}:\n    enabled: true\n",
+            encoding="utf-8",
+        )
+        mock_adapter = AsyncMock()
+        with patch(f"{module_path}.{class_name}", return_value=mock_adapter):
+            await _run_adapter(adapter_name, str(cfg))
+            mock_adapter.start.assert_called_once()
+            mock_adapter.stop.assert_called_once()

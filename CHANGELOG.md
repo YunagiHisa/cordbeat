@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **CI Windows coverage + coverage artifact uploads.** CI now runs on both
+  ``ubuntu-latest`` and ``windows-latest`` across Python 3.11/3.12/3.13
+  (6 jobs total). ``coverage.xml`` is uploaded as a per-job artifact for
+  post-mortem analysis. Coverage gate raised from 70% to 78%.
 - **WhatsApp webhook signature verification.** `whatsapp_adapter` now
   verifies the Meta `X-Hub-Signature-256` header using a constant-time HMAC
   comparison against a new `app_secret` option. Missing or mismatched

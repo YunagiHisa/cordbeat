@@ -86,7 +86,7 @@ source = ["cordbeat"]
 [tool.coverage.report]
 show_missing = true
 skip_empty = true
-fail_under = 70
+fail_under = 78
 exclude_lines = [
     "pragma: no cover",
     "if __name__",

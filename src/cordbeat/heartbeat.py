@@ -184,43 +184,64 @@ class HeartbeatLoop:
 
     async def _tick(self) -> int:
         """Execute one HEARTBEAT cycle. Returns next interval in minutes."""
-        quiet_start, quiet_end = self._soul.quiet_hours
+        if await self._maybe_run_sleep():
+            return self._config.default_interval_minutes
+
+        self._sleep_done_today = False
+
+        await self._proposals.execute_approved()
+        self._soul.decay_emotion()
+
+        users = await self._memory.get_all_user_summaries()
+        if not users:
+            return self._config.default_interval_minutes
+
+        triage_interval, selected_ids = await self._run_layer1(users)
+        if not selected_ids:
+            logger.debug("Layer 1: no users need attention")
+            return triage_interval
+
+        return await self._run_layer2(users, selected_ids, triage_interval)
+
+    # ── _tick helpers ─────────────────────────────────────────────────
+
+    def _resolve_timezone(self) -> tzinfo:
+        """Return the configured IANA zone, falling back to UTC on failure."""
         try:
-            tz: tzinfo = zoneinfo.ZoneInfo(self._config.timezone)
+            return zoneinfo.ZoneInfo(self._config.timezone)
         except zoneinfo.ZoneInfoNotFoundError:
             logger.warning(
                 "Timezone %r not found (missing tzdata?); falling back to UTC. "
                 "On Windows install the `tzdata` package to get IANA zones.",
                 self._config.timezone,
             )
-            tz = UTC
         except (KeyError, ValueError):
             logger.warning(
                 "Timezone %r is invalid; falling back to UTC.",
                 self._config.timezone,
             )
-            tz = UTC
-        if _in_quiet_hours(quiet_start, quiet_end, tz=tz):
-            if not self._sleep_done_today:
-                await self._sleep.run()
-                self._sleep_done_today = True
-            logger.debug("In quiet hours, skipping HEARTBEAT")
-            return self._config.default_interval_minutes
+        return UTC
 
-        # Reset daily flag when we exit quiet hours
-        self._sleep_done_today = False
+    async def _maybe_run_sleep(self) -> bool:
+        """Run the sleep phase once per quiet-hours window.
 
-        # ── Execute approved proposals ────────────────────────────────
-        await self._proposals.execute_approved()
+        Returns True if we are in quiet hours (caller should skip HEARTBEAT).
+        """
+        quiet_start, quiet_end = self._soul.quiet_hours
+        tz = self._resolve_timezone()
+        if not _in_quiet_hours(quiet_start, quiet_end, tz=tz):
+            return False
+        if not self._sleep_done_today:
+            await self._sleep.run()
+            self._sleep_done_today = True
+        logger.debug("In quiet hours, skipping HEARTBEAT")
+        return True
 
-        # ── Emotion decay ─────────────────────────────────────────────
-        self._soul.decay_emotion()
-
-        # ── Layer 1: Triage ───────────────────────────────────────────
-        users = await self._memory.get_all_user_summaries()
-        if not users:
-            return self._config.default_interval_minutes
-
+    async def _run_layer1(
+        self,
+        users: list[UserSummary],
+    ) -> tuple[int, list[dict[str, str]]]:
+        """Run Layer 1 triage and return (next-interval, selected-users)."""
         triage_result = await self._layer1_triage(users)
         selected_ids: list[dict[str, str]] = triage_result.get("users", [])
         triage_interval = int(
@@ -229,15 +250,16 @@ class HeartbeatLoop:
                 self._config.default_interval_minutes,
             )
         )
+        return triage_interval, selected_ids
 
-        if not selected_ids:
-            logger.debug("Layer 1: no users need attention")
-            return triage_interval
-
-        # Build a lookup for quick access
+    async def _run_layer2(
+        self,
+        users: list[UserSummary],
+        selected_ids: list[dict[str, str]],
+        triage_interval: int,
+    ) -> int:
+        """Run Layer 2 per-user evaluation and return the min next interval."""
         user_map = {u.user_id: u for u in users}
-
-        # ── Layer 2: Per-user evaluation ──────────────────────────────
         min_interval = triage_interval
         for entry in selected_ids:
             uid = entry.get("user_id", "")
@@ -251,7 +273,6 @@ class HeartbeatLoop:
             decision = await self._layer2_evaluate(user, reason)
             await self._execute_decision(decision)
             min_interval = min(min_interval, decision.next_heartbeat_minutes)
-
         return min_interval
 
     # ── Layer 1: Triage ───────────────────────────────────────────────

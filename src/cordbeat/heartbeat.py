@@ -10,7 +10,7 @@ from typing import Any
 
 from cordbeat.ai_backend import AIBackend
 from cordbeat.config import HeartbeatConfig, MemoryConfig
-from cordbeat.gateway import GatewayServer, MessageQueue
+from cordbeat.gateway import GatewayServer, MessageQueueProtocol
 from cordbeat.heartbeat_proposals import ProposalExecutor
 from cordbeat.heartbeat_sleep import SleepPhase
 from cordbeat.memory import MemoryStore
@@ -123,7 +123,7 @@ class HeartbeatLoop:
         memory: MemoryStore,
         skills: SkillRegistry,
         gateway: GatewayServer,
-        queue: MessageQueue,
+        queue: MessageQueueProtocol,
         memory_config: MemoryConfig | None = None,
     ) -> None:
         self._config = config

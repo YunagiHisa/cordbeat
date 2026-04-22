@@ -8,7 +8,7 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import websockets
 from websockets.asyncio.server import Server, ServerConnection
@@ -101,8 +101,31 @@ class RetryableConnection(ABC):
 # ── Message queue ─────────────────────────────────────────────────────
 
 
+@runtime_checkable
+class MessageQueueProtocol(Protocol):
+    """Swappable message-queue contract.
+
+    CordBeat uses a single serialized queue by default because local AI
+    inference is a heavy, non-parallelizable operation on most hardware.
+    The contract is kept behind this Protocol so deployments that *do*
+    have headroom for concurrent inference (multi-GPU, Ollama with
+    parallelism enabled, remote backends) can substitute an alternative
+    implementation — e.g. a worker-pool or priority queue — without
+    touching :class:`GatewayServer` or :class:`~cordbeat.heartbeat.HeartbeatLoop`.
+    """
+
+    def set_handler(self, handler: Any) -> None:
+        """Register the coroutine that will consume dequeued messages."""
+
+    async def put(self, message: GatewayMessage) -> None:
+        """Enqueue *message* for eventual handler dispatch."""
+
+    async def process_loop(self) -> None:
+        """Run forever, passing each dequeued message to the handler."""
+
+
 class MessageQueue:
-    """Global message queue — single-threaded processing for local AI."""
+    """Default :class:`MessageQueueProtocol` — single-threaded FIFO."""
 
     def __init__(self) -> None:
         self._queue: asyncio.Queue[GatewayMessage] = asyncio.Queue()
@@ -134,7 +157,7 @@ class MessageQueue:
 class GatewayServer:
     """WebSocket server that adapters connect to."""
 
-    def __init__(self, config: GatewayConfig, queue: MessageQueue) -> None:
+    def __init__(self, config: GatewayConfig, queue: MessageQueueProtocol) -> None:
         self._config = config
         self._queue = queue
         self._connections: dict[str, ServerConnection] = {}

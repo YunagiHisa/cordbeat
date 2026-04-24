@@ -1,4 +1,13 @@
-"""ChromaDB-backed semantic and episodic memory (private)."""
+"""sqlite-vec backed semantic and episodic memory (private).
+
+Replaces the earlier ChromaDB-based implementation. Vectors are stored
+alongside relational data in the same SQLite database via the
+``sqlite-vec`` loadable extension, using the ``vec0`` virtual-table
+variant with a ``user_id`` partition key for efficient per-user search.
+
+Embeddings are produced locally via ``sentence-transformers`` so the
+agent remains local-first. The model is loaded lazily on first use.
+"""
 
 from __future__ import annotations
 
@@ -6,50 +15,84 @@ import asyncio
 import json
 import uuid
 from datetime import UTC, datetime
+from threading import Lock
 from typing import Any
+
+import aiosqlite
+import sqlite_vec
 
 from cordbeat._memory_common import ensure_aware
 from cordbeat.config import MemoryConfig
 from cordbeat.models import MemoryEntry, MemoryLayer
 
+EMBEDDING_DIM = 384
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
-def build_memory_metadata(entry: MemoryEntry) -> dict[str, Any]:
-    """Build ChromaDB-compatible metadata dict from a MemoryEntry."""
+_model: Any = None
+_model_lock = Lock()
+
+
+def _load_model() -> Any:
+    """Lazily load the sentence-transformers model (thread-safe)."""
+    global _model
+    if _model is None:
+        with _model_lock:
+            if _model is None:
+                from sentence_transformers import SentenceTransformer
+
+                _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    return _model
+
+
+async def embed_text(text: str) -> bytes:
+    """Encode *text* into a serialized float32 embedding for sqlite-vec."""
+
+    def _run() -> bytes:
+        model = _load_model()
+        vec = model.encode(text, normalize_embeddings=True).tolist()
+        serialized: bytes = sqlite_vec.serialize_float32(vec)
+        return serialized
+
+    return await asyncio.to_thread(_run)
+
+
+def _serialize_metadata(entry: MemoryEntry) -> str:
+    """Serialize entry.metadata to JSON, preserving native types."""
+    payload: dict[str, Any] = dict(entry.metadata)
+    return json.dumps(payload, default=str)
+
+
+def _row_to_result(row: aiosqlite.Row, distance: float | None) -> dict[str, Any]:
+    """Shape a metadata row + distance into the public result dict."""
     metadata: dict[str, Any] = {
-        "user_id": entry.user_id,
-        "trust_level": entry.trust_level.value,
-        "strength": entry.strength,
-        "emotion_weight": entry.emotion_weight,
-        "created_at": entry.created_at.isoformat(),
-        "last_accessed_at": entry.last_accessed_at.isoformat(),
+        "user_id": row["user_id"],
+        "trust_level": row["trust_level"],
+        "strength": row["strength"],
+        "emotion_weight": row["emotion_weight"],
+        "created_at": row["created_at"],
+        "last_accessed_at": row["last_accessed_at"],
     }
-    for k, v in entry.metadata.items():
-        if k == "flashbulb":
-            metadata["flashbulb"] = str(v)
-        elif isinstance(v, (dict, list)):
-            metadata[k] = json.dumps(v)
-        else:
-            metadata[k] = str(v)
-    return metadata
+    extra = json.loads(row["metadata_json"] or "{}")
+    metadata.update(extra)
+    return {
+        "id": row["id"],
+        "content": row["content"],
+        "metadata": metadata,
+        "distance": distance,
+    }
 
 
 class VectorMemory:
-    """Wraps ChromaDB collections for semantic and episodic memory."""
+    """sqlite-vec backed semantic/episodic vector store."""
 
-    def __init__(self, semantic: Any, episodic: Any) -> None:
-        self._semantic = semantic
-        self._episodic = episodic
+    def __init__(self, conn: aiosqlite.Connection) -> None:
+        self._conn = conn
 
     async def add_semantic(self, entry: MemoryEntry) -> str:
-        entry_id = entry.id or str(uuid.uuid4())
-        metadata = build_memory_metadata(entry)
-        await asyncio.to_thread(
-            self._semantic.add,
-            ids=[entry_id],
-            documents=[entry.content],
-            metadatas=[metadata],
-        )
-        return entry_id
+        return await self._insert(entry, layer="semantic")
+
+    async def add_episodic(self, entry: MemoryEntry) -> str:
+        return await self._insert(entry, layer="episodic")
 
     async def search_semantic(
         self,
@@ -57,18 +100,7 @@ class VectorMemory:
         query: str,
         n_results: int = 5,
     ) -> list[dict[str, Any]]:
-        return await self._query_collection(self._semantic, user_id, query, n_results)
-
-    async def add_episodic(self, entry: MemoryEntry) -> str:
-        entry_id = entry.id or str(uuid.uuid4())
-        metadata = build_memory_metadata(entry)
-        await asyncio.to_thread(
-            self._episodic.add,
-            ids=[entry_id],
-            documents=[entry.content],
-            metadatas=[metadata],
-        )
-        return entry_id
+        return await self._search("semantic", user_id, query, n_results)
 
     async def search_episodic(
         self,
@@ -76,7 +108,7 @@ class VectorMemory:
         query: str,
         n_results: int = 5,
     ) -> list[dict[str, Any]]:
-        return await self._query_collection(self._episodic, user_id, query, n_results)
+        return await self._search("episodic", user_id, query, n_results)
 
     async def search_by_emotion(
         self,
@@ -85,13 +117,8 @@ class VectorMemory:
         query: str,
         n_results: int = 3,
     ) -> list[dict[str, Any]]:
-        """Search episodic memories filtered by emotional_tone metadata.
-
-        Queries by user_id via ChromaDB, then post-filters by emotion tag.
-        """
-        candidates = await self._query_collection(
-            self._episodic, user_id, query, n_results * 3
-        )
+        """Search episodic memories and post-filter by ``emotional_tone``."""
+        candidates = await self._search("episodic", user_id, query, n_results * 3)
         return [
             r
             for r in candidates
@@ -119,30 +146,35 @@ class VectorMemory:
         self,
         config: MemoryConfig,
     ) -> dict[str, int]:
+        """Evaluate decay for every entry; delete those below threshold.
+
+        Flashbulb entries are exempt. Returns counts of decayed (kept) and
+        archived (deleted) rows.
+        """
         threshold = config.archive_threshold
         now = datetime.now(tz=UTC)
         stats = {"decayed": 0, "archived": 0}
 
-        for collection in (self._semantic, self._episodic):
-            all_data = await asyncio.to_thread(collection.get, include=["metadatas"])
-            if not all_data or not all_data.get("ids"):
-                continue
+        for layer in ("semantic", "episodic"):
+            meta_table = f"{layer}_memory"
+            vec_table = f"{layer}_vectors"
 
-            ids_to_delete: list[str] = []
-            for i, entry_id in enumerate(all_data["ids"]):
-                meta = all_data["metadatas"][i]
+            async with self._conn.execute(
+                f"SELECT id, vec_rowid, user_id, strength, emotion_weight, "
+                f"created_at, metadata_json FROM {meta_table}"
+            ) as cur:
+                rows = await cur.fetchall()
 
-                if str(meta.get("flashbulb", "False")).lower() == "true":
+            to_delete: list[tuple[str, int, str]] = []
+            for row in rows:
+                extras = json.loads(row["metadata_json"] or "{}")
+                if bool(extras.get("flashbulb", False)):
                     continue
 
-                created_str = meta.get("created_at", "")
-                if not created_str:
-                    continue
-
-                created_at = ensure_aware(datetime.fromisoformat(created_str))
+                created_at = ensure_aware(datetime.fromisoformat(row["created_at"]))
                 elapsed_days = (now - created_at).total_seconds() / 86400.0
-                base_strength = float(meta.get("strength", 1.0))
-                emotion_weight = float(meta.get("emotion_weight", 0.0))
+                base_strength = float(row["strength"])
+                emotion_weight = float(row["emotion_weight"])
 
                 effective_decay = config.decay_rate * (1.0 - emotion_weight * 0.5)
                 new_strength = base_strength * (
@@ -150,40 +182,84 @@ class VectorMemory:
                 )
 
                 if new_strength < threshold:
-                    ids_to_delete.append(entry_id)
+                    to_delete.append((row["id"], row["vec_rowid"], row["user_id"]))
                     stats["archived"] += 1
                 else:
                     stats["decayed"] += 1
 
-            if ids_to_delete:
-                await asyncio.to_thread(collection.delete, ids=ids_to_delete)
+            for entry_id, vec_rowid, user_id in to_delete:
+                await self._conn.execute(
+                    f"DELETE FROM {vec_table} WHERE user_id = ? AND rowid = ?",
+                    (user_id, vec_rowid),
+                )
+                await self._conn.execute(
+                    f"DELETE FROM {meta_table} WHERE id = ?",
+                    (entry_id,),
+                )
+
+            if to_delete:
+                await self._conn.commit()
 
         return stats
 
-    @staticmethod
-    async def _query_collection(
-        collection: Any,
+    async def _insert(self, entry: MemoryEntry, *, layer: str) -> str:
+        entry_id = entry.id or str(uuid.uuid4())
+        embedding = await embed_text(entry.content)
+        vec_table = f"{layer}_vectors"
+        meta_table = f"{layer}_memory"
+
+        async with self._conn.execute(
+            f"INSERT INTO {vec_table}(user_id, embedding) VALUES (?, ?)",
+            (entry.user_id, embedding),
+        ) as cur:
+            vec_rowid = cur.lastrowid
+
+        await self._conn.execute(
+            f"""INSERT INTO {meta_table}
+                (id, vec_rowid, user_id, content, trust_level, strength,
+                 emotion_weight, created_at, last_accessed_at, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                entry_id,
+                vec_rowid,
+                entry.user_id,
+                entry.content,
+                entry.trust_level.value,
+                entry.strength,
+                entry.emotion_weight,
+                entry.created_at.isoformat(),
+                entry.last_accessed_at.isoformat(),
+                _serialize_metadata(entry),
+            ),
+        )
+        await self._conn.commit()
+        return entry_id
+
+    async def _search(
+        self,
+        layer: str,
         user_id: str,
         query: str,
         n_results: int,
     ) -> list[dict[str, Any]]:
-        results = await asyncio.to_thread(
-            collection.query,
-            query_texts=[query],
-            n_results=n_results,
-            where={"user_id": user_id},
-        )
-        entries: list[dict[str, Any]] = []
-        if results and results["ids"]:
-            for i, doc_id in enumerate(results["ids"][0]):
-                entries.append(
-                    {
-                        "id": doc_id,
-                        "content": results["documents"][0][i],
-                        "metadata": results["metadatas"][0][i],
-                        "distance": results["distances"][0][i]
-                        if results.get("distances")
-                        else None,
-                    }
-                )
-        return entries
+        vec_table = f"{layer}_vectors"
+        meta_table = f"{layer}_memory"
+        query_embedding = await embed_text(query)
+
+        sql = f"""
+            SELECT m.id, m.user_id, m.content, m.trust_level, m.strength,
+                   m.emotion_weight, m.created_at, m.last_accessed_at,
+                   m.metadata_json, v.distance
+              FROM {vec_table} AS v
+              JOIN {meta_table} AS m ON m.vec_rowid = v.rowid
+             WHERE v.user_id = ?
+               AND v.embedding MATCH ?
+               AND k = ?
+             ORDER BY v.distance
+        """
+        async with self._conn.execute(
+            sql, (user_id, query_embedding, n_results)
+        ) as cur:
+            rows = await cur.fetchall()
+
+        return [_row_to_result(row, row["distance"]) for row in rows]

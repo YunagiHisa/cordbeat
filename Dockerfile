@@ -27,7 +27,7 @@ COPY --from=builder /app/pyproject.toml /app/
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 
-# Data directory for SQLite and ChromaDB
+# Data directory for SQLite (includes sqlite-vec vectors)
 VOLUME /app/data
 
 # Config file mount point

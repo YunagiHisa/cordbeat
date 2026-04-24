@@ -63,7 +63,6 @@ class HeartbeatConfig:
 @dataclass
 class MemoryConfig:
     sqlite_path: str = "data/cordbeat.db"
-    chroma_path: str = "data/chroma"
     decay_rate: float = 0.1
     archive_threshold: float = 0.05
     conversation_history_limit: int = 20
@@ -246,7 +245,6 @@ def _resolve_relative_paths(config: Config, config_dir: Path) -> None:
         return p
 
     config.memory.sqlite_path = _resolve(config.memory.sqlite_path)
-    config.memory.chroma_path = _resolve(config.memory.chroma_path)
     config.soul.soul_dir = _resolve(config.soul.soul_dir)
     config.data_dir = _resolve(config.data_dir)
     config.skills_dir = _resolve(config.skills_dir)

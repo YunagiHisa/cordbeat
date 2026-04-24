@@ -132,7 +132,7 @@ class CoreEngine:
 
         system_prompt = build_soul_system_prompt(soul_snap)
 
-        # Phase 1: Direct keyword search (message.content → ChromaDB)
+        # Phase 1: Direct keyword search (message.content → vector search)
         semantic_memories = await self._memory.search_semantic(
             user_id,
             message.content,

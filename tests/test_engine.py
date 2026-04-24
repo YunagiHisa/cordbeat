@@ -33,7 +33,6 @@ def soul(tmp_path: Path) -> Soul:
 async def memory(tmp_path: Path) -> MemoryStore:
     config = MemoryConfig(
         sqlite_path=str(tmp_path / "test.db"),
-        chroma_path=str(tmp_path / "chroma"),
     )
     store = MemoryStore(config)
     await store.initialize()
@@ -345,7 +344,7 @@ class TestCoreEngine:
         assert user_id is not None
         results = await memory.search_episodic(user_id, "married")
         assert len(results) >= 1
-        assert results[0]["metadata"]["flashbulb"] == "True"
+        assert results[0]["metadata"]["flashbulb"] is True
 
     async def test_low_intensity_no_flashbulb(
         self,

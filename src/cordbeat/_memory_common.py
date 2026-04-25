@@ -65,6 +65,49 @@ CREATE INDEX IF NOT EXISTS idx_certain_user_type_time
 """
 
 
+VECTOR_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS semantic_vectors USING vec0(
+    user_id TEXT PARTITION KEY,
+    embedding float[384]
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS episodic_vectors USING vec0(
+    user_id TEXT PARTITION KEY,
+    embedding float[384]
+);
+
+CREATE TABLE IF NOT EXISTS semantic_memory (
+    id             TEXT PRIMARY KEY,
+    vec_rowid      INTEGER NOT NULL UNIQUE,
+    user_id        TEXT NOT NULL,
+    content        TEXT NOT NULL,
+    trust_level    TEXT NOT NULL,
+    strength       REAL NOT NULL,
+    emotion_weight REAL NOT NULL,
+    created_at     TEXT NOT NULL,
+    last_accessed_at TEXT NOT NULL,
+    metadata_json  TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_semantic_user ON semantic_memory(user_id);
+
+CREATE TABLE IF NOT EXISTS episodic_memory (
+    id             TEXT PRIMARY KEY,
+    vec_rowid      INTEGER NOT NULL UNIQUE,
+    user_id        TEXT NOT NULL,
+    content        TEXT NOT NULL,
+    trust_level    TEXT NOT NULL,
+    strength       REAL NOT NULL,
+    emotion_weight REAL NOT NULL,
+    created_at     TEXT NOT NULL,
+    last_accessed_at TEXT NOT NULL,
+    metadata_json  TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_episodic_user ON episodic_memory(user_id);
+"""
+
+
 def ensure_aware(dt: datetime) -> datetime:
     """Return *dt* with UTC timezone attached if it was naive."""
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)

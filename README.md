@@ -280,7 +280,7 @@ cordbeat/
 │   ├── models.py          # Core data models & enums
 │   ├── config.py          # YAML config loader
 │   ├── soul.py            # SOUL — identity, personality, emotion
-│   ├── memory.py          # 4-layer memory (aiosqlite + ChromaDB)
+│   ├── memory.py          # 4-layer memory (aiosqlite + sqlite-vec)
 │   ├── ai_backend.py      # AI abstraction (Ollama / OpenAI-compat)
 │   ├── validation.py      # AI output validation & retry
 │   ├── prompt.py          # Prompt building & input sanitization

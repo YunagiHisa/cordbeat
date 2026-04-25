@@ -170,7 +170,6 @@ def _build_config(
         },
         "memory": {
             "sqlite_path": str(home / "cordbeat.db"),
-            "chroma_path": str(home / "chroma"),
         },
         "soul": {"soul_dir": str(home / "soul")},
         "skills_dir": str(home / "skills"),
@@ -265,7 +264,6 @@ def run_wizard(home: Path | None = None) -> Path:
     # ── Create directory structure ────────────────────────────────
     print("\n  Creating ~/.cordbeat/ ...")
     home.mkdir(parents=True, exist_ok=True)
-    (home / "chroma").mkdir(parents=True, exist_ok=True)
     (home / "skills").mkdir(parents=True, exist_ok=True)
 
     # ── Write soul files ──────────────────────────────────────────

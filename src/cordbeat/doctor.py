@@ -69,17 +69,25 @@ def run_doctor(home: Path | None = None) -> int:
     # ── Data paths ────────────────────────────────────────────────
     mem = cfg.get("memory", {})
     db_path = Path(mem.get("sqlite_path", str(home / "cordbeat.db")))
-    chroma_path = Path(mem.get("chroma_path", str(home / "chroma")))
     ok &= _check(
         "SQLite path writable",
         db_path.parent.is_dir() or home.is_dir(),
         str(db_path),
     )
-    ok &= _check(
-        "ChromaDB directory ready",
-        chroma_path.is_dir() or chroma_path.parent.is_dir(),
-        str(chroma_path),
-    )
+
+    # ── sqlite-vec extension ──────────────────────────────────────
+    try:
+        import sqlite3
+
+        import sqlite_vec
+
+        probe = sqlite3.connect(":memory:")
+        probe.enable_load_extension(True)
+        sqlite_vec.load(probe)
+        probe.close()
+        ok &= _check("sqlite-vec extension loadable", True, "vec0 available")
+    except Exception as e:  # noqa: BLE001
+        ok &= _check("sqlite-vec extension loadable", False, str(e))
 
     # ── Skills directory ──────────────────────────────────────────
     skills_dir = Path(cfg.get("skills_dir", str(home / "skills")))

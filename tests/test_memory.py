@@ -16,7 +16,6 @@ from cordbeat.models import MemoryEntry, MemoryLayer
 async def memory(tmp_path: Path) -> MemoryStore:
     config = MemoryConfig(
         sqlite_path=str(tmp_path / "test.db"),
-        chroma_path=str(tmp_path / "chroma"),
     )
     store = MemoryStore(config)
     await store.initialize()
@@ -155,7 +154,7 @@ class TestFlashbulbMemory:
         # Should be searchable in episodic memory
         results = await memory.search_episodic("u1", "first talked")
         assert len(results) >= 1
-        assert results[0]["metadata"]["flashbulb"] == "True"
+        assert results[0]["metadata"]["flashbulb"] is True
         assert float(results[0]["metadata"]["emotion_weight"]) == 1.0
 
     async def test_flashbulb_resists_decay(self, memory: MemoryStore) -> None:
@@ -182,7 +181,7 @@ class TestFlashbulbMemory:
         # Flashbulb should still be searchable
         results = await memory.search_episodic("u1", "significant moment")
         assert len(results) >= 1
-        assert results[0]["metadata"]["flashbulb"] == "True"
+        assert results[0]["metadata"]["flashbulb"] is True
 
     async def test_flashbulb_with_custom_metadata(self, memory: MemoryStore) -> None:
         await memory.get_or_create_user("u1", "Test")

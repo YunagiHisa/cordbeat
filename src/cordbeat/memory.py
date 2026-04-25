@@ -6,7 +6,6 @@ re-exports :class:`MemoryStore` as the single public entry point.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timedelta
@@ -14,8 +13,9 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
+import sqlite_vec
 
-from cordbeat._memory_common import SCHEMA
+from cordbeat._memory_common import SCHEMA, VECTOR_SCHEMA
 from cordbeat._memory_conversation import ConversationStore
 from cordbeat._memory_records import RecordStore
 from cordbeat._memory_users import UserStore
@@ -34,13 +34,12 @@ class MemoryStore:
     - :class:`UserStore` — user CRUD and platform links
     - :class:`RecordStore` — core profiles and certain records
     - :class:`ConversationStore` — conversation history
-    - :class:`VectorMemory` — semantic/episodic ChromaDB collections
+    - :class:`VectorMemory` — semantic/episodic vectors via sqlite-vec
     """
 
     def __init__(self, config: MemoryConfig) -> None:
         self._config = config
         self._db_path = Path(config.sqlite_path)
-        self._chroma_path = Path(config.chroma_path)
         self.__conn: aiosqlite.Connection | None = None
         self.__users: UserStore | None = None
         self.__records: RecordStore | None = None
@@ -93,30 +92,22 @@ class MemoryStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = await aiosqlite.connect(str(self._db_path))
         conn.row_factory = aiosqlite.Row
+
+        # Load the sqlite-vec extension so the vec0 virtual tables in
+        # VECTOR_SCHEMA can be created/used on this connection.
+        await conn.enable_load_extension(True)
+        await conn.load_extension(sqlite_vec.loadable_path())
+        await conn.enable_load_extension(False)
+
         await conn.executescript(SCHEMA)
+        await conn.executescript(VECTOR_SCHEMA)
         await conn.commit()
         self.__conn = conn
 
         self.__users = UserStore(conn)
         self.__records = RecordStore(conn)
         self.__conversations = ConversationStore(conn)
-
-        self._chroma_path.mkdir(parents=True, exist_ok=True)
-        import chromadb
-
-        client = await asyncio.to_thread(
-            chromadb.PersistentClient,
-            path=str(self._chroma_path),
-        )
-        semantic = await asyncio.to_thread(
-            client.get_or_create_collection,
-            name="semantic_memory",
-        )
-        episodic = await asyncio.to_thread(
-            client.get_or_create_collection,
-            name="episodic_memory",
-        )
-        self.__vectors = VectorMemory(semantic, episodic)
+        self.__vectors = VectorMemory(conn)
         logger.info("Memory store initialized")
 
     async def close(self) -> None:

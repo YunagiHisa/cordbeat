@@ -260,12 +260,11 @@ class TestPathResolution:
     def test_memory_paths_resolved_to_config_dir(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(
-            "memory:\n  sqlite_path: db/app.db\n  chroma_path: db/chroma\n",
+            "memory:\n  sqlite_path: db/app.db\n",
             encoding="utf-8",
         )
         config = load_config(cfg_file)
         assert config.memory.sqlite_path == str((tmp_path / "db/app.db").resolve())
-        assert config.memory.chroma_path == str((tmp_path / "db/chroma").resolve())
 
     def test_soul_dir_resolved(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.yaml"

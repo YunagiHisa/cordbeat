@@ -15,7 +15,6 @@ class TestRunDoctor:
     def _setup_healthy(self, home: Path) -> None:
         """Create a minimal healthy installation at *home*."""
         home.mkdir(parents=True, exist_ok=True)
-        (home / "chroma").mkdir()
         (home / "skills").mkdir()
         soul_dir = home / "soul"
         soul_dir.mkdir()
@@ -29,7 +28,6 @@ class TestRunDoctor:
             },
             "memory": {
                 "sqlite_path": str(home / "cordbeat.db"),
-                "chroma_path": str(home / "chroma"),
             },
             "soul": {"soul_dir": str(soul_dir)},
             "skills_dir": str(home / "skills"),

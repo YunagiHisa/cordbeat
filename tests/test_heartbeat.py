@@ -108,7 +108,6 @@ def soul(tmp_path: Path) -> Soul:
 async def memory(tmp_path: Path) -> MemoryStore:
     config = MemoryConfig(
         sqlite_path=str(tmp_path / "test.db"),
-        chroma_path=str(tmp_path / "chroma"),
     )
     store = MemoryStore(config)
     await store.initialize()

@@ -53,7 +53,6 @@ heartbeat:
 
 memory:
   sqlite_path: "data/cordbeat.db"
-  chroma_path: "data/chroma"
   decay_rate: 0.1
   archive_threshold: 0.05
   conversation_history_limit: 20     # recent messages loaded into context

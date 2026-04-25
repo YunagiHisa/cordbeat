@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING: Vector backend switched from ChromaDB to sqlite-vec.** Semantic
+  and episodic memories are now stored in the same SQLite database via the
+  ``sqlite-vec`` loadable extension (``vec0`` virtual tables with
+  ``user_id PARTITION KEY``), and embeddings are produced locally by
+  ``sentence-transformers`` (``all-MiniLM-L6-v2``, 384 dims). The ``chromadb``
+  dependency is removed; ``chroma_path`` has been removed from
+  ``MemoryConfig`` / ``config.yaml`` and existing ChromaDB data is **not**
+  migrated (destructive upgrade; delete the old ``data/chroma`` directory).
+  Search result metadata now preserves native types (e.g. ``"flashbulb":
+  True`` rather than ``"True"``).
+- **BREAKING: Minimum version bumped to 0.2.0.**
+
 ### Added
 - **Composite index on ``certain_records``.** New
   ``idx_certain_user_type_time`` covering ``(user_id, record_type,

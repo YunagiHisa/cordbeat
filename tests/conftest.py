@@ -24,9 +24,7 @@ def _fake_encode(text: str) -> list[float]:
     data = bytearray()
     counter = 0
     while len(data) < _EMBEDDING_DIM * 4:
-        data.extend(
-            hashlib.sha256(digest + counter.to_bytes(2, "big")).digest()
-        )
+        data.extend(hashlib.sha256(digest + counter.to_bytes(2, "big")).digest())
         counter += 1
     raw = data[: _EMBEDDING_DIM * 4]
     # Interpret each 4 bytes as an unsigned int, map into [-1, 1].

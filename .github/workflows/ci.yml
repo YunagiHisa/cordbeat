@@ -48,3 +48,25 @@ jobs:
           name: coverage-${{ matrix.os }}-py${{ matrix.python-version }}
           path: coverage.xml
           if-no-files-found: ignore
+
+  audit:
+    name: Dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6.3.1
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Export runtime requirements
+        run: |
+          uv export --no-emit-project --no-dev --format requirements-txt --quiet \
+            > requirements.audit.txt
+
+      - name: Run pip-audit
+        run: uv run --with pip-audit pip-audit -r requirements.audit.txt --strict

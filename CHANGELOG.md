@@ -55,6 +55,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **BREAKING: Minimum version bumped to 0.4.0.**
 
 ### Added
+- **Memory integration test suite.** New ``tests/integration/`` directory with
+  ``test_memory_vector.py`` exercising the full memory lifecycle (insert →
+  semantic search → user isolation → emotional search → flashbulb → lazy
+  decay) against a real ``sqlite-vec`` + ``sentence-transformers`` stack.
+  Marked with the new ``integration`` pytest marker (informational; runs by
+  default in CI). Coverage gate raised from 78% to **85%** (current: 90.85%);
+  ``skill_runner.py`` and the optional Slack/LINE/WhatsApp/Signal adapter
+  scaffolds are now omitted from coverage measurement since their execution
+  paths are not reachable from the default test environment.
 - **Composite index on ``certain_records``.** New
   ``idx_certain_user_type_time`` covering ``(user_id, record_type,
   created_at DESC)`` to keep sleep-phase queries fast as record volume

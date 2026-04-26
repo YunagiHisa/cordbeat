@@ -9,6 +9,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- **BREAKING: ``user_id`` is now a random 32-char UUID hex.** New users are
+  assigned ``uuid4().hex`` instead of the previous
+  ``cb_<adapter>_<platform_user_id>`` format. This decouples the internal
+  primary key from external account identifiers so a leaked database dump
+  cannot be linked back to Discord/Slack/etc. accounts directly. The mapping
+  is preserved via the existing ``platform_links`` table. Legacy
+  ``cb_…``-style IDs are no longer generated; existing databases must be
+  recreated (destructive upgrade — pre-release, no migration provided).
 - **BREAKING: Vector backend switched from ChromaDB to sqlite-vec.** Semantic
   and episodic memories are now stored in the same SQLite database via the
   ``sqlite-vec`` loadable extension (``vec0`` virtual tables with
@@ -19,7 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   migrated (destructive upgrade; delete the old ``data/chroma`` directory).
   Search result metadata now preserves native types (e.g. ``"flashbulb":
   True`` rather than ``"True"``).
-- **BREAKING: Minimum version bumped to 0.2.0.**
+- **BREAKING: Minimum version bumped to 0.3.0.**
 
 ### Added
 - **Composite index on ``certain_records``.** New

@@ -33,7 +33,17 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from .exceptions import SkillError, SkillExecutionError
+
+# Self-contained exception hierarchy. The runner is invoked as a stand-
+# alone script under a skill-private uv-managed Python, so we cannot
+# rely on importing from the host ``cordbeat`` package. These are
+# raised inside the subprocess and serialised over JSON to the parent.
+class SkillError(Exception):
+    """Base class for skill subprocess errors."""
+
+
+class SkillExecutionError(SkillError):
+    """Raised when skill code fails at runtime."""
 
 
 class SkillPermissionError(SkillError):

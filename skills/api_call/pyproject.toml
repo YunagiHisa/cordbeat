@@ -1,0 +1,8 @@
+[project]
+name = "cordbeat-skill-api-call"
+version = "0.1.0"
+description = "CordBeat builtin skill: SSRF-hardened HTTP API client"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+]

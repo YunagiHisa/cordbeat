@@ -1,0 +1,8 @@
+[project]
+name = "cordbeat-skill-web-search"
+version = "0.1.0"
+description = "CordBeat builtin skill: web search via DuckDuckGo"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+]

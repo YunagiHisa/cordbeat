@@ -22,6 +22,7 @@ from cordbeat._memory_users import UserStore
 from cordbeat._memory_vector import VectorMemory
 from cordbeat.config import MemoryConfig
 from cordbeat.exceptions import MemorySubsystemError
+from cordbeat.metrics import MEMORY_QUERY_LATENCY, time_block
 from cordbeat.models import MemoryEntry, UserSummary
 
 logger = logging.getLogger(__name__)
@@ -288,7 +289,8 @@ class MemoryStore:
         query: str,
         n_results: int = 5,
     ) -> list[dict[str, Any]]:
-        return await self._vectors.search_semantic(user_id, query, n_results)
+        async with time_block(MEMORY_QUERY_LATENCY, {"kind": "semantic"}):
+            return await self._vectors.search_semantic(user_id, query, n_results)
 
     async def add_episodic_memory(self, entry: MemoryEntry) -> str:
         return await self._vectors.add_episodic(entry)
@@ -299,7 +301,8 @@ class MemoryStore:
         query: str,
         n_results: int = 5,
     ) -> list[dict[str, Any]]:
-        return await self._vectors.search_episodic(user_id, query, n_results)
+        async with time_block(MEMORY_QUERY_LATENCY, {"kind": "episodic"}):
+            return await self._vectors.search_episodic(user_id, query, n_results)
 
     async def search_by_emotion(
         self,

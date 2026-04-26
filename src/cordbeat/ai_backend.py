@@ -11,6 +11,12 @@ import httpx
 
 from cordbeat.config import AIBackendConfig
 from cordbeat.exceptions import AIBackendError
+from cordbeat.metrics import (
+    LLM_GENERATE_LATENCY,
+    LLM_GENERATE_TOTAL,
+    inc_counter,
+    time_block,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,12 +89,19 @@ class OllamaBackend(AIBackend):
         if system:
             payload["system"] = system
 
-        resp = await self._client.post(
-            f"{self._base_url}/api/generate",
-            json=payload,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        labels = {"backend": "ollama", "model": self._model}
+        try:
+            async with time_block(LLM_GENERATE_LATENCY, labels):
+                resp = await self._client.post(
+                    f"{self._base_url}/api/generate",
+                    json=payload,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception:
+            inc_counter(LLM_GENERATE_TOTAL, {"backend": "ollama", "outcome": "error"})
+            raise
+        inc_counter(LLM_GENERATE_TOTAL, {"backend": "ollama", "outcome": "ok"})
         logger.debug("Ollama raw keys: %s", list(data.keys()))
         logger.debug("Ollama response: %.200s", data.get("response", ""))
         return str(data.get("response", ""))
@@ -121,17 +134,27 @@ class OpenAICompatBackend(AIBackend):
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-        resp = await self._client.post(
-            f"{self._base_url}/chat/completions",
-            json={
-                "model": self._model,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        labels = {"backend": "openai_compat", "model": self._model}
+        try:
+            async with time_block(LLM_GENERATE_LATENCY, labels):
+                resp = await self._client.post(
+                    f"{self._base_url}/chat/completions",
+                    json={
+                        "model": self._model,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception:
+            inc_counter(
+                LLM_GENERATE_TOTAL,
+                {"backend": "openai_compat", "outcome": "error"},
+            )
+            raise
+        inc_counter(LLM_GENERATE_TOTAL, {"backend": "openai_compat", "outcome": "ok"})
         try:
             return str(data["choices"][0]["message"]["content"])
         except (KeyError, IndexError) as exc:

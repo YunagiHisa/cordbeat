@@ -14,6 +14,12 @@ from cordbeat.gateway import GatewayServer, MessageQueueProtocol
 from cordbeat.heartbeat_proposals import ProposalExecutor
 from cordbeat.heartbeat_sleep import SleepPhase
 from cordbeat.memory import MemoryStore
+from cordbeat.metrics import (
+    HEARTBEAT_TICK_LATENCY,
+    HEARTBEAT_TICK_TOTAL,
+    inc_counter,
+    time_block,
+)
 from cordbeat.models import (
     GatewayMessage,
     HeartbeatAction,
@@ -170,9 +176,12 @@ class HeartbeatLoop:
         interval_minutes = self._config.default_interval_minutes
         while self._running:
             try:
-                interval_minutes = await self._tick()
+                async with time_block(HEARTBEAT_TICK_LATENCY):
+                    interval_minutes = await self._tick()
+                inc_counter(HEARTBEAT_TICK_TOTAL, {"outcome": "ok"})
             except Exception:
                 logger.exception("HEARTBEAT tick error")
+                inc_counter(HEARTBEAT_TICK_TOTAL, {"outcome": "error"})
                 interval_minutes = self._config.default_interval_minutes
 
             # Clamp interval

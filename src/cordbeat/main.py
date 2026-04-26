@@ -14,6 +14,8 @@ from cordbeat.engine import CoreEngine
 from cordbeat.gateway import GatewayServer, MessageQueue
 from cordbeat.heartbeat import HeartbeatLoop
 from cordbeat.memory import MemoryStore
+from cordbeat.metrics import REGISTRY as METRICS_REGISTRY
+from cordbeat.metrics_server import PrometheusServer
 from cordbeat.skill_sandbox import SandboxConfig
 from cordbeat.skills import SkillRegistry
 from cordbeat.soul import Soul
@@ -69,6 +71,20 @@ async def main(config_path: str = "config.yaml") -> None:
     logging.getLogger("websockets.server").setLevel(logging.WARNING)
 
     logger.info("Configuration loaded from %s", config_path)
+
+    METRICS_REGISTRY.set_enabled(config.metrics.enabled)
+    metrics_server: PrometheusServer | None = None
+    if config.metrics.enabled and config.metrics.prometheus_port > 0:
+        metrics_server = PrometheusServer(
+            host=config.metrics.prometheus_host,
+            port=config.metrics.prometheus_port,
+        )
+        await metrics_server.start()
+        logger.info(
+            "Prometheus metrics endpoint listening on http://%s:%d/metrics",
+            config.metrics.prometheus_host,
+            config.metrics.prometheus_port,
+        )
 
     # ── Initialize subsystems ─────────────────────────────────────
     soul = Soul(
@@ -166,6 +182,8 @@ async def main(config_path: str = "config.yaml") -> None:
         await queue_task
     except asyncio.CancelledError:
         pass
+    if metrics_server is not None:
+        await metrics_server.stop()
     await ai.aclose()
     await memory.close()
     logger.info("CordBeat stopped")

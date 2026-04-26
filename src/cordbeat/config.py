@@ -124,6 +124,23 @@ class SkillsConfig:
 
 
 @dataclass
+class MetricsConfig:
+    """In-process metrics collection.
+
+    When ``enabled`` is False, all observations become no-ops and
+    :func:`cordbeat.metrics.render_prometheus` returns an empty string.
+    The optional Prometheus HTTP endpoint is **off by default**;
+    set ``prometheus_port`` to a non-zero value to enable it.
+    Bind address defaults to loopback for the same security posture
+    as the gateway WebSocket.
+    """
+
+    enabled: bool = True
+    prometheus_host: str = "127.0.0.1"
+    prometheus_port: int = 0
+
+
+@dataclass
 class Config:
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
     adapters: dict[str, AdapterConfig] = field(default_factory=dict)
@@ -133,6 +150,7 @@ class Config:
     soul: SoulConfig = field(default_factory=SoulConfig)
     log: LogConfig = field(default_factory=LogConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
+    metrics: MetricsConfig = field(default_factory=MetricsConfig)
     skills_dir: str = "skills"
     data_dir: str = "data"
 
@@ -314,6 +332,11 @@ def load_config(path: str | Path) -> Config:
 
     log = _build_dataclass(LogConfig, raw.get("log", {}))
 
+    metrics_raw = raw.get("metrics", {})
+    if not isinstance(metrics_raw, dict):
+        metrics_raw = {}
+    metrics = _build_dataclass(MetricsConfig, metrics_raw)
+
     skills_raw = raw.get("skills", {})
     if not isinstance(skills_raw, dict):
         skills_raw = {}
@@ -333,6 +356,7 @@ def load_config(path: str | Path) -> Config:
         soul=soul,
         log=log,
         skills=skills,
+        metrics=metrics,
         skills_dir=raw.get("skills_dir", "skills"),
         data_dir=raw.get("data_dir", "data"),
     )

@@ -55,6 +55,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **BREAKING: Minimum version bumped to 0.4.0.**
 
 ### Added
+- **Schema migration framework + backup/restore CLI.** New
+  ``cordbeat._memory_migrations`` module introduces a versioned,
+  append-only migration framework. ``MemoryStore.initialize`` now
+  applies pending migrations on every boot and records the latest
+  applied version in a new ``schema_version`` table. Pre-framework
+  databases (``users`` table present, no ``schema_version``) are
+  silently fast-forwarded to version 1. Two new CLI entry points are
+  registered: ``cordbeat-backup [destination] [--config PATH]`` runs
+  an online SQLite backup via ``sqlite3.Connection.backup`` (no agent
+  shutdown required); ``cordbeat-restore <source> [--yes]`` overwrites
+  the live database, saving the previous file as ``*.pre-restore`` for
+  rollback.
 - **Dependency audit job in CI.** New ``audit`` job in ``.github/workflows/ci.yml``
   runs ``pip-audit`` against the resolved runtime dependency set
   (``uv export --no-dev``) on every push and pull request. Fails the

@@ -27,6 +27,8 @@ cordbeat-slack = "cordbeat.adapter_runner:slack_cli"
 cordbeat-line = "cordbeat.adapter_runner:line_cli"
 cordbeat-whatsapp = "cordbeat.adapter_runner:whatsapp_cli"
 cordbeat-signal = "cordbeat.adapter_runner:signal_cli"
+cordbeat-backup = "cordbeat.backup_cli:backup_main"
+cordbeat-restore = "cordbeat.backup_cli:restore_main"
 
 [project.optional-dependencies]
 discord = ["discord.py>=2.0"]

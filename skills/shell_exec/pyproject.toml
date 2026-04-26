@@ -1,0 +1,6 @@
+[project]
+name = "cordbeat-skill-shell-exec"
+version = "0.1.0"
+description = "CordBeat builtin skill: gated shell command execution"
+requires-python = ">=3.11"
+dependencies = []

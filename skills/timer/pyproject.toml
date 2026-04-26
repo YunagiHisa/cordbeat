@@ -1,0 +1,6 @@
+[project]
+name = "cordbeat-skill-timer"
+version = "0.1.0"
+description = "CordBeat builtin skill: schedule timed reminders"
+requires-python = ">=3.11"
+dependencies = []

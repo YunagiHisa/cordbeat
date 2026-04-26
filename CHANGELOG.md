@@ -9,6 +9,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- **BREAKING: Skills now run inside per-skill ``uv``-managed Python
+  environments.** Each builtin skill ships its own ``pyproject.toml``;
+  on first execution the dependencies declared there are installed
+  into ``~/.cordbeat/skill-envs/<skill_name>/`` (cached and re-used
+  on subsequent runs, with SHA-256 hash invalidation when the
+  ``pyproject.toml`` changes). The skill subprocess is spawned with
+  the env's interpreter, the ``-I`` isolated flag, and
+  ``PYTHONNOUSERSITE=1`` so the host's ``site-packages`` no longer
+  leak into skills. The runner script (``skill_runner.py``) was made
+  self-contained — it no longer imports anything from the
+  ``cordbeat`` package — so skill envs do not need cordbeat itself
+  installed. Skills without a ``pyproject.toml`` continue to run
+  under the host Python (used by tests and AI-generated skills with
+  no extra deps). Requires ``uv`` to be available on ``PATH``.
 - **BREAKING: Memory decay is now lazy.** The nightly
   ``decay_and_archive_memories()`` batch (and the ``MemoryStore`` /
   ``HeartbeatSleep`` hooks that called it) has been removed. Memory strength

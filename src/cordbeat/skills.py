@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 
 from cordbeat.models import SafetyLevel, SkillMeta, SkillParam
+from cordbeat.skill_env import SkillEnvManager
 from cordbeat.skill_sandbox import (
     DEFAULT_CONFIG,
     SandboxConfig,
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "Skill",
     "SkillRegistry",
+    "SkillEnvManager",
     "SkillPermissionError",
     "SkillSandboxError",
 ]
@@ -45,12 +47,14 @@ class Skill:
         meta: SkillMeta,
         skill_dir: Path | None = None,
         sandbox_config: SandboxConfig | None = None,
+        env_manager: SkillEnvManager | None = None,
         *,
         _test_callable: Any = None,
     ) -> None:
         self.meta = meta
         self._skill_dir = skill_dir
         self._sandbox_config = sandbox_config or DEFAULT_CONFIG
+        self._env_manager = env_manager
         self._test_callable = _test_callable
 
     async def execute(
@@ -99,6 +103,11 @@ class Skill:
                 "filesystem": self.meta.filesystem,
                 "work_dir": str(tmpdir),
             }
+            python_executable: str | None = None
+            if self._env_manager is not None:
+                python_executable = await self._env_manager.prepare(
+                    self._skill_dir, self.meta.name
+                )
             return await run_skill_in_subprocess(
                 skill_dir=self._skill_dir,
                 skill_name=self.meta.name,
@@ -106,6 +115,7 @@ class Skill:
                 sandbox=sandbox_params,
                 memory=memory,
                 config=self._sandbox_config,
+                python_executable=python_executable,
             )
 
 
@@ -122,10 +132,14 @@ class SkillRegistry:
         self,
         skills_dir: str | Path,
         sandbox_config: SandboxConfig | None = None,
+        env_manager: SkillEnvManager | None = None,
     ) -> None:
         self._skills_dir = Path(skills_dir)
         self._skills: dict[str, Skill] = {}
         self._sandbox_config = sandbox_config or DEFAULT_CONFIG
+        self._env_manager = (
+            env_manager if env_manager is not None else SkillEnvManager()
+        )
 
     @property
     def skills_dir(self) -> Path:
@@ -222,6 +236,7 @@ class SkillRegistry:
             meta=meta,
             skill_dir=skill_path,
             sandbox_config=self._sandbox_config,
+            env_manager=self._env_manager,
         )
         logger.info(
             "Loaded skill: %s (safety=%s, enabled=%s)",

@@ -91,13 +91,17 @@ async def run_skill_in_subprocess(
     sandbox: dict[str, Any],
     memory: Any | None = None,
     config: SandboxConfig | None = None,
+    python_executable: str | None = None,
 ) -> dict[str, Any]:
     """Run a skill in an isolated subprocess and return its result.
 
     Parameters mirror the subprocess init message. ``memory`` is an
     optional object; if provided, the child may request whitelisted
     method calls which are executed here and have their return values
-    sent back.
+    sent back. ``python_executable`` lets callers spawn the child with
+    a skill-private Python (e.g. a ``uv``-managed env from
+    :class:`cordbeat.skill_env.SkillEnvManager`); when ``None`` the
+    host interpreter (``sys.executable``) is used.
     """
     cfg = config or DEFAULT_CONFIG
 
@@ -116,17 +120,19 @@ async def run_skill_in_subprocess(
         },
     }
 
+    py_exe = python_executable or sys.executable
+    runner_path = Path(__file__).parent / "skill_runner.py"
     proc = await asyncio.create_subprocess_exec(
-        sys.executable,
+        py_exe,
         "-I",  # isolated mode: ignore PYTHONPATH/user site
-        "-m",
-        "cordbeat.skill_runner",
+        str(runner_path),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env={
             "PATH": os.environ.get("PATH", ""),
             "PYTHONIOENCODING": "utf-8",
+            "PYTHONNOUSERSITE": "1",
             "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
         },
     )

@@ -17,6 +17,12 @@ from typing import Any
 
 import yaml
 
+from cordbeat.metrics import (
+    SKILL_EXEC_LATENCY,
+    SKILL_EXEC_TOTAL,
+    inc_counter,
+    time_block,
+)
 from cordbeat.models import SafetyLevel, SkillMeta, SkillParam
 from cordbeat.skill_env import SkillEnvManager
 from cordbeat.skill_sandbox import (
@@ -68,6 +74,24 @@ class Skill:
         the subprocess may then request whitelisted memory calls which
         are executed against this object.
         """
+        labels = {
+            "skill": self.meta.name,
+            "safety_level": self.meta.safety_level.value,
+        }
+        try:
+            async with time_block(SKILL_EXEC_LATENCY, labels):
+                result = await self._execute_inner(params, memory)
+        except Exception:
+            inc_counter(SKILL_EXEC_TOTAL, {**labels, "outcome": "error"})
+            raise
+        inc_counter(SKILL_EXEC_TOTAL, {**labels, "outcome": "ok"})
+        return result
+
+    async def _execute_inner(
+        self,
+        params: dict[str, Any],
+        memory: Any,
+    ) -> dict[str, Any]:
         if self._test_callable is not None:
             # Test-only in-process path. Never taken for skills loaded
             # from disk via SkillRegistry.

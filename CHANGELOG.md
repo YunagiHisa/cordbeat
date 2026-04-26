@@ -55,6 +55,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **BREAKING: Minimum version bumped to 0.4.0.**
 
 ### Added
+- **In-process metrics + optional Prometheus exporter.** New
+  ``cordbeat.metrics`` registry exposes Counters and Histograms with
+  Prometheus 0.0.4 text-format rendering — zero new runtime
+  dependencies. Four key paths are now instrumented out of the box:
+  HEARTBEAT tick latency/outcome, memory query latency by kind
+  (semantic / episodic), skill execution latency/outcome by name and
+  safety level, and LLM ``generate()`` latency/outcome by backend and
+  model. A new ``MetricsConfig`` (``config.metrics``) gates collection
+  globally (``enabled``, default true) and can opt into a tiny stdlib
+  HTTP exporter via ``prometheus_port`` (default 0 = disabled) bound
+  by default to ``127.0.0.1`` for the same loopback security posture
+  as the gateway.
 - **Schema migration framework + backup/restore CLI.** New
   ``cordbeat._memory_migrations`` module introduces a versioned,
   append-only migration framework. ``MemoryStore.initialize`` now

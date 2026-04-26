@@ -84,14 +84,32 @@ ignore_errors = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: end-to-end tests against real backends (sqlite-vec, etc.)",
+]
 
 [tool.coverage.run]
 source = ["cordbeat"]
+omit = [
+    # skill_runner runs only inside skill subprocesses; pytest's coverage
+    # collector cannot trace it through the sandboxed -I invocation.
+    # End-to-end exercise happens via test_skills_subprocess.py.
+    "*/cordbeat/skill_runner.py",
+    # Optional platform adapter skeletons. The respective SDKs
+    # (line-bot-sdk, slack-sdk, etc.) are extras-only deps and not
+    # installed in the default CI environment, so the SDK-installed
+    # branches cannot be exercised here. Discord/Telegram remain
+    # measured because their SDKs are part of the default test deps.
+    "*/cordbeat/line_adapter.py",
+    "*/cordbeat/slack_adapter.py",
+    "*/cordbeat/whatsapp_adapter.py",
+    "*/cordbeat/signal_adapter.py",
+]
 
 [tool.coverage.report]
 show_missing = true
 skip_empty = true
-fail_under = 78
+fail_under = 85
 exclude_lines = [
     "pragma: no cover",
     "if __name__",

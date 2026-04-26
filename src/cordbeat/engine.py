@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import uuid
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
 from typing import Any
@@ -106,7 +107,7 @@ class CoreEngine:
 
         user_id = await self._memory.resolve_user(adapter_id, platform_user_id)
         if user_id is None:
-            user_id = f"cb_{adapter_id}_{platform_user_id}"
+            user_id = uuid.uuid4().hex
             user = await self._memory.get_or_create_user(user_id, platform_user_id)
             await self._memory.link_platform(user_id, adapter_id, platform_user_id)
         else:

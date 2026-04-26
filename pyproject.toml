@@ -1,6 +1,6 @@
 [project]
 name = "cordbeat"
-version = "0.2.0"
+version = "0.3.0"
 description = "A local-first autonomous AI agent that thinks, acts, and stays by your side"
 readme = "README.md"
 license = {text = "MIT"}

@@ -15,8 +15,8 @@ from typing import Any
 import aiosqlite
 import sqlite_vec
 
-from cordbeat._memory_common import SCHEMA, VECTOR_SCHEMA
 from cordbeat._memory_conversation import ConversationStore
+from cordbeat._memory_migrations import apply_migrations
 from cordbeat._memory_records import RecordStore
 from cordbeat._memory_users import UserStore
 from cordbeat._memory_vector import VectorMemory
@@ -99,9 +99,7 @@ class MemoryStore:
         await conn.load_extension(sqlite_vec.loadable_path())
         await conn.enable_load_extension(False)
 
-        await conn.executescript(SCHEMA)
-        await conn.executescript(VECTOR_SCHEMA)
-        await conn.commit()
+        await apply_migrations(conn)
         self.__conn = conn
 
         self.__users = UserStore(conn)

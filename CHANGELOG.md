@@ -55,6 +55,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **BREAKING: Minimum version bumped to 0.4.0.**
 
 ### Added
+- **Dependency audit job in CI.** New ``audit`` job in ``.github/workflows/ci.yml``
+  runs ``pip-audit`` against the resolved runtime dependency set
+  (``uv export --no-dev``) on every push and pull request. Fails the
+  build on advisory matches. ``pip-audit`` is also added to the
+  ``dev`` extra for local use.
+- **Updated security documentation.** ``SECURITY.md`` refreshed to match
+  the current architecture (sqlite-vec + sentence-transformers, default
+  ``127.0.0.1`` Gateway bind, HMAC adapter auth, per-skill ``uv``
+  environments, AST validator, ``api_call`` SSRF/DNS-rebinding
+  hardening, ``SoulCaller`` permission matrix). New "Threat Model"
+  section enumerates assets / threats / mitigations and explicit
+  out-of-scope items.
 - **Memory integration test suite.** New ``tests/integration/`` directory with
   ``test_memory_vector.py`` exercising the full memory lifecycle (insert →
   semantic search → user isolation → emotional search → flashbulb → lazy

@@ -497,18 +497,6 @@ class TestSleepPhase:
         assert len(records) == 0
         mock_ai.generate.assert_not_called()
 
-    async def test_sleep_phase_runs_decay(
-        self,
-        heartbeat: HeartbeatLoop,
-        memory: MemoryStore,
-    ) -> None:
-        """Sleep phase calls decay_and_archive_memories."""
-        memory.decay_and_archive_memories = AsyncMock(
-            return_value={"decayed": 5, "archived": 2}
-        )
-        await heartbeat._sleep.run()
-        memory.decay_and_archive_memories.assert_called_once()
-
     async def test_sleep_phase_trims_messages(
         self,
         heartbeat: HeartbeatLoop,
@@ -576,15 +564,6 @@ class TestMemoryConsolidation:
         await memory.get_or_create_user("u1", "Alice")
         messages = await memory.get_todays_messages("u1")
         assert messages == []
-
-    async def test_decay_and_archive_empty(
-        self,
-        memory: MemoryStore,
-    ) -> None:
-        """No memories → zero counts."""
-        stats = await memory.decay_and_archive_memories()
-        assert stats["decayed"] == 0
-        assert stats["archived"] == 0
 
 
 # ── Lifecycle ─────────────────────────────────────────────────────────
@@ -727,18 +706,6 @@ class TestSleepPhaseErrors:
 
         mock_ai.generate = AsyncMock(side_effect=RuntimeError("AI down"))
         # Should not raise — error is logged and skipped
-        await heartbeat._sleep.run()
-
-    async def test_decay_error_does_not_stop_sleep(
-        self,
-        heartbeat: HeartbeatLoop,
-        memory: MemoryStore,
-    ) -> None:
-        """If decay_and_archive fails, sleep continues."""
-        memory.decay_and_archive_memories = AsyncMock(
-            side_effect=RuntimeError("DB error")
-        )
-        # Should not raise
         await heartbeat._sleep.run()
 
     async def test_trim_error_does_not_stop_sleep(

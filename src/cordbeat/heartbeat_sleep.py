@@ -94,16 +94,8 @@ class SleepPhase:
         for user in users:
             await self._precompute_chain_links(user.user_id)
 
-        # 4. Decay and archive weak memories
-        try:
-            stats = await self._memory.decay_and_archive_memories()
-            logger.info(
-                "Memory consolidation: %d decayed, %d archived",
-                stats["decayed"],
-                stats["archived"],
-            )
-        except Exception:
-            logger.exception("Memory decay/archive failed")
+        # 4. (Memory decay is now lazy — performed inside search_*; no
+        #    nightly batch needed. See PR #81 / 設計書 項目 #4.)
 
         # 5. Trim old conversation messages and recall hints
         for user in users:

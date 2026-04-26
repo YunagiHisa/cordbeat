@@ -158,9 +158,11 @@ class TestFlashbulbMemory:
         assert float(results[0]["metadata"]["emotion_weight"]) == 1.0
 
     async def test_flashbulb_resists_decay(self, memory: MemoryStore) -> None:
-        """Flashbulb memories should not be archived during decay."""
+        """Flashbulb survives lazy decay; weak entries get eager-deleted."""
         await memory.get_or_create_user("u1", "Test")
-        # Add a normal episodic memory with very low strength
+        # Add a normal episodic memory with very low strength — it falls
+        # below archive_threshold immediately so the next search will
+        # eager-delete it.
         normal = MemoryEntry(
             id="normal-1",
             user_id="u1",
@@ -171,17 +173,20 @@ class TestFlashbulbMemory:
         )
         await memory.add_episodic_memory(normal)
 
-        # Add a flashbulb memory
+        # Add a flashbulb memory (exempt from decay)
         await memory.add_flashbulb_memory("u1", "Emotionally significant moment")
 
-        # Run decay — normal should be archived, flashbulb should survive
-        stats = await memory.decay_and_archive_memories()
-        assert stats["archived"] >= 1
+        # First search triggers lazy decay: weak entry is filtered out and
+        # physically deleted; flashbulb is preserved.
+        results = await memory.search_episodic("u1", "moment", n_results=5)
+        contents = [r["content"] for r in results]
+        assert "Ordinary conversation" not in contents
+        assert any("significant moment" in c for c in contents)
 
-        # Flashbulb should still be searchable
-        results = await memory.search_episodic("u1", "significant moment")
-        assert len(results) >= 1
-        assert results[0]["metadata"]["flashbulb"] is True
+        # Subsequent search confirms flashbulb still survives.
+        results2 = await memory.search_episodic("u1", "significant moment")
+        assert len(results2) >= 1
+        assert results2[0]["metadata"]["flashbulb"] is True
 
     async def test_flashbulb_with_custom_metadata(self, memory: MemoryStore) -> None:
         await memory.get_or_create_user("u1", "Test")

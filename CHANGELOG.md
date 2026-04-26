@@ -9,6 +9,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- **BREAKING: Memory decay is now lazy.** The nightly
+  ``decay_and_archive_memories()`` batch (and the ``MemoryStore`` /
+  ``HeartbeatSleep`` hooks that called it) has been removed. Memory strength
+  is computed on every read inside ``search_semantic`` / ``search_episodic``
+  using the same Ebbinghaus formula as before, and entries that fall below
+  ``archive_threshold`` are physically deleted from sqlite-vec on access
+  (flashbulb entries are exempt). Search now oversamples (``n_results * 3``)
+  and ranks by composite ``score = strength / (1 + distance)`` so weak-but-
+  close hits no longer dominate. Net behaviour for callers is unchanged
+  except that ``metadata["strength"]`` reflects the freshly computed value.
+  ``MemoryStore.calculate_strength()`` is retained as a diagnostic helper.
 - **BREAKING: ``user_id`` is now a random 32-char UUID hex.** New users are
   assigned ``uuid4().hex`` instead of the previous
   ``cb_<adapter>_<platform_user_id>`` format. This decouples the internal
@@ -27,7 +38,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   migrated (destructive upgrade; delete the old ``data/chroma`` directory).
   Search result metadata now preserves native types (e.g. ``"flashbulb":
   True`` rather than ``"True"``).
-- **BREAKING: Minimum version bumped to 0.3.0.**
+- **BREAKING: Minimum version bumped to 0.4.0.**
 
 ### Added
 - **Composite index on ``certain_records``.** New

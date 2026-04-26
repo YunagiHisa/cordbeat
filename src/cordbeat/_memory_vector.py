@@ -85,8 +85,9 @@ def _row_to_result(row: aiosqlite.Row, distance: float | None) -> dict[str, Any]
 class VectorMemory:
     """sqlite-vec backed semantic/episodic vector store."""
 
-    def __init__(self, conn: aiosqlite.Connection) -> None:
+    def __init__(self, conn: aiosqlite.Connection, config: MemoryConfig) -> None:
         self._conn = conn
+        self._config = config
 
     async def add_semantic(self, entry: MemoryEntry) -> str:
         return await self._insert(entry, layer="semantic")
@@ -142,65 +143,17 @@ class VectorMemory:
         )
         return await self.add_episodic(entry)
 
-    async def decay_and_archive(
+    def _compute_strength(
         self,
-        config: MemoryConfig,
-    ) -> dict[str, int]:
-        """Evaluate decay for every entry; delete those below threshold.
-
-        Flashbulb entries are exempt. Returns counts of decayed (kept) and
-        archived (deleted) rows.
-        """
-        threshold = config.archive_threshold
-        now = datetime.now(tz=UTC)
-        stats = {"decayed": 0, "archived": 0}
-
-        for layer in ("semantic", "episodic"):
-            meta_table = f"{layer}_memory"
-            vec_table = f"{layer}_vectors"
-
-            async with self._conn.execute(
-                f"SELECT id, vec_rowid, user_id, strength, emotion_weight, "
-                f"created_at, metadata_json FROM {meta_table}"
-            ) as cur:
-                rows = await cur.fetchall()
-
-            to_delete: list[tuple[str, int, str]] = []
-            for row in rows:
-                extras = json.loads(row["metadata_json"] or "{}")
-                if bool(extras.get("flashbulb", False)):
-                    continue
-
-                created_at = ensure_aware(datetime.fromisoformat(row["created_at"]))
-                elapsed_days = (now - created_at).total_seconds() / 86400.0
-                base_strength = float(row["strength"])
-                emotion_weight = float(row["emotion_weight"])
-
-                effective_decay = config.decay_rate * (1.0 - emotion_weight * 0.5)
-                new_strength = base_strength * (
-                    1.0 / (1.0 + effective_decay * elapsed_days)
-                )
-
-                if new_strength < threshold:
-                    to_delete.append((row["id"], row["vec_rowid"], row["user_id"]))
-                    stats["archived"] += 1
-                else:
-                    stats["decayed"] += 1
-
-            for entry_id, vec_rowid, user_id in to_delete:
-                await self._conn.execute(
-                    f"DELETE FROM {vec_table} WHERE user_id = ? AND rowid = ?",
-                    (user_id, vec_rowid),
-                )
-                await self._conn.execute(
-                    f"DELETE FROM {meta_table} WHERE id = ?",
-                    (entry_id,),
-                )
-
-            if to_delete:
-                await self._conn.commit()
-
-        return stats
+        base_strength: float,
+        created_at: datetime,
+        emotion_weight: float,
+        now: datetime,
+    ) -> float:
+        """Apply Ebbinghaus-inspired forgetting curve at read time."""
+        elapsed_days = max(0.0, (now - created_at).total_seconds() / 86400.0)
+        effective_decay = self._config.decay_rate * (1.0 - emotion_weight * 0.5)
+        return base_strength * (1.0 / (1.0 + effective_decay * elapsed_days))
 
     async def _insert(self, entry: MemoryEntry, *, layer: str) -> str:
         entry_id = entry.id or str(uuid.uuid4())
@@ -242,14 +195,28 @@ class VectorMemory:
         query: str,
         n_results: int,
     ) -> list[dict[str, Any]]:
+        """Search with lazy decay.
+
+        Strength is computed on read from ``base_strength`` + ``created_at``
+        + ``emotion_weight`` (Ebbinghaus). Non-flashbulb entries that fall
+        below ``archive_threshold`` are physically deleted (eager delete on
+        read, per design questionnaire Q4-1=A). Results are ranked by a
+        composite score ``strength / (1 + distance)`` so that strong
+        memories outrank weakly-relevant ones at the margin.
+        """
         vec_table = f"{layer}_vectors"
         meta_table = f"{layer}_memory"
         query_embedding = await embed_text(query)
+        threshold = self._config.archive_threshold
+        now = datetime.now(tz=UTC)
+
+        # Oversample so eager-deleted rows don't starve the result set.
+        fetch_k = max(n_results * 3, n_results + 5)
 
         sql = f"""
-            SELECT m.id, m.user_id, m.content, m.trust_level, m.strength,
-                   m.emotion_weight, m.created_at, m.last_accessed_at,
-                   m.metadata_json, v.distance
+            SELECT m.id, m.vec_rowid, m.user_id, m.content, m.trust_level,
+                   m.strength, m.emotion_weight, m.created_at,
+                   m.last_accessed_at, m.metadata_json, v.distance
               FROM {vec_table} AS v
               JOIN {meta_table} AS m ON m.vec_rowid = v.rowid
              WHERE v.user_id = ?
@@ -257,9 +224,44 @@ class VectorMemory:
                AND k = ?
              ORDER BY v.distance
         """
-        async with self._conn.execute(
-            sql, (user_id, query_embedding, n_results)
-        ) as cur:
+        async with self._conn.execute(sql, (user_id, query_embedding, fetch_k)) as cur:
             rows = await cur.fetchall()
 
-        return [_row_to_result(row, row["distance"]) for row in rows]
+        enriched: list[tuple[float, dict[str, Any]]] = []
+        to_delete: list[tuple[str, int, str]] = []
+
+        for row in rows:
+            extras = json.loads(row["metadata_json"] or "{}")
+            is_flashbulb = bool(extras.get("flashbulb", False))
+            created_at = ensure_aware(datetime.fromisoformat(row["created_at"]))
+            current_strength = self._compute_strength(
+                base_strength=float(row["strength"]),
+                created_at=created_at,
+                emotion_weight=float(row["emotion_weight"]),
+                now=now,
+            )
+
+            if not is_flashbulb and current_strength < threshold:
+                to_delete.append((row["id"], row["vec_rowid"], row["user_id"]))
+                continue
+
+            result = _row_to_result(row, row["distance"])
+            result["metadata"]["strength"] = current_strength
+            distance = float(row["distance"])
+            score = current_strength / (1.0 + distance)
+            enriched.append((score, result))
+
+        for entry_id, vec_rowid, uid in to_delete:
+            await self._conn.execute(
+                f"DELETE FROM {vec_table} WHERE user_id = ? AND rowid = ?",
+                (uid, vec_rowid),
+            )
+            await self._conn.execute(
+                f"DELETE FROM {meta_table} WHERE id = ?",
+                (entry_id,),
+            )
+        if to_delete:
+            await self._conn.commit()
+
+        enriched.sort(key=lambda item: item[0], reverse=True)
+        return [result for _, result in enriched[:n_results]]

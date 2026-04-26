@@ -107,7 +107,7 @@ class MemoryStore:
         self.__users = UserStore(conn)
         self.__records = RecordStore(conn)
         self.__conversations = ConversationStore(conn)
-        self.__vectors = VectorMemory(conn)
+        self.__vectors = VectorMemory(conn, self._config)
         logger.info("Memory store initialized")
 
     async def close(self) -> None:
@@ -329,12 +329,14 @@ class MemoryStore:
         elapsed_days: float,
         emotion_weight: float = 0.0,
     ) -> float:
-        """Apply Ebbinghaus-inspired forgetting curve."""
+        """Apply Ebbinghaus-inspired forgetting curve.
+
+        Kept as a public helper for diagnostics / tests. Production code
+        no longer needs to call this — strength is computed lazily inside
+        :meth:`VectorMemory._search` on every read.
+        """
         effective_decay = self._config.decay_rate * (1.0 - emotion_weight * 0.5)
         return base_strength * (1.0 / (1.0 + effective_decay * elapsed_days))
-
-    async def decay_and_archive_memories(self) -> dict[str, int]:
-        return await self._vectors.decay_and_archive(self._config)
 
     # ── Recall hints (Phase4 precomputation) ──────────────────────
 

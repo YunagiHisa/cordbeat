@@ -49,7 +49,7 @@ def _fake_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
     need deterministic, same-text-same-vector behavior on top of sqlite-vec.
     """
 
-    async def fake_embed_text(text: str) -> bytes:
+    async def fake_embed_text(text: str, model_name: str = "fake-model") -> bytes:
         return sqlite_vec.serialize_float32(_fake_encode(text))
 
     monkeypatch.setattr(vector_module, "embed_text", fake_embed_text)

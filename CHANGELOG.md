@@ -55,6 +55,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **BREAKING: Minimum version bumped to 0.4.0.**
 
 ### Added
+- **Memory dedup at insert time + configurable embedding model.**
+  ``MemoryConfig`` gains three new knobs: ``embedding_model`` (defaults to
+  the existing ``sentence-transformers/all-MiniLM-L6-v2`` — swap for a
+  multilingual model like ``paraphrase-multilingual-MiniLM-L12-v2``
+  without code changes), ``embedding_dim`` (currently informational; the
+  vec0 schema is fixed at 384, so a mismatch logs a warning), and
+  ``dedup_distance_threshold``. When the threshold is > 0 (off by
+  default), ``add_semantic_memory`` / ``add_episodic_memory`` first look
+  up the nearest existing memory for the same user and, if its embedding
+  distance is below the threshold, reinforce that record (strength
+  bumped, ``last_accessed_at`` refreshed, ``emotion_weight`` taken as
+  max) instead of inserting a duplicate row. Returns the existing id so
+  callers see merge-as-insert semantics. The sentence-transformers model
+  cache is now keyed by name so multiple models can co-exist in tests.
 - **Optional LLM response cache.** New ``cordbeat.llm_cache.CachingBackend``
   wraps any ``AIBackend`` with an in-memory LRU+TTL response cache keyed on
   ``(model, system, prompt, temperature, max_tokens)``. Disabled by default

@@ -25,7 +25,6 @@ from threading import Lock
 from typing import Any
 
 import aiosqlite
-import sqlite_vec
 
 from cordbeat._memory_common import ensure_aware
 from cordbeat.config import MemoryConfig
@@ -65,6 +64,8 @@ async def embed_text(text: str, model_name: str = EMBEDDING_MODEL_NAME) -> bytes
     def _run() -> bytes:
         model = _load_model(model_name)
         vec = model.encode(text, normalize_embeddings=True).tolist()
+        import sqlite_vec  # noqa: PLC0415
+
         serialized: bytes = sqlite_vec.serialize_float32(vec)
         return serialized
 

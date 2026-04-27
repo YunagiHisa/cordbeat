@@ -54,6 +54,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   True`` rather than ``"True"``).
 - **BREAKING: Minimum version bumped to 0.4.0.**
 
+### Fixed
+- **`cordbeat-init` crashed with ``ModuleNotFoundError: No module named 'sqlite_vec'``**
+  even when ``sqlite-vec`` *is* listed as a dependency, because ``memory.py`` and
+  ``_memory_vector.py`` imported it at module level. The import is now lazy
+  (deferred to the first ``MemoryStore.initialize()`` / ``embed_text()`` call),
+  so the setup wizard starts correctly and the missing-module error only surfaces
+  when the agent actually tries to open the database — with a clear
+  ``MemorySubsystemError`` message including the install command.
+
 ### Added
 - **Conversation export CLI (`cordbeat-export`).** New entry point that
   reads the SQLite ``conversation_messages`` table directly (read-only,

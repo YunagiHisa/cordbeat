@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
-import sqlite_vec
 
 from cordbeat._memory_conversation import ConversationStore
 from cordbeat._memory_migrations import apply_migrations
@@ -96,6 +95,13 @@ class MemoryStore:
 
         # Load the sqlite-vec extension so the vec0 virtual tables in
         # VECTOR_SCHEMA can be created/used on this connection.
+        try:
+            import sqlite_vec  # noqa: PLC0415
+        except ImportError as exc:
+            raise MemorySubsystemError(
+                "sqlite-vec is not installed. "
+                "Run: uv add sqlite-vec  (or pip install sqlite-vec)"
+            ) from exc
         await conn.enable_load_extension(True)
         await conn.load_extension(sqlite_vec.loadable_path())
         await conn.enable_load_extension(False)

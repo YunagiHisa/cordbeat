@@ -55,6 +55,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **BREAKING: Minimum version bumped to 0.4.0.**
 
 ### Added
+- **Conversation export CLI (`cordbeat-export`).** New entry point that
+  reads the SQLite ``conversation_messages`` table directly (read-only,
+  agent does **not** need to be stopped) and renders the history as
+  JSON or Markdown. Supports per-user export with ``--user-id``,
+  inclusive-since / exclusive-until date filtering
+  (``--since YYYY-MM-DD --until YYYY-MM-DD``), output to a file
+  (``--output PATH``) or stdout, and a no-arg listing mode that prints
+  ``user_id / message_count / first / last`` for every user with stored
+  messages. JSON output is UTF-8 and preserves non-ASCII characters
+  verbatim; Markdown output uses ``> ``-quoted blocks so multi-line user
+  messages render cleanly without colliding with section headings. The
+  helpers ``fetch_messages`` / ``format_as_json`` / ``format_as_markdown``
+  are also exposed from ``cordbeat.export_cli`` for programmatic use.
 - **Per-skill rate limiting (token-bucket).** A new
   ``cordbeat.skill_rate_limit.SkillRateLimiter`` enforces a configurable
   per-minute call quota for each skill, defending against runaway loops

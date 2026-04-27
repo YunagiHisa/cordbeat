@@ -7,12 +7,18 @@ variant with a ``user_id`` partition key for efficient per-user search.
 
 Embeddings are produced locally via ``sentence-transformers`` so the
 agent remains local-first. The model is loaded lazily on first use.
+The model name and embedding dimension can be overridden via
+:class:`cordbeat.config.MemoryConfig` (``embedding_model`` /
+``embedding_dim``); changing the dimension requires a fresh database
+because the ``vec0`` virtual table is created with a fixed size at
+schema-migration time.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
 from threading import Lock
@@ -25,30 +31,39 @@ from cordbeat._memory_common import ensure_aware
 from cordbeat.config import MemoryConfig
 from cordbeat.models import MemoryEntry, MemoryLayer
 
+logger = logging.getLogger(__name__)
+
+# Default values used by schema migrations and for callers that do not
+# go through MemoryConfig (e.g., direct VectorMemory construction in
+# tests with no override). These mirror the dataclass defaults in
+# ``MemoryConfig.embedding_model`` / ``embedding_dim``.
 EMBEDDING_DIM = 384
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
-_model: Any = None
-_model_lock = Lock()
+_models: dict[str, Any] = {}
+_models_lock = Lock()
 
 
-def _load_model() -> Any:
-    """Lazily load the sentence-transformers model (thread-safe)."""
-    global _model
-    if _model is None:
-        with _model_lock:
-            if _model is None:
-                from sentence_transformers import SentenceTransformer
+def _load_model(name: str) -> Any:
+    """Lazily load (and cache) a sentence-transformers model by name."""
+    cached = _models.get(name)
+    if cached is not None:
+        return cached
+    with _models_lock:
+        cached = _models.get(name)
+        if cached is None:
+            from sentence_transformers import SentenceTransformer
 
-                _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-    return _model
+            cached = SentenceTransformer(name)
+            _models[name] = cached
+    return cached
 
 
-async def embed_text(text: str) -> bytes:
+async def embed_text(text: str, model_name: str = EMBEDDING_MODEL_NAME) -> bytes:
     """Encode *text* into a serialized float32 embedding for sqlite-vec."""
 
     def _run() -> bytes:
-        model = _load_model()
+        model = _load_model(model_name)
         vec = model.encode(text, normalize_embeddings=True).tolist()
         serialized: bytes = sqlite_vec.serialize_float32(vec)
         return serialized
@@ -88,6 +103,18 @@ class VectorMemory:
     def __init__(self, conn: aiosqlite.Connection, config: MemoryConfig) -> None:
         self._conn = conn
         self._config = config
+        self._model_name = config.embedding_model
+        if config.embedding_dim != EMBEDDING_DIM:
+            logger.warning(
+                "MemoryConfig.embedding_dim=%d differs from the vec0 schema "
+                "size (%d). The custom value is ignored; recreate the DB "
+                "if you need a different dimension.",
+                config.embedding_dim,
+                EMBEDDING_DIM,
+            )
+
+    async def _embed(self, text: str) -> bytes:
+        return await embed_text(text, self._model_name)
 
     async def add_semantic(self, entry: MemoryEntry) -> str:
         return await self._insert(entry, layer="semantic")
@@ -157,12 +184,20 @@ class VectorMemory:
 
     async def _insert(self, entry: MemoryEntry, *, layer: str) -> str:
         entry_id = entry.id or str(uuid.uuid4())
-        embedding = await embed_text(entry.content)
+        embedding = await self._embed(entry.content)
         vec_table = f"{layer}_vectors"
         meta_table = f"{layer}_memory"
 
+        if self._config.dedup_distance_threshold > 0.0:
+            existing = await self._find_near_duplicate(
+                vec_table, meta_table, entry.user_id, embedding
+            )
+            if existing is not None:
+                await self._merge_duplicate(meta_table, existing, entry)
+                return str(existing["id"])
+
         async with self._conn.execute(
-            f"INSERT INTO {vec_table}(user_id, embedding) VALUES (?, ?)",
+            f"INSERT INTO {vec_table}(user_id, embedding) VALUES (?, ?)",  # noqa: S608
             (entry.user_id, embedding),
         ) as cur:
             vec_rowid = cur.lastrowid
@@ -171,7 +206,7 @@ class VectorMemory:
             f"""INSERT INTO {meta_table}
                 (id, vec_rowid, user_id, content, trust_level, strength,
                  emotion_weight, created_at, last_accessed_at, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",  # noqa: S608
             (
                 entry_id,
                 vec_rowid,
@@ -187,6 +222,70 @@ class VectorMemory:
         )
         await self._conn.commit()
         return entry_id
+
+    async def _find_near_duplicate(
+        self,
+        vec_table: str,
+        meta_table: str,
+        user_id: str,
+        embedding: bytes,
+    ) -> dict[str, Any] | None:
+        """Return the nearest existing memory if within dedup threshold."""
+        sql = f"""
+            SELECT m.id, m.strength, m.emotion_weight, v.distance
+              FROM {vec_table} AS v
+              JOIN {meta_table} AS m ON m.vec_rowid = v.rowid
+             WHERE v.user_id = ?
+               AND v.embedding MATCH ?
+               AND k = 1
+             ORDER BY v.distance
+        """  # noqa: S608
+        async with self._conn.execute(sql, (user_id, embedding)) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        if float(row["distance"]) > self._config.dedup_distance_threshold:
+            return None
+        return {
+            "id": row["id"],
+            "strength": float(row["strength"]),
+            "emotion_weight": float(row["emotion_weight"]),
+            "distance": float(row["distance"]),
+        }
+
+    async def _merge_duplicate(
+        self,
+        meta_table: str,
+        existing: dict[str, Any],
+        new_entry: MemoryEntry,
+    ) -> None:
+        """Reinforce an existing memory instead of inserting a duplicate.
+
+        Strength is bumped (capped at 1.0) and ``last_accessed_at`` is
+        refreshed to ``now``. Emotion weight takes the max so that a
+        more intense duplicate raises the floor.
+        """
+        new_strength = min(1.0, existing["strength"] + 0.1)
+        new_emotion = max(existing["emotion_weight"], new_entry.emotion_weight)
+        await self._conn.execute(
+            f"""UPDATE {meta_table}
+                   SET strength = ?,
+                       emotion_weight = ?,
+                       last_accessed_at = ?
+                 WHERE id = ?""",  # noqa: S608
+            (
+                new_strength,
+                new_emotion,
+                datetime.now(tz=UTC).isoformat(),
+                existing["id"],
+            ),
+        )
+        await self._conn.commit()
+        logger.debug(
+            "memory dedup: merged near-duplicate (id=%s, distance=%.4f)",
+            existing["id"],
+            existing["distance"],
+        )
 
     async def _search(
         self,
@@ -206,7 +305,7 @@ class VectorMemory:
         """
         vec_table = f"{layer}_vectors"
         meta_table = f"{layer}_memory"
-        query_embedding = await embed_text(query)
+        query_embedding = await self._embed(query)
         threshold = self._config.archive_threshold
         now = datetime.now(tz=UTC)
 

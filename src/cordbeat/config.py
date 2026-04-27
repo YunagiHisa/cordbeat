@@ -90,6 +90,9 @@ class MemoryConfig:
     chain_links_retention_days: int = 2
     proposal_expiry_days: int = 7
     chain_recall_depth_penalty: float = 0.5
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_dim: int = 384
+    dedup_distance_threshold: float = 0.0
 
 
 @dataclass

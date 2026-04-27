@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Vision / image support.** When `ai_backend.vision_enabled: true` is set in
+  config, image attachments sent by users are forwarded to the LLM. Discord
+  attachments with an `image/*` content type and Telegram photos are downloaded
+  and base64-encoded before being included in the inference request.
+  `OllamaBackend` uses the `/api/chat` endpoint with the `images` field (e.g.
+  llava); `OpenAICompatBackend` uses the content-array vision format
+  (`image_url` blocks with `data:` URIs). The cache layer passes vision calls
+  straight through to the inner backend (no caching). A new
+  `_detect_image_mime()` helper infers JPEG/PNG/GIF/WebP from magic bytes.
+
 ### Changed
 - **BREAKING: Skills now run inside per-skill ``uv``-managed Python
   environments.** Each builtin skill ships its own ``pyproject.toml``;

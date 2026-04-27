@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 from collections import OrderedDict
 from datetime import UTC, datetime
 from typing import Any
+
+import httpx
 
 from cordbeat.config import AdapterConfig
 from cordbeat.gateway import RetryableConnection
@@ -101,6 +104,43 @@ class DiscordAdapter(RetryableConnection):
         if len(self._user_channels) > _USER_CHANNEL_CACHE_MAX:
             self._user_channels.popitem(last=False)
 
+        # Collect image attachments (base64-encoded), cap at 4 images / 10 MB each.
+        _max_images = 4
+        _image_size_limit = 10 * 1024 * 1024  # 10 MB
+
+        async def _fetch_attachment_images(src_msg: Any, buf: list[str]) -> None:
+            for att in getattr(src_msg, "attachments", []):
+                if len(buf) >= _max_images:
+                    break
+                ct = getattr(att, "content_type", "") or ""
+                if not ct.startswith("image/"):
+                    continue
+                size = getattr(att, "size", 0) or 0
+                if size > _image_size_limit:
+                    logger.warning(
+                        "Skipping oversized Discord image attachment: %d bytes", size
+                    )
+                    continue
+                try:
+                    async with httpx.AsyncClient() as client:
+                        resp = await client.get(str(att.url))
+                        resp.raise_for_status()
+                        buf.append(base64.b64encode(resp.content).decode("ascii"))
+                except Exception:
+                    logger.warning(
+                        "Failed to download Discord image attachment: %s", att.url
+                    )
+
+        images: list[str] = []
+        await _fetch_attachment_images(message, images)
+
+        # Also check 1-level parent message (reply chain): image may live there.
+        ref = getattr(message, "reference", None)
+        if ref is not None and len(images) < _max_images:
+            ref_msg = getattr(ref, "resolved", None)
+            if ref_msg is not None:
+                await _fetch_attachment_images(ref_msg, images)
+
         payload = json.dumps(
             {
                 "type": "message",
@@ -108,6 +148,7 @@ class DiscordAdapter(RetryableConnection):
                 "platform_user_id": str(message.author.id),
                 "content": message.content,
                 "timestamp": datetime.now(tz=UTC).isoformat(),
+                "images": images,
                 "metadata": {
                     "channel_id": str(message.channel.id),
                     "guild_id": str(message.guild.id) if message.guild else "",

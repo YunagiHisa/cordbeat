@@ -40,6 +40,7 @@ class CoreEngine:
         skills: SkillRegistry,
         gateway: GatewayServer,
         memory_config: MemoryConfig | None = None,
+        vision_enabled: bool = False,
     ) -> None:
         self._ai = ai
         self._soul = soul
@@ -47,6 +48,7 @@ class CoreEngine:
         self._skills = skills
         self._gateway = gateway
         self._memory_config = memory_config or MemoryConfig()
+        self._vision_enabled = vision_enabled
         self._extractor = MemoryExtractor(ai, soul, memory, self._memory_config)
 
     async def handle_message(self, message: GatewayMessage) -> None:
@@ -226,6 +228,17 @@ class CoreEngine:
         prompt = f"{context}\n\nUser says: {safe_content}"
 
         try:
+            if self._vision_enabled and message.images:
+                try:
+                    return await self._ai.generate_with_vision(
+                        prompt=prompt,
+                        images=message.images,
+                        system=system_prompt,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Vision generation failed, falling back to text-only response"
+                    )
             return await self._ai.generate(prompt=prompt, system=system_prompt)
         except Exception:
             logger.exception("AI generation failed")

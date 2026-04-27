@@ -122,3 +122,16 @@ class CachingBackend(AIBackend):
         if len(self._cache) > self._config.max_entries:
             self._cache.popitem(last=False)
         return value
+
+    async def generate_with_vision(
+        self,
+        prompt: str,
+        images: list[str],
+        system: str = "",
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> str:
+        """Vision calls are never cached (images would inflate the cache key)."""
+        return await self._inner.generate_with_vision(
+            prompt, images, system, temperature, max_tokens
+        )

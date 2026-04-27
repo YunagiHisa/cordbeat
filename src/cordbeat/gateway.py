@@ -252,6 +252,7 @@ class GatewayServer:
                         if "timestamp" in msg_data
                         else datetime.now(tz=UTC),
                         metadata=msg_data.get("metadata", {}),
+                        images=msg_data.get("images", []),
                     )
                     await self._queue.put(message)
                 except (json.JSONDecodeError, ValueError, KeyError) as exc:

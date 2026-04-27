@@ -57,6 +57,7 @@ class GatewayMessage:
     content: str
     timestamp: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
+    images: list[str] = field(default_factory=list)  # base64-encoded image data
 
 
 # ── User ──────────────────────────────────────────────────────────────

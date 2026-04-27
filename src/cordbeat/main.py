@@ -130,6 +130,7 @@ async def main(config_path: str = "config.yaml") -> None:
         skills=skills,
         gateway=gateway,
         memory_config=config.memory,
+        vision_enabled=config.ai_backend.vision_enabled,
     )
     queue.set_handler(engine.handle_message)
 

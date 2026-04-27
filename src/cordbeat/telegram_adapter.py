@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 from datetime import UTC, datetime
@@ -60,22 +61,64 @@ class TelegramAdapter(RetryableConnection):
             update: Update,
             context: Any,
         ) -> None:
-            if update.message and update.message.text:
-                user = update.effective_user
-                if user is None:
-                    return
-                user_id = str(user.id)
-                chat_id = update.message.chat_id
-                self._chat_map[user_id] = chat_id
-                await self._forward_to_core(
-                    user_id,
-                    update.message.text,
-                    display_name=user.full_name or user.username or "",
-                    chat_id=chat_id,
-                )
+            msg = update.message
+            if not msg:
+                return
+            user = update.effective_user
+            if user is None:
+                return
+            user_id = str(user.id)
+            chat_id = msg.chat_id
+            self._chat_map[user_id] = chat_id
+            display_name = user.full_name or user.username or ""
+
+            _image_size_limit = 10 * 1024 * 1024  # 10 MB
+
+            # Download photo if present (pick highest resolution).
+            images: list[str] = []
+            if msg.photo:
+                try:
+                    photo = msg.photo[-1]
+                    if (photo.file_size or 0) <= _image_size_limit:
+                        file = await context.bot.get_file(photo.file_id)
+                        raw = await file.download_as_bytearray()
+                        images.append(base64.b64encode(bytes(raw)).decode("ascii"))
+                    else:
+                        logger.warning(
+                            "Skipping oversized Telegram photo (%d bytes)",
+                            photo.file_size,
+                        )
+                except Exception:
+                    logger.warning("Failed to download Telegram photo")
+
+            # Also handle images sent as documents (no compression).
+            if not images and msg.document:
+                doc = msg.document
+                mime = (doc.mime_type or "").startswith("image/")
+                size_ok = (doc.file_size or 0) <= _image_size_limit
+                if mime and size_ok:
+                    try:
+                        file = await context.bot.get_file(doc.file_id)
+                        raw = await file.download_as_bytearray()
+                        images.append(base64.b64encode(bytes(raw)).decode("ascii"))
+                    except Exception:
+                        logger.warning("Failed to download Telegram document image")
+
+            text = msg.text or msg.caption or ""
+            await self._forward_to_core(
+                user_id,
+                text,
+                display_name=display_name,
+                chat_id=chat_id,
+                images=images,
+            )
 
         self._app.add_handler(
-            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+            MessageHandler(
+                (filters.TEXT | filters.PHOTO | filters.Document.IMAGE)
+                & ~filters.COMMAND,
+                handle_message,
+            )
         )
 
         # Connect to Core in background
@@ -106,6 +149,7 @@ class TelegramAdapter(RetryableConnection):
         *,
         display_name: str = "",
         chat_id: int = 0,
+        images: list[str] | None = None,
     ) -> None:
         if self._ws is None:
             logger.warning("Not connected to Core, dropping message")
@@ -118,6 +162,7 @@ class TelegramAdapter(RetryableConnection):
                 "platform_user_id": user_id,
                 "content": text,
                 "timestamp": datetime.now(tz=UTC).isoformat(),
+                "images": images or [],
                 "metadata": {
                     "chat_id": str(chat_id),
                     "display_name": display_name,

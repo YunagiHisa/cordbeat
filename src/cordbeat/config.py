@@ -128,6 +128,7 @@ class AIBackendConfig:
     max_tokens: int = 1024
     options: dict[str, Any] = field(default_factory=dict)
     cache: LLMCacheConfig = field(default_factory=LLMCacheConfig)
+    vision_enabled: bool = False
 
 
 @dataclass

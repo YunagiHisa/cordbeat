@@ -141,6 +141,7 @@ class SkillSandboxConfig:
 @dataclass
 class SkillsConfig:
     sandbox: SkillSandboxConfig = field(default_factory=SkillSandboxConfig)
+    default_rate_limit_per_minute: int = 0
 
 
 @dataclass

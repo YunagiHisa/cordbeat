@@ -25,6 +25,7 @@ from cordbeat.metrics import (
 )
 from cordbeat.models import SafetyLevel, SkillMeta, SkillParam
 from cordbeat.skill_env import SkillEnvManager
+from cordbeat.skill_rate_limit import SkillRateLimiter
 from cordbeat.skill_sandbox import (
     DEFAULT_CONFIG,
     SandboxConfig,
@@ -41,6 +42,7 @@ __all__ = [
     "SkillRegistry",
     "SkillEnvManager",
     "SkillPermissionError",
+    "SkillRateLimiter",
     "SkillSandboxError",
 ]
 
@@ -54,6 +56,7 @@ class Skill:
         skill_dir: Path | None = None,
         sandbox_config: SandboxConfig | None = None,
         env_manager: SkillEnvManager | None = None,
+        rate_limiter: SkillRateLimiter | None = None,
         *,
         _test_callable: Any = None,
     ) -> None:
@@ -61,6 +64,7 @@ class Skill:
         self._skill_dir = skill_dir
         self._sandbox_config = sandbox_config or DEFAULT_CONFIG
         self._env_manager = env_manager
+        self._rate_limiter = rate_limiter
         self._test_callable = _test_callable
 
     async def execute(
@@ -78,6 +82,10 @@ class Skill:
             "skill": self.meta.name,
             "safety_level": self.meta.safety_level.value,
         }
+        if self._rate_limiter is not None:
+            await self._rate_limiter.acquire(
+                self.meta.name, self.meta.rate_limit_per_minute
+            )
         try:
             async with time_block(SKILL_EXEC_LATENCY, labels):
                 result = await self._execute_inner(params, memory)
@@ -157,6 +165,7 @@ class SkillRegistry:
         skills_dir: str | Path,
         sandbox_config: SandboxConfig | None = None,
         env_manager: SkillEnvManager | None = None,
+        rate_limiter: SkillRateLimiter | None = None,
     ) -> None:
         self._skills_dir = Path(skills_dir)
         self._skills: dict[str, Skill] = {}
@@ -164,6 +173,7 @@ class SkillRegistry:
         self._env_manager = (
             env_manager if env_manager is not None else SkillEnvManager()
         )
+        self._rate_limiter = rate_limiter
 
     @property
     def skills_dir(self) -> Path:
@@ -224,6 +234,13 @@ class SkillRegistry:
             if isinstance(p, dict) and "name" in p
         ]
 
+        rate_limit_raw = raw.get("rate_limit") or {}
+        rate_limit_per_minute: int | None = None
+        if isinstance(rate_limit_raw, dict):
+            value = rate_limit_raw.get("per_minute")
+            if isinstance(value, int) and value >= 0:
+                rate_limit_per_minute = value
+
         meta = SkillMeta(
             name=raw.get("name", skill_path.name),
             description=raw.get("description", ""),
@@ -234,6 +251,7 @@ class SkillRegistry:
             network=safety_raw.get("network", False),
             filesystem=safety_raw.get("filesystem", False),
             enabled=raw.get("enabled", True),
+            rate_limit_per_minute=rate_limit_per_minute,
         )
 
         if meta.safety_level == SafetyLevel.DANGEROUS and "enabled" not in raw:
@@ -261,6 +279,7 @@ class SkillRegistry:
             skill_dir=skill_path,
             sandbox_config=self._sandbox_config,
             env_manager=self._env_manager,
+            rate_limiter=self._rate_limiter,
         )
         logger.info(
             "Loaded skill: %s (safety=%s, enabled=%s)",

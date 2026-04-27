@@ -170,6 +170,7 @@ class SkillMeta:
     network: bool = False
     filesystem: bool = False
     enabled: bool = True
+    rate_limit_per_minute: int | None = None
 
 
 @dataclass

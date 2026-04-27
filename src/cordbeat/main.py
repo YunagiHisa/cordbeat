@@ -17,7 +17,7 @@ from cordbeat.memory import MemoryStore
 from cordbeat.metrics import REGISTRY as METRICS_REGISTRY
 from cordbeat.metrics_server import PrometheusServer
 from cordbeat.skill_sandbox import SandboxConfig
-from cordbeat.skills import SkillRegistry
+from cordbeat.skills import SkillRateLimiter, SkillRegistry
 from cordbeat.soul import Soul
 
 logger = logging.getLogger("cordbeat")
@@ -112,6 +112,9 @@ async def main(config_path: str = "config.yaml") -> None:
             timeout_seconds=int(config.skills.sandbox.timeout_seconds),
             memory_mb=config.skills.sandbox.memory_limit_mb,
             max_stdout_bytes=config.skills.sandbox.max_output_bytes,
+        ),
+        rate_limiter=SkillRateLimiter(
+            default_per_minute=config.skills.default_rate_limit_per_minute,
         ),
     )
     skills.load_all()

@@ -42,6 +42,34 @@ class SkillExecutionError(SkillError):
     """
 
 
+class SkillRateLimitError(SkillError):
+    """Raised when a skill's per-minute call quota is exhausted.
+
+    Attributes
+    ----------
+    retry_after_seconds:
+        Time the caller should wait before retrying (best-effort, based
+        on the bucket's current refill rate).
+    skill_name:
+        The skill whose bucket was empty.
+    limit_per_minute:
+        The effective per-minute limit that was hit.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after_seconds: float,
+        skill_name: str,
+        limit_per_minute: int,
+    ) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+        self.skill_name = skill_name
+        self.limit_per_minute = limit_per_minute
+
+
 class MemorySubsystemError(CordBeatError):
     """Raised when the memory subsystem fails irrecoverably.
 
@@ -66,6 +94,7 @@ __all__ = [
     "CordBeatError",
     "SkillError",
     "SkillExecutionError",
+    "SkillRateLimitError",
     "MemorySubsystemError",
     "AIBackendError",
     "OutputValidationError",

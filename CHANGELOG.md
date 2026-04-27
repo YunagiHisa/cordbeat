@@ -55,6 +55,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **BREAKING: Minimum version bumped to 0.4.0.**
 
 ### Added
+- **Per-skill rate limiting (token-bucket).** A new
+  ``cordbeat.skill_rate_limit.SkillRateLimiter`` enforces a configurable
+  per-minute call quota for each skill, defending against runaway loops
+  (e.g., a misbehaving heartbeat plan that keeps invoking the same
+  skill) and against billed external APIs being hammered. The bucket
+  refills continuously at ``capacity / 60`` tokens per second using
+  ``time.monotonic`` so wall-clock jumps don't corrupt accounting.
+  Two layers of configuration:
+
+  * ``skills.default_rate_limit_per_minute`` in ``config.yaml`` (default
+    ``0`` = unlimited, preserving existing behavior for current users).
+  * Per-skill override via ``rate_limit.per_minute`` in ``skill.yaml``.
+    Negative values fall back to the default; ``0`` is "unlimited" for
+    that skill.
+
+  When the bucket is empty, ``Skill.execute()`` raises the new
+  :class:`cordbeat.exceptions.SkillRateLimitError` with
+  ``retry_after_seconds``, ``skill_name``, and ``limit_per_minute``
+  attributes so callers (heartbeat loop, proposal executor) can decide
+  whether to defer or skip. ``main.py`` now wires the limiter into
+  ``SkillRegistry`` automatically. Ten new tests cover unlimited
+  defaults, per-skill overrides, default enforcement, negative-fallback
+  semantics, per-skill bucket isolation, ``reset()`` helpers, capacity
+  rebuilds, and refill-rate accuracy.
 - **Public webhook signature verification helpers for Slack and LINE.**
   New module ``cordbeat.adapter_signing`` exposes
   ``verify_slack_signature()`` (X-Slack-Signature ``v0=…`` HMAC-SHA256

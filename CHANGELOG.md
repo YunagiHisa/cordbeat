@@ -55,6 +55,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **BREAKING: Minimum version bumped to 0.4.0.**
 
 ### Added
+- **Public webhook signature verification helpers for Slack and LINE.**
+  New module ``cordbeat.adapter_signing`` exposes
+  ``verify_slack_signature()`` (X-Slack-Signature ``v0=…`` HMAC-SHA256
+  with built-in 5-minute replay-window enforcement per Slack's official
+  guidance) and ``verify_line_signature()`` (X-Line-Signature
+  base64-encoded HMAC-SHA256). Both use ``hmac.compare_digest`` and
+  return ``False`` on any missing/malformed input so downstream webhook
+  handlers can simply reject the request on a falsy return. The bundled
+  Slack adapter still defaults to Socket Mode (no public webhook
+  required); the LINE adapter still uses ``line-bot-sdk``'s
+  ``WebhookParser``. These helpers exist for users opting into HTTP
+  Events / webhook deployments and for centralizing the verification
+  logic so it can be unit-tested independently. Twelve new tests cover
+  positive cases, replay-window rejection (past *and* future skew),
+  tampered-body detection, missing-prefix rejection, and missing-input
+  edge cases.
 - **Memory dedup at insert time + configurable embedding model.**
   ``MemoryConfig`` gains three new knobs: ``embedding_model`` (defaults to
   the existing ``sentence-transformers/all-MiniLM-L6-v2`` — swap for a

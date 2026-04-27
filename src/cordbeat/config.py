@@ -101,6 +101,22 @@ class SoulConfig:
 
 
 @dataclass
+class LLMCacheConfig:
+    """Optional response cache for LLM ``generate()`` calls.
+
+    Off by default. When enabled, cache only deterministic-ish calls
+    (temperature below ``max_temperature``) keyed on
+    (system, prompt, model, temperature, max_tokens). LRU eviction on
+    ``max_entries``; entries also expire after ``ttl_seconds``.
+    """
+
+    enabled: bool = False
+    max_entries: int = 256
+    ttl_seconds: int = 3600
+    max_temperature: float = 0.2
+
+
+@dataclass
 class AIBackendConfig:
     provider: str = "ollama"
     base_url: str = "http://localhost:11434"
@@ -108,6 +124,7 @@ class AIBackendConfig:
     timeout: float = 120.0
     max_tokens: int = 1024
     options: dict[str, Any] = field(default_factory=dict)
+    cache: LLMCacheConfig = field(default_factory=LLMCacheConfig)
 
 
 @dataclass
@@ -314,6 +331,9 @@ def load_config(path: str | Path) -> Config:
         AIBackendConfig,
         raw.get("ai_backend", {}),
     )
+    ai_cache_raw = raw.get("ai_backend", {}).get("cache")
+    if isinstance(ai_cache_raw, dict):
+        ai_backend.cache = _build_dataclass(LLMCacheConfig, ai_cache_raw)
 
     adapters: dict[str, AdapterConfig] = {}
     for name, adapter_raw in raw.get("adapters", {}).items():

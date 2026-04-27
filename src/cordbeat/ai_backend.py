@@ -164,11 +164,26 @@ class OpenAICompatBackend(AIBackend):
 
 def create_backend(config: AIBackendConfig) -> AIBackend:
     """Factory function to create the appropriate AI backend."""
+    backend: AIBackend
+    backend_name: str
     match config.provider:
         case "ollama":
-            return OllamaBackend(config)
+            backend = OllamaBackend(config)
+            backend_name = "ollama"
         case "openai" | "openai_compat":
-            return OpenAICompatBackend(config)
+            backend = OpenAICompatBackend(config)
+            backend_name = "openai_compat"
         case _:
             msg = f"Unknown AI backend provider: {config.provider}"
             raise ValueError(msg)
+
+    if config.cache.enabled:
+        from cordbeat.llm_cache import CachingBackend  # noqa: PLC0415
+
+        return CachingBackend(
+            inner=backend,
+            config=config.cache,
+            model=config.model,
+            backend_name=backend_name,
+        )
+    return backend

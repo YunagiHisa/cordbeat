@@ -55,6 +55,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **BREAKING: Minimum version bumped to 0.4.0.**
 
 ### Added
+- **Optional LLM response cache.** New ``cordbeat.llm_cache.CachingBackend``
+  wraps any ``AIBackend`` with an in-memory LRU+TTL response cache keyed on
+  ``(model, system, prompt, temperature, max_tokens)``. Disabled by default
+  (``ai_backend.cache.enabled = false``); when enabled it skips
+  high-temperature calls (``> max_temperature``, default 0.2) so only
+  deterministic-ish requests are memoized. Eviction on
+  ``max_entries`` (default 256) and per-entry ``ttl_seconds`` (default 3600).
+  Two new metrics — ``cordbeat_llm_cache_hits_total`` and
+  ``cordbeat_llm_cache_misses_total{reason}`` — surface hit rates through the
+  Prometheus exporter. ``create_backend()`` transparently wraps the chosen
+  provider when caching is on, so existing call sites need no changes.
 - **In-process metrics + optional Prometheus exporter.** New
   ``cordbeat.metrics`` registry exposes Counters and Histograms with
   Prometheus 0.0.4 text-format rendering — zero new runtime

@@ -103,9 +103,7 @@ class TestOllamaVision:
         with patch.object(
             backend._client, "post", new_callable=AsyncMock, return_value=mock_resp
         ) as mock_post:
-            await backend.generate_with_vision(
-                "prompt", ["img"], system="sys prompt"
-            )
+            await backend.generate_with_vision("prompt", ["img"], system="sys prompt")
 
         body = mock_post.call_args[1]["json"]
         roles = [m["role"] for m in body["messages"]]
@@ -124,9 +122,7 @@ class TestOpenAIVision:
 
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "A dog"}}]
-        }
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "A dog"}}]}
 
         with patch.object(
             backend._client, "post", new_callable=AsyncMock, return_value=mock_resp

@@ -7,6 +7,7 @@ when auto-detection fails.
 
 from __future__ import annotations
 
+import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -37,6 +38,45 @@ _DEFAULT_SOUL_CORE = {
         "Never completely erase memories",
     ],
 }
+
+# Mapping from Python import name → pip package name for dependency checks.
+_REQUIRED_HEAVY_DEPS: dict[str, str] = {
+    "sqlite_vec": "sqlite-vec",
+    "sentence_transformers": "sentence-transformers",
+}
+
+
+# -- Pre-flight checks ─────────────────────────────────────────────────
+
+
+def _check_required_deps() -> None:
+    """Verify that heavy runtime dependencies are importable.
+
+    Called once at the very start of ``cordbeat_init_cli`` so the user
+    gets a clear install instruction **before** the interactive wizard
+    collects any input — rather than a cryptic traceback after they have
+    already typed everything in.
+    """
+    missing: list[str] = []
+    for import_name in _REQUIRED_HEAVY_DEPS:
+        try:
+            __import__(import_name)
+        except ImportError:
+            missing.append(import_name)
+
+    if not missing:
+        return
+
+    pip_names = [_REQUIRED_HEAVY_DEPS[n] for n in missing]
+    print("\n  [ERROR] Missing required dependencies:")
+    for imp, pip in zip(missing, pip_names):
+        print(f"      {imp!r}  ->  pip install {pip}")
+    print(
+        "\n  Install them and then re-run cordbeat-init:\n"
+        f"    pip install {' '.join(pip_names)}\n"
+        "    # or: uv add " + " ".join(pip_names)
+    )
+    sys.exit(1)
 
 
 # -- Prompt helpers ────────────────────────────────────────────────────
@@ -300,11 +340,21 @@ def run_wizard(home: Path | None = None) -> Path:
 def cordbeat_init_cli() -> None:
     """CLI entry point for ``cordbeat-init``.
 
-    Runs the setup wizard and then starts CordBeat with the new config.
+    Checks for required heavy dependencies first (before asking the user
+    anything), then runs the setup wizard and starts CordBeat.
     """
     import asyncio
 
+    from cordbeat.exceptions import MemorySubsystemError
     from cordbeat.main import main
 
+    _check_required_deps()  # exits with friendly message if deps are missing
+
     config_path = run_wizard()
-    asyncio.run(main(str(config_path)))
+    try:
+        asyncio.run(main(str(config_path)))
+    except MemorySubsystemError as exc:
+        # Safety net: any dep check we missed surfaces here with a clear message.
+        print(f"\n  [ERROR] Failed to start: {exc}")
+        print("  Make sure all required packages are installed and re-run cordbeat.")
+        sys.exit(1)

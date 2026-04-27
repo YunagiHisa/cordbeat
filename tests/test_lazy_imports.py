@@ -110,3 +110,65 @@ class TestNoTopLevelSentenceTransformers:
             "imported at module level in its import chain!\n"
             f"stderr: {result.stderr}"
         )
+
+
+# ---------------------------------------------------------------------------
+# _check_required_deps() — friendly error, not a traceback
+# ---------------------------------------------------------------------------
+
+
+class TestCheckRequiredDeps:
+    """cordbeat_init_cli must print a human-readable error and exit(1)
+    — not crash with a traceback — when a required dep is absent."""
+
+    def _run_check_deps(self, block_pkg: str) -> subprocess.CompletedProcess[str]:
+        code = textwrap.dedent(f"""\
+            import sys
+            sys.modules[{block_pkg!r}] = None  # type: ignore[assignment]
+            from cordbeat.setup_wizard import _check_required_deps
+            _check_required_deps()
+        """)
+        return subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            env={**__import__("os").environ, "PYTHONPATH": _SRC},
+        )
+
+    def test_missing_sqlite_vec_exits_1(self) -> None:
+        result = self._run_check_deps("sqlite_vec")
+        assert result.returncode == 1, (
+            "_check_required_deps() did not exit(1) when sqlite_vec is absent\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+    def test_missing_sqlite_vec_prints_install_hint(self) -> None:
+        result = self._run_check_deps("sqlite_vec")
+        assert "sqlite-vec" in result.stdout, (
+            "_check_required_deps() did not print the pip package name\n"
+            f"stdout: {result.stdout}"
+        )
+
+    def test_missing_sentence_transformers_exits_1(self) -> None:
+        result = self._run_check_deps("sentence_transformers")
+        assert result.returncode == 1, (
+            "_check_required_deps() did not exit(1) when sentence_transformers"
+            f" is absent\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+    def test_all_present_returns_normally(self) -> None:
+        code = textwrap.dedent("""\
+            from cordbeat.setup_wizard import _check_required_deps
+            _check_required_deps()
+            print("ok")
+        """)
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            env={**__import__("os").environ, "PYTHONPATH": _SRC},
+        )
+        assert result.returncode == 0 and "ok" in result.stdout, (
+            "_check_required_deps() failed when all deps are present\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )

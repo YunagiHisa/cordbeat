@@ -146,6 +146,47 @@ class SkillsConfig:
 
 
 @dataclass
+class STTConfig:
+    """Speech-to-text configuration.
+
+    Set ``enabled = true`` in ``config.yaml`` to activate voice transcription.
+    ``backend`` selects the implementation:
+
+    * ``whisper_local``  — local *faster-whisper* model (extra: ``stt-local``)
+    * ``whisper_openai`` — OpenAI cloud Whisper API
+    * ``openai_compat``  — any OpenAI-compatible transcription endpoint
+    """
+
+    enabled: bool = False
+    backend: str = "whisper_openai"
+    model: str = "base"
+    language: str = ""
+    api_url: str = ""
+    api_key: str = ""
+
+
+@dataclass
+class TTSConfig:
+    """Text-to-speech configuration.
+
+    Set ``enabled = true`` in ``config.yaml`` to activate voice replies.
+    ``backend`` selects the implementation:
+
+    * ``edge_tts``      — Microsoft Edge TTS (free, extra: ``tts-edge``)
+    * ``openai``        — OpenAI TTS API
+    * ``openai_compat`` — any OpenAI-compatible speech endpoint
+    """
+
+    enabled: bool = False
+    backend: str = "edge_tts"
+    voice: str = "en-US-AriaNeural"
+    speed: float = 1.0
+    model: str = "tts-1"
+    api_url: str = ""
+    api_key: str = ""
+
+
+@dataclass
 class MetricsConfig:
     """In-process metrics collection.
 
@@ -173,6 +214,8 @@ class Config:
     log: LogConfig = field(default_factory=LogConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
+    stt: STTConfig = field(default_factory=STTConfig)
+    tts: TTSConfig = field(default_factory=TTSConfig)
     skills_dir: str = "skills"
     data_dir: str = "data"
 
@@ -372,6 +415,16 @@ def load_config(path: str | Path) -> Config:
         sandbox=_build_dataclass(SkillSandboxConfig, sandbox_raw),
     )
 
+    stt_raw = raw.get("stt", {})
+    if not isinstance(stt_raw, dict):
+        stt_raw = {}
+    stt = _build_dataclass(STTConfig, stt_raw)
+
+    tts_raw = raw.get("tts", {})
+    if not isinstance(tts_raw, dict):
+        tts_raw = {}
+    tts = _build_dataclass(TTSConfig, tts_raw)
+
     cfg = Config(
         gateway=gateway,
         adapters=adapters,
@@ -382,6 +435,8 @@ def load_config(path: str | Path) -> Config:
         log=log,
         skills=skills,
         metrics=metrics,
+        stt=stt,
+        tts=tts,
         skills_dir=raw.get("skills_dir", "skills"),
         data_dir=raw.get("data_dir", "data"),
     )

@@ -37,11 +37,15 @@ async def _run_adapter(adapter_name: str, config_path: str) -> None:
     if adapter_name == "discord":
         from cordbeat.discord_adapter import DiscordAdapter
 
-        adapter = DiscordAdapter(adapter_cfg)
+        adapter = DiscordAdapter(
+            adapter_cfg, stt_config=config.stt, tts_config=config.tts
+        )
     elif adapter_name == "telegram":
         from cordbeat.telegram_adapter import TelegramAdapter
 
-        adapter = TelegramAdapter(adapter_cfg)
+        adapter = TelegramAdapter(
+            adapter_cfg, stt_config=config.stt, tts_config=config.tts
+        )
     elif adapter_name == "slack":
         from cordbeat.slack_adapter import SlackAdapter
 

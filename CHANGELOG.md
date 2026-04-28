@@ -9,6 +9,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Voice support (STT + TTS) — E-2.** Opt-in audio processing on Telegram and
+  Discord adapters. Set `stt.enabled: true` and/or `tts.enabled: true` in
+  `config.yaml` to activate. Telegram voices (`filters.VOICE`) are transcribed
+  to text via STT; if TTS is enabled and the user sent a voice message, the
+  reply is synthesised and sent as a voice note. Discord audio attachments
+  (`audio/*`) are transcribed and appended to the message text before forwarding
+  to the core engine.
+  Three STT backends: `whisper_local` (faster-whisper, local GPU/CPU),
+  `whisper_openai` (OpenAI API), `openai_compat` (whisper.cpp etc.).
+  Three TTS backends: `edge_tts` (Microsoft Edge TTS, free), `openai` (OpenAI
+  API), `openai_compat` (LocalAI etc.). Optional extras: `uv sync --extra
+  stt-local` / `uv sync --extra tts-edge`. Both backends follow the ABC pattern
+  of `ai_backend.py` for easy extensibility (VOICEVOX, Google, Azure…).
 - **Vision / image support.** When `ai_backend.vision_enabled: true` is set in
   config, image attachments sent by users are forwarded to the LLM. Discord
   attachments with an `image/*` content type and Telegram photos are downloaded

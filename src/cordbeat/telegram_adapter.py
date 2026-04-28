@@ -7,10 +7,14 @@ import base64
 import json
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from cordbeat.config import AdapterConfig
+from cordbeat.config import AdapterConfig, STTConfig, TTSConfig
 from cordbeat.gateway import RetryableConnection
+
+if TYPE_CHECKING:
+    from cordbeat.stt_backend import STTBackend
+    from cordbeat.tts_backend import TTSBackend
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +26,13 @@ class TelegramAdapter(RetryableConnection):
 
     adapter_id = ADAPTER_ID
 
-    def __init__(self, config: AdapterConfig) -> None:
+    def __init__(
+        self,
+        config: AdapterConfig,
+        *,
+        stt_config: STTConfig | None = None,
+        tts_config: TTSConfig | None = None,
+    ) -> None:
         self._config = config
         self._ws_url = config.core_ws_url
         self._token: str = config.options.get("token", "")
@@ -32,6 +42,21 @@ class TelegramAdapter(RetryableConnection):
         self._max_backoff = config.reconnect_max_backoff
         # Map platform_user_id → chat_id for reply routing
         self._chat_map: dict[str, int] = {}
+        # Track which users last communicated via voice (for TTS routing)
+        self._voice_users: set[str] = set()
+
+        self._stt: STTBackend | None = None
+        self._tts: TTSBackend | None = None
+
+        if stt_config is not None and stt_config.enabled:
+            from cordbeat.stt_backend import create_stt_backend
+
+            self._stt = create_stt_backend(stt_config)
+
+        if tts_config is not None and tts_config.enabled:
+            from cordbeat.tts_backend import create_tts_backend
+
+            self._tts = create_tts_backend(tts_config)
 
     async def start(self) -> None:
         try:
@@ -104,7 +129,30 @@ class TelegramAdapter(RetryableConnection):
                     except Exception:
                         logger.warning("Failed to download Telegram document image")
 
+            # Handle voice messages via STT when the backend is configured.
             text = msg.text or msg.caption or ""
+            if msg.voice and self._stt is not None:
+                try:
+                    vfile = await context.bot.get_file(msg.voice.file_id)
+                    audio_bytes = bytes(await vfile.download_as_bytearray())
+                    transcribed = await self._stt.transcribe(audio_bytes)
+                    if transcribed:
+                        text = transcribed
+                        self._voice_users.add(user_id)
+                    else:
+                        logger.warning(
+                            "STT returned empty transcription for user %s", user_id
+                        )
+                except Exception:
+                    logger.warning("Failed to process Telegram voice message")
+            elif msg.voice:
+                logger.debug(
+                    "Received voice message from %s but STT is not configured", user_id
+                )
+            else:
+                # Text/photo message: revert to text replies for this user.
+                self._voice_users.discard(user_id)
+
             await self._forward_to_core(
                 user_id,
                 text,
@@ -115,7 +163,7 @@ class TelegramAdapter(RetryableConnection):
 
         self._app.add_handler(
             MessageHandler(
-                (filters.TEXT | filters.PHOTO | filters.Document.IMAGE)
+                (filters.TEXT | filters.PHOTO | filters.Document.IMAGE | filters.VOICE)
                 & ~filters.COMMAND,
                 handle_message,
             )
@@ -140,7 +188,54 @@ class TelegramAdapter(RetryableConnection):
             await self._app.shutdown()
 
     async def _dispatch_core_message(self, platform_user_id: str, content: str) -> None:
-        await self._send_to_telegram(platform_user_id, content)
+        if self._tts is not None and platform_user_id in self._voice_users:
+            await self._send_voice_to_telegram(platform_user_id, content)
+        else:
+            await self._send_to_telegram(platform_user_id, content)
+
+    async def _send_voice_to_telegram(
+        self,
+        platform_user_id: str,
+        content: str,
+    ) -> None:
+        """Synthesize *content* via TTS and send as voice/audio to Telegram."""
+        if not self._app or not self._tts:
+            return
+
+        chat_id = self._chat_map.get(platform_user_id)
+        if chat_id is None:
+            try:
+                chat_id = int(platform_user_id)
+            except ValueError:
+                await self._send_to_telegram(platform_user_id, content)
+                return
+
+        try:
+            audio_bytes = await self._tts.synthesize(content)
+            if not audio_bytes:
+                # TTS failed — fall back to text reply
+                await self._send_to_telegram(platform_user_id, content)
+                return
+
+            import io
+
+            audio_io = io.BytesIO(audio_bytes)
+            audio_io.name = (
+                "response.ogg"
+                if self._tts.content_type == "audio/ogg"
+                else "response.mp3"
+            )
+
+            if self._tts.content_type == "audio/ogg":
+                await self._app.bot.send_voice(chat_id=chat_id, voice=audio_io)
+            else:
+                await self._app.bot.send_audio(chat_id=chat_id, audio=audio_io)
+        except Exception:
+            logger.exception(
+                "Failed to send TTS voice to Telegram chat %s; falling back to text",
+                chat_id,
+            )
+            await self._send_to_telegram(platform_user_id, content)
 
     async def _forward_to_core(
         self,

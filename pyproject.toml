@@ -38,6 +38,8 @@ slack = ["slack-sdk>=3.27", "aiohttp>=3.9"]
 line = ["line-bot-sdk>=3.11", "aiohttp>=3.9"]
 whatsapp = ["aiohttp>=3.9"]
 signal = []
+stt-local = ["faster-whisper>=1.0"]
+tts-edge = ["edge-tts>=6.1"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -84,6 +86,10 @@ module = [
     "cordbeat.signal_adapter",
 ]
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = ["faster_whisper", "edge_tts"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

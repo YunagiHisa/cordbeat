@@ -381,7 +381,10 @@ async def test_adapter_runner_passes_voice_configs(tmp_path: Any) -> None:
     mock_instance.start = AsyncMock(return_value=None)
     mock_instance.stop = AsyncMock(return_value=None)
 
-    with patch("cordbeat.telegram_adapter.TelegramAdapter", return_value=mock_instance) as mock_cls:
+    with patch(
+        "cordbeat.telegram_adapter.TelegramAdapter",
+        return_value=mock_instance,
+    ) as mock_cls:
         await _run_adapter("telegram", str(cfg_path))
 
     # Verify STT/TTS configs were passed as keyword args

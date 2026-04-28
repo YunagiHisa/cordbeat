@@ -8,12 +8,16 @@ import json
 import logging
 from collections import OrderedDict
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from cordbeat.config import AdapterConfig
+from cordbeat.config import AdapterConfig, STTConfig, TTSConfig
 from cordbeat.gateway import RetryableConnection
+
+if TYPE_CHECKING:
+    from cordbeat.stt_backend import STTBackend
+    from cordbeat.tts_backend import TTSBackend
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +33,13 @@ class DiscordAdapter(RetryableConnection):
 
     adapter_id = ADAPTER_ID
 
-    def __init__(self, config: AdapterConfig) -> None:
+    def __init__(
+        self,
+        config: AdapterConfig,
+        *,
+        stt_config: STTConfig | None = None,
+        tts_config: TTSConfig | None = None,
+    ) -> None:
         self._config = config
         self._ws_url = config.core_ws_url
         self._token: str = config.options.get("token", "")
@@ -41,6 +51,20 @@ class DiscordAdapter(RetryableConnection):
         # beyond the cap evict the least-recently-used entry so that the
         # process does not grow without bound over time.
         self._user_channels: OrderedDict[str, int] = OrderedDict()
+
+        self._stt: STTBackend | None = None
+        # TTS stored for future VC support; not used in text channels yet.
+        self._tts: TTSBackend | None = None
+
+        if stt_config is not None and stt_config.enabled:
+            from cordbeat.stt_backend import create_stt_backend
+
+            self._stt = create_stt_backend(stt_config)
+
+        if tts_config is not None and tts_config.enabled:
+            from cordbeat.tts_backend import create_tts_backend
+
+            self._tts = create_tts_backend(tts_config)
 
     async def start(self) -> None:
         try:
@@ -107,6 +131,7 @@ class DiscordAdapter(RetryableConnection):
         # Collect image attachments (base64-encoded), cap at 4 images / 10 MB each.
         _max_images = 4
         _image_size_limit = 10 * 1024 * 1024  # 10 MB
+        _audio_size_limit = 25 * 1024 * 1024  # 25 MB
 
         async def _fetch_attachment_images(src_msg: Any, buf: list[str]) -> None:
             for att in getattr(src_msg, "attachments", []):
@@ -141,12 +166,42 @@ class DiscordAdapter(RetryableConnection):
             if ref_msg is not None:
                 await _fetch_attachment_images(ref_msg, images)
 
+        # STT: transcribe audio attachments when the backend is configured.
+        content = message.content
+        if self._stt is not None:
+            for att in getattr(message, "attachments", []):
+                ct = getattr(att, "content_type", "") or ""
+                if not ct.startswith("audio/"):
+                    continue
+                size = getattr(att, "size", 0) or 0
+                if size > _audio_size_limit:
+                    logger.warning(
+                        "Skipping oversized Discord audio attachment: %d bytes", size
+                    )
+                    continue
+                try:
+                    async with httpx.AsyncClient() as client:
+                        resp = await client.get(str(att.url))
+                        resp.raise_for_status()
+                        transcribed = await self._stt.transcribe(resp.content)
+                    if transcribed:
+                        content = (
+                            f"{content} {transcribed}".strip()
+                            if content
+                            else transcribed
+                        )
+                        logger.debug("Discord STT transcribed: %.100s", transcribed)
+                except Exception:
+                    logger.warning(
+                        "Failed to transcribe Discord audio attachment: %s", att.url
+                    )
+
         payload = json.dumps(
             {
                 "type": "message",
                 "adapter_id": ADAPTER_ID,
                 "platform_user_id": str(message.author.id),
-                "content": message.content,
+                "content": content,
                 "timestamp": datetime.now(tz=UTC).isoformat(),
                 "images": images,
                 "metadata": {

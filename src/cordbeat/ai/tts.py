@@ -7,18 +7,13 @@ To add a new TTS backend:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import TYPE_CHECKING
 
 import httpx
 
-from cordbeat.config import RVCConfig, TTSConfig
-
-if TYPE_CHECKING:
-    from cordbeat.rvc_backend import RVCBackend
+from cordbeat.config import TTSConfig
 
 logger = logging.getLogger(__name__)
 
@@ -177,58 +172,3 @@ def create_tts_backend(config: TTSConfig) -> TTSBackend:
         )
         cls = EdgeTTSBackend
     return cls(config)
-
-
-class RVCWrappedTTS(TTSBackend):
-    """Wraps any TTSBackend and passes its audio through RVC voice conversion."""
-
-    def __init__(self, inner: TTSBackend, rvc: RVCBackend) -> None:
-        self._inner = inner
-        self._rvc = rvc
-
-    @property
-    def content_type(self) -> str:  # type: ignore[override]
-        return self._inner.content_type
-
-    async def synthesize(self, text: str) -> bytes:
-        wav = await self._inner.synthesize(text)
-        if not wav or not self._rvc.is_loaded():
-            return wav
-        try:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, self._rvc.convert, wav)
-        except Exception:
-            logger.exception("RVC conversion failed; returning original audio")
-            return wav
-
-
-def create_tts_with_rvc(
-    tts_config: TTSConfig, rvc_config: RVCConfig | None = None
-) -> TTSBackend:
-    """Factory: create a TTS backend, optionally wrapped with RVC.
-
-    If *rvc_config* is enabled and ``model_path`` is set, the backend is
-    wrapped in :class:`RVCWrappedTTS`.  Any failure during RVC initialisation
-    is logged and the plain TTS backend is returned as a fallback.
-    """
-    backend = create_tts_backend(tts_config)
-    if (
-        rvc_config is None
-        or not rvc_config.enabled
-        or not rvc_config.model_path
-    ):
-        return backend
-    try:
-        from cordbeat.rvc_backend import RVCBackend
-
-        rvc = RVCBackend()
-        rvc.load(
-            model_path=rvc_config.model_path,
-            index_path=rvc_config.index_path or None,
-            f0_up_key=rvc_config.f0_up_key,
-            device=rvc_config.device or None,
-        )
-        return RVCWrappedTTS(backend, rvc)
-    except Exception:
-        logger.exception("Failed to initialise RVC backend; using plain TTS")
-        return backend

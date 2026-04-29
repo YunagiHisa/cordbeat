@@ -35,34 +35,31 @@ async def _run_adapter(adapter_name: str, config_path: str) -> None:
 
     adapter: Any
     if adapter_name == "discord":
-        from cordbeat.discord_adapter import DiscordAdapter
+        from .discord import DiscordAdapter
 
         adapter = DiscordAdapter(
-            adapter_cfg,
-            stt_config=config.stt,
-            tts_config=config.tts,
-            rvc_config=config.rvc,
+            adapter_cfg, stt_config=config.stt, tts_config=config.tts
         )
     elif adapter_name == "telegram":
-        from cordbeat.telegram_adapter import TelegramAdapter
+        from .telegram import TelegramAdapter
 
         adapter = TelegramAdapter(
             adapter_cfg, stt_config=config.stt, tts_config=config.tts
         )
     elif adapter_name == "slack":
-        from cordbeat.slack_adapter import SlackAdapter
+        from .slack import SlackAdapter
 
         adapter = SlackAdapter(adapter_cfg)
     elif adapter_name == "line":
-        from cordbeat.line_adapter import LineAdapter
+        from .line import LineAdapter
 
         adapter = LineAdapter(adapter_cfg)
     elif adapter_name == "whatsapp":
-        from cordbeat.whatsapp_adapter import WhatsAppAdapter
+        from .whatsapp import WhatsAppAdapter
 
         adapter = WhatsAppAdapter(adapter_cfg)
     elif adapter_name == "signal":
-        from cordbeat.signal_adapter import SignalAdapter
+        from .signal import SignalAdapter
 
         adapter = SignalAdapter(adapter_cfg)
     else:

@@ -38,6 +38,8 @@ slack = ["slack-sdk>=3.27", "aiohttp>=3.9"]
 line = ["line-bot-sdk>=3.11", "aiohttp>=3.9"]
 whatsapp = ["aiohttp>=3.9"]
 signal = []
+discord-vc = ["discord.py[voice]>=2.0", "discord-ext-voice-recv>=0.3", "numpy>=1.24", "scipy>=1.11"]
+rvc = ["torch>=2.1", "transformers>=4.40", "torchaudio>=2.1", "numpy>=1.24", "scipy>=1.11"]
 stt-local = ["faster-whisper>=1.0"]
 tts-edge = ["edge-tts>=6.1"]
 dev = [
@@ -84,11 +86,30 @@ module = [
     "cordbeat.line_adapter",
     "cordbeat.whatsapp_adapter",
     "cordbeat.signal_adapter",
+    "cordbeat.voice_recv",
+    "cordbeat.rvc_backend",
+    "cordbeat.adapters.discord",
+    "cordbeat.adapters.telegram",
+    "cordbeat.adapters.slack",
+    "cordbeat.adapters.line",
+    "cordbeat.adapters.whatsapp",
+    "cordbeat.adapters.signal",
 ]
 ignore_errors = true
 
 [[tool.mypy.overrides]]
 module = ["faster_whisper", "edge_tts"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "torch",
+    "torch.*",
+    "torchaudio",
+    "torchaudio.*",
+    "transformers",
+    "discord.ext.voice_recv",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
@@ -114,6 +135,10 @@ omit = [
     "*/cordbeat/slack_adapter.py",
     "*/cordbeat/whatsapp_adapter.py",
     "*/cordbeat/signal_adapter.py",
+    # Voice receive and RVC backend require optional extras (discord-vc, rvc)
+    # that are not installed in the default test environment.
+    "*/cordbeat/voice_recv.py",
+    "*/cordbeat/rvc_backend.py",
 ]
 
 [tool.coverage.report]

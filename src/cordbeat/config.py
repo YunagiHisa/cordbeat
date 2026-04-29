@@ -187,6 +187,26 @@ class TTSConfig:
 
 
 @dataclass
+class RVCConfig:
+    """Voice conversion (RVC) configuration.
+
+    When enabled, TTS audio is post-processed through an RVC model to apply
+    voice conversion. Requires the ``rvc`` extra: ``uv sync --extra rvc``.
+
+    Set ``model_path`` to the .pth checkpoint file.
+    Set ``index_path`` to the .index file (optional, improves quality).
+    ``f0_up_key`` shifts pitch (semitones, e.g. 0 = no shift, 12 = +1 octave).
+    ``device`` selects compute device (``cuda``, ``cpu``, or empty for auto).
+    """
+
+    enabled: bool = False
+    model_path: str = ""
+    index_path: str = ""
+    f0_up_key: int = 0
+    device: str = ""
+
+
+@dataclass
 class MetricsConfig:
     """In-process metrics collection.
 
@@ -216,6 +236,7 @@ class Config:
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
     stt: STTConfig = field(default_factory=STTConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
+    rvc: RVCConfig = field(default_factory=RVCConfig)
     skills_dir: str = "skills"
     data_dir: str = "data"
 
@@ -333,6 +354,10 @@ def _resolve_relative_paths(config: Config, config_dir: Path) -> None:
     config.skills_dir = _resolve(config.skills_dir)
     if config.log.file:
         config.log.file = _resolve(config.log.file)
+    if config.rvc.model_path:
+        config.rvc.model_path = _resolve(config.rvc.model_path)
+    if config.rvc.index_path:
+        config.rvc.index_path = _resolve(config.rvc.index_path)
 
 
 def load_config(path: str | Path) -> Config:
@@ -425,6 +450,11 @@ def load_config(path: str | Path) -> Config:
         tts_raw = {}
     tts = _build_dataclass(TTSConfig, tts_raw)
 
+    rvc_raw = raw.get("rvc", {})
+    if not isinstance(rvc_raw, dict):
+        rvc_raw = {}
+    rvc = _build_dataclass(RVCConfig, rvc_raw)
+
     cfg = Config(
         gateway=gateway,
         adapters=adapters,
@@ -437,6 +467,7 @@ def load_config(path: str | Path) -> Config:
         metrics=metrics,
         stt=stt,
         tts=tts,
+        rvc=rvc,
         skills_dir=raw.get("skills_dir", "skills"),
         data_dir=raw.get("data_dir", "data"),
     )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import signal
 import sys
 from pathlib import Path
@@ -16,8 +17,7 @@ from cordbeat.heartbeat import HeartbeatLoop
 from cordbeat.memory import MemoryStore
 from cordbeat.metrics import REGISTRY as METRICS_REGISTRY
 from cordbeat.metrics_server import PrometheusServer
-from cordbeat.skill_sandbox import SandboxConfig
-from cordbeat.skills import SkillRateLimiter, SkillRegistry
+from cordbeat.skills import SandboxConfig, SkillRateLimiter, SkillRegistry
 from cordbeat.soul import Soul
 
 logger = logging.getLogger("cordbeat")
@@ -42,6 +42,34 @@ def _resolve_config_path() -> str:
     from cordbeat.setup_wizard import run_wizard
 
     return str(run_wizard())
+
+
+def _sync_builtin_skills(skills_dir: Path) -> None:
+    """Copy missing built-in skills to the configured skills directory.
+
+    Skills that already exist in the target are left untouched so
+    that user modifications are preserved.  New built-in skills added
+    in future releases are automatically deployed on the next startup.
+    """
+    # Locate the bundled skills/ directory (project-root sibling of src/cordbeat/)
+    _here = Path(__file__).resolve()  # …/src/cordbeat/main.py
+    bundled = _here.parent.parent.parent / "skills"
+    if not bundled.is_dir():
+        return
+
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    for src_skill in bundled.iterdir():
+        if not src_skill.is_dir():
+            continue
+        dst_skill = skills_dir / src_skill.name
+        if dst_skill.exists():
+            continue  # user copy already present — don't overwrite
+        try:
+            shutil.copytree(src_skill, dst_skill)
+            logger.info("Installed built-in skill '%s' → %s", src_skill.name, dst_skill)
+        except OSError:
+            logger.exception("Failed to install built-in skill '%s'", src_skill.name)
+
 
 
 async def main(config_path: str = "config.yaml") -> None:
@@ -106,6 +134,7 @@ async def main(config_path: str = "config.yaml") -> None:
         config.ai_backend.model,
     )
 
+    _sync_builtin_skills(Path(config.skills_dir))
     skills = SkillRegistry(
         config.skills_dir,
         sandbox_config=SandboxConfig(

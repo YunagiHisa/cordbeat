@@ -86,7 +86,7 @@ async def test_dim_mismatch_emits_warning(
         embedding_dim=512,
     )
     s = MemoryStore(config)
-    with caplog.at_level(logging.WARNING, logger="cordbeat._memory_vector"):
+    with caplog.at_level(logging.WARNING, logger="cordbeat.memory.vector"):
         await s.initialize()
     try:
         assert any("embedding_dim=512" in rec.message for rec in caplog.records)

@@ -10,7 +10,7 @@ from typing import Any
 
 import aiosqlite
 
-from cordbeat._memory_common import ensure_aware
+from .common import ensure_aware
 
 
 class RecordStore:

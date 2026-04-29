@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 import aiosqlite
 
-from cordbeat._memory_common import SCHEMA, VECTOR_SCHEMA
+from .common import SCHEMA, VECTOR_SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,13 @@ MIGRATIONS: list[Migration] = [
         description="initial schema (users, platform_links, profiles, "
         "records, conversations, sqlite-vec virtual tables)",
         sql=SCHEMA + VECTOR_SCHEMA,
+    ),
+    Migration(
+        version=2,
+        description="ensure sqlite-vec virtual tables exist for databases "
+        "that predate the sqlite-vec migration (ChromaDB-era fast-forwards "
+        "skipped VECTOR_SCHEMA; CREATE VIRTUAL TABLE IF NOT EXISTS is idempotent)",
+        sql=VECTOR_SCHEMA,
     ),
 ]
 

@@ -26,9 +26,10 @@ from typing import Any
 
 import aiosqlite
 
-from cordbeat._memory_common import ensure_aware
 from cordbeat.config import MemoryConfig
 from cordbeat.models import MemoryEntry, MemoryLayer
+
+from .common import ensure_aware
 
 logger = logging.getLogger(__name__)
 

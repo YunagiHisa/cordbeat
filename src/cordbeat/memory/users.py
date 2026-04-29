@@ -6,8 +6,9 @@ from datetime import UTC, datetime
 
 import aiosqlite
 
-from cordbeat._memory_common import ensure_aware
 from cordbeat.models import UserSummary
+
+from .common import ensure_aware
 
 
 class UserStore:

@@ -50,7 +50,7 @@ def _run_import(
 
 
 # ---------------------------------------------------------------------------
-# sqlite_vec — used by memory.py and _memory_vector.py
+# sqlite_vec — used by memory/vector.py
 # ---------------------------------------------------------------------------
 
 
@@ -65,9 +65,9 @@ class TestNoTopLevelSqliteVec:
         )
 
     def test_memory_vector_importable(self) -> None:
-        result = _run_import("sqlite_vec", "cordbeat._memory_vector", "VectorMemory")
+        result = _run_import("sqlite_vec", "cordbeat.memory.vector", "VectorMemory")
         assert result.returncode == 0, (
-            "cordbeat._memory_vector imported sqlite_vec at module level!\n"
+            "cordbeat.memory.vector imported sqlite_vec at module level!\n"
             f"stderr: {result.stderr}"
         )
 
@@ -89,7 +89,7 @@ class TestNoTopLevelSqliteVec:
 
 
 # ---------------------------------------------------------------------------
-# sentence_transformers — used by _memory_vector.py for local embeddings
+# sentence_transformers — used by memory/vector.py for local embeddings
 # ---------------------------------------------------------------------------
 
 

@@ -6,7 +6,7 @@ import aiosqlite
 import pytest
 import sqlite_vec
 
-from cordbeat._memory_migrations import (
+from cordbeat.memory.migrations import (
     MIGRATIONS,
     Migration,
     apply_migrations,
@@ -70,7 +70,7 @@ async def test_apply_migrations_idempotent(tmp_path):
         cur = await conn.execute("SELECT COUNT(*) FROM schema_version")
         row = await cur.fetchone()
         await cur.close()
-        assert row[0] == 1
+        assert row[0] == latest_version()
     finally:
         await conn.close()
 
@@ -91,8 +91,9 @@ async def test_legacy_db_without_schema_version_is_fast_forwarded(tmp_path):
         cur = await conn.execute("SELECT version FROM schema_version ORDER BY version")
         rows = await cur.fetchall()
         await cur.close()
-        # Only the fast-forward stamp; no re-execution of v1.
-        assert [r[0] for r in rows] == [1]
+        # v1 is fast-forwarded (stamped without re-running SQL); v2 and later
+        # are applied normally to fill in any tables that pre-date sqlite-vec.
+        assert [r[0] for r in rows] == list(range(1, latest_version() + 1))
     finally:
         await conn.close()
 

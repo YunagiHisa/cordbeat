@@ -14,15 +14,16 @@ from typing import Any
 
 import aiosqlite
 
-from cordbeat._memory_conversation import ConversationStore
-from cordbeat._memory_migrations import apply_migrations
-from cordbeat._memory_records import RecordStore
-from cordbeat._memory_users import UserStore
-from cordbeat._memory_vector import VectorMemory
 from cordbeat.config import MemoryConfig
 from cordbeat.exceptions import MemorySubsystemError
-from cordbeat.metrics import MEMORY_QUERY_LATENCY, time_block
 from cordbeat.models import MemoryEntry, UserSummary
+from cordbeat.tools.metrics import MEMORY_QUERY_LATENCY, time_block
+
+from .conversation import ConversationStore
+from .migrations import apply_migrations
+from .records import RecordStore
+from .users import UserStore
+from .vector import VectorMemory
 
 logger = logging.getLogger(__name__)
 

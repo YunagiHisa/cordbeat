@@ -198,8 +198,8 @@ class TestRunWizard:
     def test_ollama_detected_zero_questions(
         self, tmp_path: Path, ollama_server: str
     ) -> None:
-        """When Ollama is detected, wizard asks only name + language."""
-        inputs = iter(["TestBot", "en"])
+        """When Ollama is detected, wizard asks language then name."""
+        inputs = iter(["en", "TestBot"])
         with (
             patch(
                 "cordbeat.setup_wizard._probe_ollama",
@@ -210,6 +210,8 @@ class TestRunWizard:
                 "cordbeat.setup_wizard._probe_provider",
                 return_value=True,
             ),
+            patch("cordbeat.setup_wizard._select_skills"),
+            patch("cordbeat.setup_wizard._select_extras"),
         ):
             config_path = run_wizard(tmp_path)
 
@@ -223,7 +225,9 @@ class TestRunWizard:
 
     def test_ollama_not_found_fallback(self, tmp_path: Path) -> None:
         """When Ollama is not detected, wizard asks provider details."""
-        inputs = iter(["ollama", "http://myhost:11434", "mistral", "TestBot", "ja"])
+        inputs = iter(
+            ["ja", "ollama", "http://myhost:11434", "mistral", "テストボット"]
+        )
         with (
             patch("cordbeat.setup_wizard._probe_ollama", return_value=None),
             patch("cordbeat.setup_wizard._probe_llama_cpp", return_value=None),
@@ -232,6 +236,8 @@ class TestRunWizard:
                 "cordbeat.setup_wizard._probe_provider",
                 return_value=False,
             ),
+            patch("cordbeat.setup_wizard._select_skills"),
+            patch("cordbeat.setup_wizard._select_extras"),
         ):
             config_path = run_wizard(tmp_path)
 
@@ -241,7 +247,7 @@ class TestRunWizard:
 
     def test_llama_cpp_detected(self, tmp_path: Path) -> None:
         """When llama.cpp is detected (but not Ollama), wizard auto-configures."""
-        inputs = iter(["TestBot", "en"])
+        inputs = iter(["en", "TestBot"])
         with (
             patch("cordbeat.setup_wizard._probe_ollama", return_value=None),
             patch(
@@ -253,6 +259,8 @@ class TestRunWizard:
                 "cordbeat.setup_wizard._probe_provider",
                 return_value=True,
             ),
+            patch("cordbeat.setup_wizard._select_skills"),
+            patch("cordbeat.setup_wizard._select_extras"),
         ):
             config_path = run_wizard(tmp_path)
 
@@ -265,12 +273,12 @@ class TestRunWizard:
         """OpenAI provider asks for API key."""
         inputs = iter(
             [
+                "en",
                 "openai",
                 "https://api.openai.com/v1",
                 "gpt-4",
                 "sk-test123",
                 "MyBot",
-                "en",
             ]
         )
         with (
@@ -281,6 +289,8 @@ class TestRunWizard:
                 "cordbeat.setup_wizard._probe_provider",
                 return_value=True,
             ),
+            patch("cordbeat.setup_wizard._select_skills"),
+            patch("cordbeat.setup_wizard._select_extras"),
         ):
             config_path = run_wizard(tmp_path)
 
@@ -289,7 +299,7 @@ class TestRunWizard:
         assert cfg["ai_backend"]["options"]["api_key"] == "sk-test123"
 
     def test_directory_structure_created(self, tmp_path: Path) -> None:
-        inputs = iter(["Bot", "en"])
+        inputs = iter(["en", "Bot"])
         with (
             patch(
                 "cordbeat.setup_wizard._probe_ollama",
@@ -300,6 +310,8 @@ class TestRunWizard:
                 "cordbeat.setup_wizard._probe_provider",
                 return_value=True,
             ),
+            patch("cordbeat.setup_wizard._select_skills"),
+            patch("cordbeat.setup_wizard._select_extras"),
         ):
             run_wizard(tmp_path)
 

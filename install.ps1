@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # CordBeat installer for Windows
 # Usage: irm https://raw.githubusercontent.com/YunagiHisa/cordbeat/main/install.ps1 | iex
 

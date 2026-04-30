@@ -71,6 +71,26 @@ class TestGenerateJson:
         with pytest.raises(json.JSONDecodeError):
             await backend.generate_json("test")
 
+    async def test_think_tags_stripped(self) -> None:
+        """Qwen3 / DeepSeek-R1 CoT models prepend <think>...</think> blocks."""
+        cfg = AIBackendConfig(provider="ollama")
+        backend = OllamaBackend(cfg)
+        backend.generate = AsyncMock(  # type: ignore[method-assign]
+            return_value='<think>\nLet me think...\n</think>\n{"action": "none"}'
+        )
+        result = await backend.generate_json("test")
+        assert result == {"action": "none"}
+
+    async def test_think_tags_multiline_stripped(self) -> None:
+        cfg = AIBackendConfig(provider="ollama")
+        backend = OllamaBackend(cfg)
+        think_block = "<think>\nStep 1: ...\nStep 2: ...\n</think>"
+        backend.generate = AsyncMock(  # type: ignore[method-assign]
+            return_value=f'{think_block}\n```json\n{{"key": "val"}}\n```'
+        )
+        result = await backend.generate_json("test")
+        assert result == {"key": "val"}
+
 
 # ── OllamaBackend ────────────────────────────────────────────────────
 

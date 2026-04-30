@@ -81,9 +81,12 @@ class AIBackend(ABC):
         max_tokens: int = 1024,
     ) -> dict[str, Any]:
         """Generate and parse a JSON response."""
+        import re
+
         raw = await self.generate(prompt, system, temperature, max_tokens)
+        # Strip <think>...</think> reasoning blocks (Qwen3, DeepSeek-R1, etc.)
+        text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
         # Extract JSON from potential markdown code blocks
-        text = raw.strip()
         if text.startswith("```"):
             lines = text.split("\n")
             lines = lines[1:]  # skip ```json

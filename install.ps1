@@ -10,12 +10,12 @@ $ErrorActionPreference = "Stop"
 $repo = "https://github.com/YunagiHisa/cordbeat.git"
 
 Write-Host ""
-Write-Host "   ██████╗ ██████╗ ██████╗ ██████╗ ██████╗ ███████╗ █████╗ ████████╗" -ForegroundColor Cyan
-Write-Host "  ██╔════╝██╔═══██╗██╔══██╗██╔══██╗██╔══██╗██╔════╝██╔══██╗╚══██╔══╝" -ForegroundColor Cyan
-Write-Host "  ██║     ██║   ██║██████╔╝██║  ██║██████╔╝█████╗  ███████║   ██║   " -ForegroundColor Cyan
-Write-Host "  ██║     ██║   ██║██╔══██╗██║  ██║██╔══██╗██╔══╝  ██╔══██║   ██║   " -ForegroundColor Cyan
-Write-Host "  ╚██████╗╚██████╔╝██║  ██║██████╔╝██████╔╝███████╗██║  ██║   ██║   " -ForegroundColor Cyan
-Write-Host "   ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝   ╚═╝   " -ForegroundColor Cyan
+Write-Host "   ██████╗ ██████╗ ██████╗ ██████╗ ██████╗ ███████╗ █████╗ ████████╗" -ForegroundColor Magenta
+Write-Host "  ██╔════╝██╔═══██╗██╔══██╗██╔══██╗██╔══██╗██╔════╝██╔══██╗╚══██╔══╝" -ForegroundColor DarkMagenta
+Write-Host "  ██║     ██║   ██║██████╔╝██║  ██║██████╔╝█████╗  ███████║   ██║   " -ForegroundColor Magenta
+Write-Host "  ██║     ██║   ██║██╔══██╗██║  ██║██╔══██╗██╔══╝  ██╔══██║   ██║   " -ForegroundColor DarkMagenta
+Write-Host "  ╚██████╗╚██████╔╝██║  ██║██████╔╝██████╔╝███████╗██║  ██║   ██║   " -ForegroundColor Magenta
+Write-Host "   ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝   ╚═╝   " -ForegroundColor DarkMagenta
 Write-Host ""
 Write-Host "  A local-first autonomous AI agent that stays by your side." -ForegroundColor White
 Write-Host ""
@@ -65,8 +65,11 @@ uv run cordbeat-init
 Write-Host ""
 Write-Host "  ✨ CordBeat is ready!" -ForegroundColor Green
 Write-Host ""
-Write-Host "  To start:" -ForegroundColor White
+Write-Host "  To chat again:" -ForegroundColor White
 Write-Host "    cd $InstallDir" -ForegroundColor Cyan
+Write-Host "    uv run cordbeat-chat" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  To run as headless server (Discord / Telegram):" -ForegroundColor White
 Write-Host "    uv run cordbeat" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  To update later:" -ForegroundColor White

@@ -222,6 +222,45 @@ async def main(config_path: str = "config.yaml") -> None:
     logger.info("CordBeat stopped")
 
 
+async def main_with_cli(config_path: str) -> None:
+    """Start the CordBeat server and connect the interactive CLI adapter.
+
+    The server runs as a background task; the CLI adapter runs in the
+    foreground.  When the user quits the CLI (Ctrl+C / EOF), the server
+    is shut down gracefully.
+    """
+    import socket
+
+    from cordbeat.cli_adapter import main as cli_main
+
+    # Load config early so we know the WS URL & auth token.
+    _cfg = load_config(config_path)
+    ws_url = f"ws://{_cfg.gateway.host}:{_cfg.gateway.port}"
+    auth_token = _cfg.gateway.auth_token
+
+    server_task = asyncio.create_task(main(config_path))
+
+    # Wait until the WS port is actually accepting connections (up to 10 s).
+    host = _cfg.gateway.host
+    port = _cfg.gateway.port
+    for _ in range(50):
+        await asyncio.sleep(0.2)
+        try:
+            with socket.create_connection((host, port), timeout=0.1):
+                break
+        except OSError:
+            pass
+
+    try:
+        await cli_main(ws_url, auth_token)
+    finally:
+        server_task.cancel()
+        try:
+            await server_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+
 def cli() -> None:
     # Handle subcommands
     if len(sys.argv) > 1 and sys.argv[1] == "doctor":
@@ -231,6 +270,12 @@ def cli() -> None:
 
     config_path = _resolve_config_path()
     asyncio.run(main(config_path))
+
+
+def cli_chat() -> None:
+    """Start CordBeat in combined server + interactive CLI chat mode."""
+    config_path = _resolve_config_path()
+    asyncio.run(main_with_cli(config_path))
 
 
 if __name__ == "__main__":

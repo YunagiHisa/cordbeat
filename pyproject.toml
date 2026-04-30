@@ -20,6 +20,7 @@ dependencies = [
 
 [project.scripts]
 cordbeat = "cordbeat.main:cli"
+cordbeat-chat = "cordbeat.main:cli_chat"
 cordbeat-init = "cordbeat.setup_wizard:cordbeat_init_cli"
 cordbeat-discord = "cordbeat.adapter_runner:discord_cli"
 cordbeat-telegram = "cordbeat.adapter_runner:telegram_cli"

@@ -577,18 +577,19 @@ def cordbeat_init_cli() -> None:
     """CLI entry point for ``cordbeat-init``.
 
     Checks for required heavy dependencies first (before asking the user
-    anything), then runs the setup wizard and starts CordBeat.
+    anything), then runs the setup wizard and starts CordBeat in
+    combined server + interactive CLI chat mode.
     """
     import asyncio
 
     from cordbeat.exceptions import MemorySubsystemError
-    from cordbeat.main import main
+    from cordbeat.main import main_with_cli
 
     _check_required_deps()  # exits with friendly message if deps are missing
 
     config_path = run_wizard()
     try:
-        asyncio.run(main(str(config_path)))
+        asyncio.run(main_with_cli(str(config_path)))
     except MemorySubsystemError as exc:
         # Safety net: any dep check we missed surfaces here with a clear message.
         print(f"\n  [ERROR] Failed to start: {exc}")

@@ -328,7 +328,7 @@ def test_cordbeat_init_cli_delegates_to_run_wizard(tmp_path: Path) -> None:
     config_file = tmp_path / "config.yaml"
     with (
         patch("cordbeat.setup_wizard.run_wizard") as mock_rw,
-        patch("cordbeat.main.main", new_callable=MagicMock) as mock_main,
+        patch("cordbeat.main.main_with_cli", new_callable=MagicMock) as mock_main,
         patch("asyncio.run") as mock_run,
     ):
         mock_rw.return_value = config_file

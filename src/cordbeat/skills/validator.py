@@ -105,6 +105,10 @@ ALLOWED_IMPORTS: frozenset[str] = frozenset(
         "httpcore",
         # Markdown / YAML / other lightweight parsers often useful
         "yaml",
+        # Image processing (Pillow / PIL) — used by the draw skill
+        "PIL",
+        # In-memory byte streams — needed for Pillow PNG/JPEG output
+        "io",
     }
 )
 

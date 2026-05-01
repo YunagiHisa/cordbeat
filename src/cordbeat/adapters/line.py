@@ -136,7 +136,9 @@ class LineAdapter(RetryableConnection):
         if self._http_runner:
             await self._http_runner.cleanup()
 
-    async def _dispatch_core_message(self, platform_user_id: str, content: str) -> None:
+    async def _dispatch_core_message(
+        self, platform_user_id: str, content: str, images: list[str]
+    ) -> None:
         await self._send_to_line(platform_user_id, content)
 
     async def _forward_to_core(self, *, user_id: str, text: str) -> None:

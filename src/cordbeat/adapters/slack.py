@@ -120,7 +120,9 @@ class SlackAdapter(RetryableConnection):
             await self._socket_client.disconnect()
             await self._socket_client.close()
 
-    async def _dispatch_core_message(self, platform_user_id: str, content: str) -> None:
+    async def _dispatch_core_message(
+        self, platform_user_id: str, content: str, images: list[str]
+    ) -> None:
         await self._send_to_slack(platform_user_id, content)
 
     async def _forward_to_core(self, *, user_id: str, text: str, channel: str) -> None:

@@ -91,7 +91,9 @@ class SignalAdapter(RetryableConnection):
         if self._http_client:
             await self._http_client.aclose()
 
-    async def _dispatch_core_message(self, platform_user_id: str, content: str) -> None:
+    async def _dispatch_core_message(
+        self, platform_user_id: str, content: str, images: list[str]
+    ) -> None:
         await self._send_to_signal(platform_user_id, content)
 
     def _next_request_id(self) -> int:

@@ -188,9 +188,13 @@ class TelegramAdapter(RetryableConnection):
             await self._app.stop()
             await self._app.shutdown()
 
-    async def _dispatch_core_message(self, platform_user_id: str, content: str) -> None:
+    async def _dispatch_core_message(
+        self, platform_user_id: str, content: str, images: list[str]
+    ) -> None:
         if self._tts is not None and platform_user_id in self._voice_users:
             await self._send_voice_to_telegram(platform_user_id, content)
+        elif images:
+            await self._send_images_to_telegram(platform_user_id, content, images)
         else:
             await self._send_to_telegram(platform_user_id, content)
 
@@ -297,3 +301,44 @@ class TelegramAdapter(RetryableConnection):
                 "Failed to send message to Telegram chat %s",
                 chat_id,
             )
+
+    async def _send_images_to_telegram(
+        self,
+        platform_user_id: str,
+        caption: str,
+        images: list[str],
+    ) -> None:
+        """Send base64-encoded images to Telegram, falling back to text on error."""
+        if not self._app or not platform_user_id:
+            return
+
+        chat_id = self._chat_map.get(platform_user_id)
+        if chat_id is None:
+            try:
+                chat_id = int(platform_user_id)
+            except ValueError:
+                await self._send_to_telegram(platform_user_id, caption)
+                return
+
+        import base64  # noqa: PLC0415
+
+        sent_any = False
+        for idx, b64 in enumerate(images):
+            try:
+                raw = base64.b64decode(b64)
+                photo_io = io.BytesIO(raw)
+                photo_io.name = f"draw_{idx + 1}.png"
+                img_caption = caption if idx == 0 else None
+                await self._app.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo_io,
+                    caption=img_caption,
+                )
+                sent_any = True
+            except Exception:
+                logger.exception(
+                    "Failed to send image %d to Telegram chat %s", idx, chat_id
+                )
+
+        if not sent_any:
+            await self._send_to_telegram(platform_user_id, caption)

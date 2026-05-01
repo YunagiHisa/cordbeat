@@ -321,15 +321,15 @@ class TestDiscordAdapterVC:
         adapter._vc_receivers[999] = MagicMock()
         adapter._speak_in_vc = AsyncMock()  # type: ignore[method-assign]
 
-        await adapter._dispatch_core_message("42", "hello from core")
+        await adapter._dispatch_core_message("42", "hello from core", [])
         adapter._speak_in_vc.assert_called_once_with(999, "hello from core")
 
     async def test_dispatch_falls_through_to_text_when_no_vc(self) -> None:
         adapter = self._make_adapter()
         adapter._send_to_discord = AsyncMock()  # type: ignore[method-assign]
 
-        await adapter._dispatch_core_message("99", "text reply")
-        adapter._send_to_discord.assert_called_once_with("99", "text reply")
+        await adapter._dispatch_core_message("99", "text reply", [])
+        adapter._send_to_discord.assert_called_once_with("99", "text reply", [])
 
     async def test_speak_in_vc_no_tts(self) -> None:
         adapter = self._make_adapter()

@@ -1,0 +1,8 @@
+[project]
+name = "cordbeat-skill-draw"
+version = "1.0.0"
+description = "CordBeat builtin skill: draw images with a simple DSL (requires Pillow)"
+requires-python = ">=3.11"
+dependencies = [
+    "pillow>=10.0.0",
+]

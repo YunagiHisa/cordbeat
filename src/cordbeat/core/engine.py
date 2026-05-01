@@ -381,6 +381,7 @@ class CoreEngine:
             "/name": lambda: self._cmd_name(message, arg),
             "/quiet": lambda: self._cmd_quiet(message, arg),
             "/prefer": lambda: self._cmd_prefer(message, arg),
+            "/draw": lambda: self._cmd_draw(message, arg),
         }
 
         handler = handlers.get(cmd)
@@ -673,12 +674,66 @@ class CoreEngine:
         )
         logger.info("Link audit: %s — %s", action, detail)
 
-    async def _send_reply(self, message: GatewayMessage, content: str) -> None:
+    async def _cmd_draw(self, message: GatewayMessage, commands_str: str) -> None:
+        """Run the draw skill and return the generated image."""
+        if not commands_str.strip():
+            await self._send_reply(
+                message,
+                "Usage: /draw <DSL commands>\n"
+                "Example: /draw SIZE 256 256"
+                "\\nCANVAS white\\nCIRCLE 128 128 60 red\\nOUTPUT",
+            )
+            return
+
+        skill = self._skills.get("draw")
+        if skill is None:
+            await self._send_reply(
+                message,
+                "Draw skill is not available. "
+                "Make sure Pillow is installed: uv sync --extra draw",
+            )
+            return
+
+        try:
+            result = await skill.execute(
+                {"commands": commands_str},
+                memory=self._memory,
+            )
+        except Exception:
+            logger.exception("Draw skill execution failed")
+            await self._send_reply(
+                message, "⚠️ Drawing failed. Check your DSL commands."
+            )
+            return
+
+        if "error" in result:
+            await self._send_reply(message, f"⚠️ Draw error: {result['error']}")
+            return
+
+        output_b64: str = result.get("output", "")
+        if not output_b64:
+            await self._send_reply(message, "⚠️ Draw skill returned no image.")
+            return
+
+        warnings: list[str] = result.get("warnings", [])
+        caption = "🖼️ Here's your drawing!"
+        if warnings:
+            caption += "\n⚠️ " + "; ".join(warnings)
+
+        await self._send_reply(message, caption, images=[output_b64])
+
+    async def _send_reply(
+        self,
+        message: GatewayMessage,
+        content: str,
+        images: list[str] | None = None,
+    ) -> None:
         """Send a reply message back to the user."""
         reply = GatewayMessage(
             type=MessageType.ACK,
             adapter_id=message.adapter_id,
             platform_user_id=message.platform_user_id,
             content=content,
+            images=images or [],
         )
         await self._gateway.send_to_adapter(message.adapter_id, reply)

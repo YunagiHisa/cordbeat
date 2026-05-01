@@ -141,12 +141,14 @@ class DiscordAdapter(RetryableConnection):
         if self._bot:
             await self._bot.close()
 
-    async def _dispatch_core_message(self, platform_user_id: str, content: str) -> None:
+    async def _dispatch_core_message(
+        self, platform_user_id: str, content: str, images: list[str]
+    ) -> None:
         guild_id = self._vc_user_guild.get(platform_user_id)
         if guild_id is not None and guild_id in self._vc_receivers:
             await self._speak_in_vc(guild_id, content)
             return
-        await self._send_to_discord(platform_user_id, content)
+        await self._send_to_discord(platform_user_id, content, images)
 
     async def _forward_to_core(self, message: Any) -> None:
         if self._ws is None:
@@ -250,21 +252,38 @@ class DiscordAdapter(RetryableConnection):
         self,
         platform_user_id: str,
         content: str,
+        images: list[str] | None = None,
     ) -> None:
         if not self._bot or not platform_user_id:
             return
+
+        discord_files: list[Any] = []
+        if images:
+            try:
+                import base64  # noqa: PLC0415
+                import io as _io  # noqa: PLC0415
+
+                import discord  # noqa: PLC0415
+
+                for idx, b64 in enumerate(images):
+                    raw = base64.b64decode(b64)
+                    discord_files.append(
+                        discord.File(_io.BytesIO(raw), filename=f"draw_{idx + 1}.png")
+                    )
+            except Exception:
+                logger.exception("Failed to decode images for Discord")
 
         try:
             channel_id = self._user_channels.get(platform_user_id)
             if channel_id:
                 channel = self._bot.get_channel(channel_id)
                 if channel:
-                    await channel.send(content)
+                    await channel.send(content, files=discord_files)
                     return
 
             user = await self._bot.fetch_user(int(platform_user_id))
             if user:
-                await user.send(content)
+                await user.send(content, files=discord_files)
         except Exception:
             logger.exception(
                 "Failed to send message to Discord user %s",

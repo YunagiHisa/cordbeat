@@ -285,7 +285,9 @@ class TestGatewayServer:
 class _ConcreteConnection(RetryableConnection):
     """Concrete subclass for testing the ABC."""
 
-    async def _dispatch_core_message(self, platform_user_id: str, content: str) -> None:
+    async def _dispatch_core_message(
+        self, platform_user_id: str, content: str, images: list[str]
+    ) -> None:
         raise NotImplementedError
 
 
@@ -294,7 +296,7 @@ class TestRetryableConnection:
         """Base _dispatch_core_message raises NotImplementedError."""
         conn = _ConcreteConnection()
         try:
-            await conn._dispatch_core_message("u1", "hello")
+            await conn._dispatch_core_message("u1", "hello", [])
             raise AssertionError("Should have raised")  # noqa: TRY301
         except NotImplementedError:
             pass
@@ -303,7 +305,7 @@ class TestRetryableConnection:
         conn = _ConcreteConnection()
         dispatched: list[tuple[str, str]] = []
 
-        async def fake_dispatch(uid: str, content: str) -> None:
+        async def fake_dispatch(uid: str, content: str, images: list[str]) -> None:
             dispatched.append((uid, content))
 
         conn._dispatch_core_message = fake_dispatch  # type: ignore[assignment]
@@ -327,7 +329,7 @@ class TestRetryableConnection:
         conn = _ConcreteConnection()
         dispatched: list[tuple[str, str]] = []
 
-        async def fake_dispatch(uid: str, content: str) -> None:
+        async def fake_dispatch(uid: str, content: str, images: list[str]) -> None:
             dispatched.append((uid, content))
 
         conn._dispatch_core_message = fake_dispatch  # type: ignore[assignment]

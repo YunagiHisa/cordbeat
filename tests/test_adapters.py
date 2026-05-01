@@ -147,7 +147,7 @@ class TestDiscordAdapter:
         adapter._user_channels["123"] = 456
 
         await adapter._send_to_discord("123", "hello")
-        mock_channel.send.assert_awaited_once_with("hello")
+        mock_channel.send.assert_awaited_once_with("hello", files=[])
 
     async def test_send_to_discord_fallback_dm(self) -> None:
         from cordbeat.adapters.discord import DiscordAdapter
@@ -161,7 +161,7 @@ class TestDiscordAdapter:
         adapter._user_channels["123"] = 456
 
         await adapter._send_to_discord("123", "hello")
-        mock_user.send.assert_awaited_once_with("hello")
+        mock_user.send.assert_awaited_once_with("hello", files=[])
 
 
 class TestTelegramAdapter:

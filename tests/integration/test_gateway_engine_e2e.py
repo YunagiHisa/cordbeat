@@ -26,7 +26,6 @@ from cordbeat.memory import MemoryStore
 from cordbeat.models import GatewayMessage, MessageType
 from cordbeat.skills import SkillRegistry
 
-
 # ── Helpers ────────────────────────────────────────────────────────────
 
 

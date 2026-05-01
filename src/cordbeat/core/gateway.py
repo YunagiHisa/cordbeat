@@ -88,13 +88,16 @@ class RetryableConnection(ABC):
                 msg_type = data.get("type", "")
                 content = data.get("content", "")
                 platform_user_id = data.get("platform_user_id", "")
+                images: list[str] = data.get("images") or []
                 if msg_type in ("message", "heartbeat_message", "error"):
-                    await self._dispatch_core_message(platform_user_id, content)
+                    await self._dispatch_core_message(platform_user_id, content, images)
         except websockets.ConnectionClosed:
             logger.info("Core connection closed")
 
     @abstractmethod
-    async def _dispatch_core_message(self, platform_user_id: str, content: str) -> None:
+    async def _dispatch_core_message(
+        self, platform_user_id: str, content: str, images: list[str]
+    ) -> None:
         """Override in subclass to route messages to the platform."""
 
 
@@ -199,6 +202,7 @@ class GatewayServer:
                 "content": message.content,
                 "timestamp": message.timestamp.isoformat(),
                 "metadata": message.metadata,
+                "images": message.images,
             }
         )
         await ws.send(payload)

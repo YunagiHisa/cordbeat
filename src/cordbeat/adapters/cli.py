@@ -33,6 +33,7 @@ async def main(ws_url: str = "ws://localhost:8765", auth_token: str = "") -> Non
                     data = json.loads(raw)
                     msg_type = data.get("type", "")
                     content = data.get("content", "")
+                    images: list[str] = data.get("images") or []
                     _waiting = False
                     _reply_event.set()
                     if msg_type == "error":
@@ -41,6 +42,15 @@ async def main(ws_url: str = "ws://localhost:8765", auth_token: str = "") -> Non
                         print(f"\nBot: {content}")
                     else:
                         print(f"\n[{msg_type}] {content}")
+                    if images:
+                        import base64 as _b64  # noqa: PLC0415
+
+                        for idx, b64 in enumerate(images):
+                            try:
+                                size = len(_b64.b64decode(b64))
+                                print(f"  [🖼️ 画像 {idx + 1}: PNG, {size:,} bytes]")
+                            except Exception:
+                                print(f"  [🖼️ 画像 {idx + 1}: (decode error)]")
                     print("> ", end="", flush=True)
             except websockets.ConnectionClosed:
                 print("\nDisconnected from Core.")

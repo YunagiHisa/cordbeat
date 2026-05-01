@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cordbeat.skill_env import SkillEnvError, SkillEnvManager
+from cordbeat.skills.env import SkillEnvError, SkillEnvManager
 
 
 @pytest.fixture()
@@ -57,9 +57,9 @@ async def test_prepare_builds_env_on_first_call(
 ) -> None:
     mgr = SkillEnvManager(cache_root=cache_root)
 
-    with patch("cordbeat.skill_env.shutil.which", return_value="/usr/bin/uv"):
+    with patch("cordbeat.skills.env.shutil.which", return_value="/usr/bin/uv"):
         with patch(
-            "cordbeat.skill_env.asyncio.create_subprocess_exec",
+            "cordbeat.skills.env.asyncio.create_subprocess_exec",
             new=AsyncMock(return_value=_fake_uv_proc()),
         ) as spawn:
             python_exe = await mgr.prepare(skill_dir_with_deps, "myskill")
@@ -74,7 +74,7 @@ async def test_prepare_builds_env_on_first_call(
 async def test_prepare_cache_hit_skips_build(
     cache_root: Path, skill_dir_with_deps: Path
 ) -> None:
-    from cordbeat.skill_env import _python_in
+    from cordbeat.skills.env import _python_in
 
     mgr = SkillEnvManager(cache_root=cache_root)
     env_dir = cache_root / "myskill"
@@ -88,9 +88,9 @@ async def test_prepare_cache_hit_skips_build(
     ).hexdigest()
     (env_dir / ".cordbeat-skill-hash").write_text(h, encoding="utf-8")
 
-    with patch("cordbeat.skill_env.shutil.which", return_value="/usr/bin/uv"):
+    with patch("cordbeat.skills.env.shutil.which", return_value="/usr/bin/uv"):
         with patch(
-            "cordbeat.skill_env.asyncio.create_subprocess_exec",
+            "cordbeat.skills.env.asyncio.create_subprocess_exec",
             new=AsyncMock(return_value=_fake_uv_proc()),
         ) as spawn:
             result = await mgr.prepare(skill_dir_with_deps, "myskill")
@@ -107,9 +107,9 @@ async def test_prepare_hash_mismatch_triggers_rebuild(
     env_dir.mkdir(parents=True)
     (env_dir / ".cordbeat-skill-hash").write_text("stalehash", encoding="utf-8")
 
-    with patch("cordbeat.skill_env.shutil.which", return_value="/usr/bin/uv"):
+    with patch("cordbeat.skills.env.shutil.which", return_value="/usr/bin/uv"):
         with patch(
-            "cordbeat.skill_env.asyncio.create_subprocess_exec",
+            "cordbeat.skills.env.asyncio.create_subprocess_exec",
             new=AsyncMock(return_value=_fake_uv_proc()),
         ) as spawn:
             await mgr.prepare(skill_dir_with_deps, "myskill")
@@ -121,7 +121,7 @@ async def test_prepare_raises_when_uv_missing(
     cache_root: Path, skill_dir_with_deps: Path
 ) -> None:
     mgr = SkillEnvManager(cache_root=cache_root)
-    with patch("cordbeat.skill_env.shutil.which", return_value=None):
+    with patch("cordbeat.skills.env.shutil.which", return_value=None):
         with pytest.raises(SkillEnvError, match="uv is not available"):
             await mgr.prepare(skill_dir_with_deps, "myskill")
 
@@ -130,9 +130,9 @@ async def test_prepare_raises_when_uv_fails(
     cache_root: Path, skill_dir_with_deps: Path
 ) -> None:
     mgr = SkillEnvManager(cache_root=cache_root)
-    with patch("cordbeat.skill_env.shutil.which", return_value="/usr/bin/uv"):
+    with patch("cordbeat.skills.env.shutil.which", return_value="/usr/bin/uv"):
         with patch(
-            "cordbeat.skill_env.asyncio.create_subprocess_exec",
+            "cordbeat.skills.env.asyncio.create_subprocess_exec",
             new=AsyncMock(return_value=_fake_uv_proc(1, b"network error")),
         ):
             with pytest.raises(SkillEnvError, match="uv venv .* failed"):
@@ -146,7 +146,7 @@ async def test_invalid_pyproject_raises(cache_root: Path, tmp_path: Path) -> Non
         "[project]\ndependencies = 'not a list'\n", encoding="utf-8"
     )
     mgr = SkillEnvManager(cache_root=cache_root)
-    with patch("cordbeat.skill_env.shutil.which", return_value="/usr/bin/uv"):
+    with patch("cordbeat.skills.env.shutil.which", return_value="/usr/bin/uv"):
         with pytest.raises(SkillEnvError, match="must be a list"):
             await mgr.prepare(skill_dir, "broken")
 
@@ -159,9 +159,9 @@ async def test_no_deps_skips_pip_install(cache_root: Path, tmp_path: Path) -> No
         encoding="utf-8",
     )
     mgr = SkillEnvManager(cache_root=cache_root)
-    with patch("cordbeat.skill_env.shutil.which", return_value="/usr/bin/uv"):
+    with patch("cordbeat.skills.env.shutil.which", return_value="/usr/bin/uv"):
         with patch(
-            "cordbeat.skill_env.asyncio.create_subprocess_exec",
+            "cordbeat.skills.env.asyncio.create_subprocess_exec",
             new=AsyncMock(return_value=_fake_uv_proc()),
         ) as spawn:
             await mgr.prepare(skill_dir, "empty")

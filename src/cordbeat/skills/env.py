@@ -27,7 +27,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from .exceptions import SkillError
+from ..exceptions import SkillError
 
 logger = logging.getLogger(__name__)
 

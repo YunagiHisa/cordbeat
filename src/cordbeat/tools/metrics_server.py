@@ -16,7 +16,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable
 
-from cordbeat.metrics import render_prometheus
+from .metrics import render_prometheus
 
 logger = logging.getLogger(__name__)
 

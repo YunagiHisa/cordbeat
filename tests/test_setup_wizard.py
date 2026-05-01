@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from cordbeat.setup_wizard import (
+from cordbeat.tools.wizard import (
     _build_config,
     _build_soul_yaml,
     _probe_llama_cpp,
@@ -198,20 +198,19 @@ class TestRunWizard:
     def test_ollama_detected_zero_questions(
         self, tmp_path: Path, ollama_server: str
     ) -> None:
-        """When Ollama is detected, wizard asks language then name."""
-        inputs = iter(["en", "TestBot"])
+        """When Ollama is detected, wizard asks name then language."""
+        inputs = iter(["TestBot", "en"])
         with (
             patch(
-                "cordbeat.setup_wizard._probe_ollama",
+                "cordbeat.tools.wizard._probe_ollama",
                 return_value="llama3:latest",
             ),
             patch("builtins.input", side_effect=inputs),
             patch(
-                "cordbeat.setup_wizard._probe_provider",
+                "cordbeat.tools.wizard._probe_provider",
                 return_value=True,
             ),
-            patch("cordbeat.setup_wizard._select_skills"),
-            patch("cordbeat.setup_wizard._select_extras"),
+            patch("cordbeat.tools.wizard._select_adapter", return_value=("none", None)),
         ):
             config_path = run_wizard(tmp_path)
 
@@ -226,18 +225,17 @@ class TestRunWizard:
     def test_ollama_not_found_fallback(self, tmp_path: Path) -> None:
         """When Ollama is not detected, wizard asks provider details."""
         inputs = iter(
-            ["ja", "ollama", "http://myhost:11434", "mistral", "テストボット"]
+            ["ollama", "http://myhost:11434", "mistral", "テストボット", "ja"]
         )
         with (
-            patch("cordbeat.setup_wizard._probe_ollama", return_value=None),
-            patch("cordbeat.setup_wizard._probe_llama_cpp", return_value=None),
+            patch("cordbeat.tools.wizard._probe_ollama", return_value=None),
+            patch("cordbeat.tools.wizard._probe_llama_cpp", return_value=None),
             patch("builtins.input", side_effect=inputs),
             patch(
-                "cordbeat.setup_wizard._probe_provider",
+                "cordbeat.tools.wizard._probe_provider",
                 return_value=False,
             ),
-            patch("cordbeat.setup_wizard._select_skills"),
-            patch("cordbeat.setup_wizard._select_extras"),
+            patch("cordbeat.tools.wizard._select_adapter", return_value=("none", None)),
         ):
             config_path = run_wizard(tmp_path)
 
@@ -247,20 +245,19 @@ class TestRunWizard:
 
     def test_llama_cpp_detected(self, tmp_path: Path) -> None:
         """When llama.cpp is detected (but not Ollama), wizard auto-configures."""
-        inputs = iter(["en", "TestBot"])
+        inputs = iter(["TestBot", "en"])
         with (
-            patch("cordbeat.setup_wizard._probe_ollama", return_value=None),
+            patch("cordbeat.tools.wizard._probe_ollama", return_value=None),
             patch(
-                "cordbeat.setup_wizard._probe_llama_cpp",
+                "cordbeat.tools.wizard._probe_llama_cpp",
                 return_value="my-gguf-model",
             ),
             patch("builtins.input", side_effect=inputs),
             patch(
-                "cordbeat.setup_wizard._probe_provider",
+                "cordbeat.tools.wizard._probe_provider",
                 return_value=True,
             ),
-            patch("cordbeat.setup_wizard._select_skills"),
-            patch("cordbeat.setup_wizard._select_extras"),
+            patch("cordbeat.tools.wizard._select_adapter", return_value=("none", None)),
         ):
             config_path = run_wizard(tmp_path)
 
@@ -273,24 +270,23 @@ class TestRunWizard:
         """OpenAI provider asks for API key."""
         inputs = iter(
             [
-                "en",
                 "openai",
                 "https://api.openai.com/v1",
                 "gpt-4",
                 "sk-test123",
                 "MyBot",
+                "en",
             ]
         )
         with (
-            patch("cordbeat.setup_wizard._probe_ollama", return_value=None),
-            patch("cordbeat.setup_wizard._probe_llama_cpp", return_value=None),
+            patch("cordbeat.tools.wizard._probe_ollama", return_value=None),
+            patch("cordbeat.tools.wizard._probe_llama_cpp", return_value=None),
             patch("builtins.input", side_effect=inputs),
             patch(
-                "cordbeat.setup_wizard._probe_provider",
+                "cordbeat.tools.wizard._probe_provider",
                 return_value=True,
             ),
-            patch("cordbeat.setup_wizard._select_skills"),
-            patch("cordbeat.setup_wizard._select_extras"),
+            patch("cordbeat.tools.wizard._select_adapter", return_value=("none", None)),
         ):
             config_path = run_wizard(tmp_path)
 
@@ -299,19 +295,18 @@ class TestRunWizard:
         assert cfg["ai_backend"]["options"]["api_key"] == "sk-test123"
 
     def test_directory_structure_created(self, tmp_path: Path) -> None:
-        inputs = iter(["en", "Bot"])
+        inputs = iter(["Bot", "en"])
         with (
             patch(
-                "cordbeat.setup_wizard._probe_ollama",
+                "cordbeat.tools.wizard._probe_ollama",
                 return_value="llama3",
             ),
             patch("builtins.input", side_effect=inputs),
             patch(
-                "cordbeat.setup_wizard._probe_provider",
+                "cordbeat.tools.wizard._probe_provider",
                 return_value=True,
             ),
-            patch("cordbeat.setup_wizard._select_skills"),
-            patch("cordbeat.setup_wizard._select_extras"),
+            patch("cordbeat.tools.wizard._select_adapter", return_value=("none", None)),
         ):
             run_wizard(tmp_path)
 
@@ -327,7 +322,7 @@ def test_cordbeat_init_cli_delegates_to_run_wizard(tmp_path: Path) -> None:
     """``cordbeat_init_cli`` runs wizard then starts CordBeat."""
     config_file = tmp_path / "config.yaml"
     with (
-        patch("cordbeat.setup_wizard.run_wizard") as mock_rw,
+        patch("cordbeat.tools.wizard.run_wizard") as mock_rw,
         patch("cordbeat.main.main_with_cli", new_callable=MagicMock) as mock_main,
         patch("asyncio.run") as mock_run,
     ):

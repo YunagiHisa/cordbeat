@@ -27,7 +27,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 
-from .exceptions import SkillError
+from ..exceptions import SkillError
 
 __all__ = [
     "SkillValidationError",

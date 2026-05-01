@@ -21,16 +21,16 @@ dependencies = [
 [project.scripts]
 cordbeat = "cordbeat.main:cli"
 cordbeat-chat = "cordbeat.main:cli_chat"
-cordbeat-init = "cordbeat.setup_wizard:cordbeat_init_cli"
-cordbeat-discord = "cordbeat.adapter_runner:discord_cli"
-cordbeat-telegram = "cordbeat.adapter_runner:telegram_cli"
-cordbeat-slack = "cordbeat.adapter_runner:slack_cli"
-cordbeat-line = "cordbeat.adapter_runner:line_cli"
-cordbeat-whatsapp = "cordbeat.adapter_runner:whatsapp_cli"
-cordbeat-signal = "cordbeat.adapter_runner:signal_cli"
-cordbeat-backup = "cordbeat.backup_cli:backup_main"
-cordbeat-restore = "cordbeat.backup_cli:restore_main"
-cordbeat-export = "cordbeat.export_cli:export_main"
+cordbeat-init = "cordbeat.tools.wizard:cordbeat_init_cli"
+cordbeat-discord = "cordbeat.adapters.runner:discord_cli"
+cordbeat-telegram = "cordbeat.adapters.runner:telegram_cli"
+cordbeat-slack = "cordbeat.adapters.runner:slack_cli"
+cordbeat-line = "cordbeat.adapters.runner:line_cli"
+cordbeat-whatsapp = "cordbeat.adapters.runner:whatsapp_cli"
+cordbeat-signal = "cordbeat.adapters.runner:signal_cli"
+cordbeat-backup = "cordbeat.tools.backup:backup_main"
+cordbeat-restore = "cordbeat.tools.backup:restore_main"
+cordbeat-export = "cordbeat.tools.export:export_main"
 
 [project.optional-dependencies]
 discord = ["discord.py>=2.0"]
@@ -69,7 +69,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
 # ast.NodeVisitor requires specific method names (visit_Name, visit_Call, ...)
-"src/cordbeat/skill_validator.py" = ["N802"]
+"src/cordbeat/skills/validator.py" = ["N802"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -81,12 +81,6 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = [
-    "cordbeat.discord_adapter",
-    "cordbeat.telegram_adapter",
-    "cordbeat.slack_adapter",
-    "cordbeat.line_adapter",
-    "cordbeat.whatsapp_adapter",
-    "cordbeat.signal_adapter",
     "cordbeat.voice_recv",
     "cordbeat.rvc_backend",
     "cordbeat.adapters.discord",
@@ -126,16 +120,16 @@ omit = [
     # skill_runner runs only inside skill subprocesses; pytest's coverage
     # collector cannot trace it through the sandboxed -I invocation.
     # End-to-end exercise happens via test_skills_subprocess.py.
-    "*/cordbeat/skill_runner.py",
+    "*/cordbeat/skills/runner.py",
     # Optional platform adapter skeletons. The respective SDKs
     # (line-bot-sdk, slack-sdk, etc.) are extras-only deps and not
     # installed in the default CI environment, so the SDK-installed
     # branches cannot be exercised here. Discord/Telegram remain
     # measured because their SDKs are part of the default test deps.
-    "*/cordbeat/line_adapter.py",
-    "*/cordbeat/slack_adapter.py",
-    "*/cordbeat/whatsapp_adapter.py",
-    "*/cordbeat/signal_adapter.py",
+    "*/cordbeat/adapters/line.py",
+    "*/cordbeat/adapters/slack.py",
+    "*/cordbeat/adapters/whatsapp.py",
+    "*/cordbeat/adapters/signal.py",
     # Voice receive and RVC backend require optional extras (discord-vc, rvc)
     # that are not installed in the default test environment.
     "*/cordbeat/voice_recv.py",

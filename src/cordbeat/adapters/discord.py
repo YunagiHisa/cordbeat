@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import logging
 from collections import OrderedDict
@@ -12,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from cordbeat.config import AdapterConfig, STTConfig, TTSConfig
+from cordbeat.config import AdapterConfig, RVCConfig, STTConfig, TTSConfig
 from cordbeat.core.gateway import RetryableConnection
 
 if TYPE_CHECKING:
@@ -39,6 +40,7 @@ class DiscordAdapter(RetryableConnection):
         *,
         stt_config: STTConfig | None = None,
         tts_config: TTSConfig | None = None,
+        rvc_config: RVCConfig | None = None,
     ) -> None:
         self._config = config
         self._ws_url = config.core_ws_url
@@ -47,13 +49,14 @@ class DiscordAdapter(RetryableConnection):
         self._ws: Any = None
         self._running = False
         self._max_backoff = config.reconnect_max_backoff
-        # Bounded LRU of last channel per user for guild replies. Inserts
-        # beyond the cap evict the least-recently-used entry so that the
-        # process does not grow without bound over time.
         self._user_channels: OrderedDict[str, int] = OrderedDict()
 
+        # Voice channel state
+        self._vc_receivers: dict[int, Any] = {}
+        self._vc_muted: set[int] = set()
+        self._vc_user_guild: dict[str, int] = {}
+
         self._stt: STTBackend | None = None
-        # TTS stored for future VC support; not used in text channels yet.
         self._tts: TTSBackend | None = None
 
         if stt_config is not None and stt_config.enabled:
@@ -62,9 +65,9 @@ class DiscordAdapter(RetryableConnection):
             self._stt = create_stt_backend(stt_config)
 
         if tts_config is not None and tts_config.enabled:
-            from cordbeat.ai.tts import create_tts_backend
+            from cordbeat.ai.tts import create_tts_with_rvc
 
-            self._tts = create_tts_backend(tts_config)
+            self._tts = create_tts_with_rvc(tts_config, rvc_config)
 
     async def start(self) -> None:
         try:
@@ -83,13 +86,40 @@ class DiscordAdapter(RetryableConnection):
 
         intents = discord.Intents.default()
         intents.message_content = True
+        intents.voice_states = True
         self._bot = discord.Client(intents=intents)
         self._running = True
+
+        self._tree = discord.app_commands.CommandTree(self._bot)
+
+        @self._tree.command(name="join", description="Join your current voice channel")
+        async def join_cmd(interaction: Any) -> None:
+            await self._handle_join(interaction)
+
+        @self._tree.command(name="leave", description="Leave the voice channel")
+        async def leave_cmd(interaction: Any) -> None:
+            await self._handle_leave(interaction)
+
+        @self._tree.command(name="mute", description="Toggle voice mute on/off")
+        async def mute_cmd(interaction: Any) -> None:
+            await self._handle_mute(interaction)
 
         @self._bot.event
         async def on_ready() -> None:
             logger.info("Discord bot logged in as %s", self._bot.user)
+            try:
+                await self._tree.sync()
+                logger.info("Slash commands synced globally")
+            except Exception:
+                logger.exception("Failed to sync slash commands")
             asyncio.create_task(self._connect_to_core())
+
+        @self._bot.event
+        async def on_interaction(interaction: Any) -> None:
+            try:
+                await self._tree.on_interaction(interaction)
+            except Exception:
+                logger.exception("Interaction handling error")
 
         @self._bot.event
         async def on_message(message: discord.Message) -> None:
@@ -112,6 +142,10 @@ class DiscordAdapter(RetryableConnection):
             await self._bot.close()
 
     async def _dispatch_core_message(self, platform_user_id: str, content: str) -> None:
+        guild_id = self._vc_user_guild.get(platform_user_id)
+        if guild_id is not None and guild_id in self._vc_receivers:
+            await self._speak_in_vc(guild_id, content)
+            return
         await self._send_to_discord(platform_user_id, content)
 
     async def _forward_to_core(self, message: Any) -> None:
@@ -122,15 +156,14 @@ class DiscordAdapter(RetryableConnection):
         user_id = str(message.author.id)
         channel_id = message.channel.id
 
-        # Cache channel for reply routing (LRU-bounded).
         self._user_channels[user_id] = channel_id
         self._user_channels.move_to_end(user_id)
         if len(self._user_channels) > _USER_CHANNEL_CACHE_MAX:
             self._user_channels.popitem(last=False)
 
-        # Collect image attachments (base64-encoded), cap at 4 images / 10 MB each.
         _max_images = 4
         _image_size_limit = 10 * 1024 * 1024  # 10 MB
+        _audio_size_limit = 25 * 1024 * 1024  # 25 MB
 
         async def _fetch_attachment_images(src_msg: Any, buf: list[str]) -> None:
             for att in getattr(src_msg, "attachments", []):
@@ -158,15 +191,12 @@ class DiscordAdapter(RetryableConnection):
         images: list[str] = []
         await _fetch_attachment_images(message, images)
 
-        # Also check 1-level parent message (reply chain): image may live there.
         ref = getattr(message, "reference", None)
         if ref is not None and len(images) < _max_images:
             ref_msg = getattr(ref, "resolved", None)
             if ref_msg is not None:
                 await _fetch_attachment_images(ref_msg, images)
 
-        # STT: transcribe audio attachments when the backend is configured.
-        _audio_size_limit = 25 * 1024 * 1024  # 25 MB
         content = message.content
         if self._stt is not None:
             for att in getattr(message, "attachments", []):
@@ -225,7 +255,6 @@ class DiscordAdapter(RetryableConnection):
             return
 
         try:
-            # Try guild channel first, fall back to DM
             channel_id = self._user_channels.get(platform_user_id)
             if channel_id:
                 channel = self._bot.get_channel(channel_id)
@@ -233,7 +262,6 @@ class DiscordAdapter(RetryableConnection):
                     await channel.send(content)
                     return
 
-            # Fallback: DM the user
             user = await self._bot.fetch_user(int(platform_user_id))
             if user:
                 await user.send(content)
@@ -242,3 +270,163 @@ class DiscordAdapter(RetryableConnection):
                 "Failed to send message to Discord user %s",
                 platform_user_id,
             )
+
+    # ── Voice channel helpers ────────────────────────────────────────────────
+
+    async def _on_vc_speech(
+        self, guild_id: int, user_id: int, wav_data: bytes
+    ) -> None:
+        """Called by VoiceReceiver when a user finishes speaking."""
+        if guild_id in self._vc_muted:
+            return
+        if self._ws is None:
+            logger.warning(
+                "Not connected to Core; dropping VC speech from user %d", user_id
+            )
+            return
+        if self._stt is None:
+            logger.debug("STT not configured; ignoring VC speech")
+            return
+
+        try:
+            transcribed = await self._stt.transcribe(wav_data)
+        except Exception:
+            logger.exception("STT transcription error for VC user %d", user_id)
+            return
+
+        if not transcribed or not transcribed.strip():
+            return
+
+        self._vc_user_guild[str(user_id)] = guild_id
+
+        payload = json.dumps(
+            {
+                "type": "message",
+                "adapter_id": ADAPTER_ID,
+                "platform_user_id": str(user_id),
+                "content": transcribed,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "metadata": {
+                    "guild_id": str(guild_id),
+                    "channel_id": "vc",
+                    "via_vc": True,
+                },
+            }
+        )
+        try:
+            await self._ws.send(payload)
+        except Exception:
+            logger.exception("Failed to forward VC speech to Core")
+
+    async def _speak_in_vc(self, guild_id: int, text: str) -> None:
+        """Synthesise *text* to audio and play it in the guild's voice channel."""
+        if not self._tts or not self._bot:
+            return
+
+        guild = self._bot.get_guild(guild_id)
+        if guild is None:
+            return
+
+        vc = guild.voice_client
+        if not vc or not vc.is_connected():
+            return
+
+        try:
+            audio = await self._tts.synthesize(text)
+        except Exception:
+            logger.exception("TTS synthesis failed for VC guild %d", guild_id)
+            return
+
+        if not audio:
+            return
+
+        try:
+            import discord
+
+            source = discord.FFmpegPCMAudio(io.BytesIO(audio), pipe=True)
+            if vc.is_playing():
+                vc.stop()
+            vc.play(source)
+        except Exception:
+            logger.exception("Failed to play TTS audio in VC guild %d", guild_id)
+
+    async def _handle_join(self, interaction: Any) -> None:
+        """Slash command: join the user's voice channel."""
+        user = interaction.user
+        voice_state = getattr(user, "voice", None)
+        if voice_state is None or voice_state.channel is None:
+            await interaction.response.send_message(
+                "❌ You must be in a voice channel first.", ephemeral=True
+            )
+            return
+
+        channel = voice_state.channel
+        guild_id: int = interaction.guild_id
+
+        try:
+            from discord.ext.voice_recv import (
+                VoiceRecvClient,  # type: ignore[import-not-found]
+            )
+        except ImportError:
+            await interaction.response.send_message(
+                "❌ Voice receive support is not installed "
+                "(run `uv sync --extra discord-vc`).",
+                ephemeral=True,
+            )
+            return
+
+        from cordbeat.voice_recv import VoiceReceiver
+
+        try:
+            vc = await channel.connect(cls=VoiceRecvClient)
+        except Exception:
+            logger.exception("Failed to connect to voice channel %s", channel)
+            await interaction.response.send_message(
+                "❌ Failed to join the voice channel.", ephemeral=True
+            )
+            return
+
+        receiver = VoiceReceiver(vc)
+        receiver.on_speech_end(
+            lambda uid, wav: asyncio.ensure_future(
+                self._on_vc_speech(guild_id, uid, wav)
+            )
+        )
+        await receiver.start()
+        self._vc_receivers[guild_id] = receiver
+
+        await interaction.response.send_message(
+            f"✅ Joined **{channel.name}**. Listening…", ephemeral=True
+        )
+        logger.info("Joined VC guild=%d channel=%s", guild_id, channel.name)
+
+    async def _handle_leave(self, interaction: Any) -> None:
+        """Slash command: leave the voice channel."""
+        guild_id: int = interaction.guild_id
+        receiver = self._vc_receivers.pop(guild_id, None)
+        if receiver is not None:
+            await receiver.stop()
+
+        guild = self._bot.get_guild(guild_id) if self._bot else None
+        if guild and guild.voice_client:
+            await guild.voice_client.disconnect()
+
+        stale = [uid for uid, gid in self._vc_user_guild.items() if gid == guild_id]
+        for uid in stale:
+            del self._vc_user_guild[uid]
+        self._vc_muted.discard(guild_id)
+
+        await interaction.response.send_message(
+            "👋 Left the voice channel.", ephemeral=True
+        )
+        logger.info("Left VC guild=%d", guild_id)
+
+    async def _handle_mute(self, interaction: Any) -> None:
+        """Slash command: toggle voice mute."""
+        guild_id: int = interaction.guild_id
+        if guild_id in self._vc_muted:
+            self._vc_muted.discard(guild_id)
+            await interaction.response.send_message("🔊 Unmuted.", ephemeral=True)
+        else:
+            self._vc_muted.add(guild_id)
+            await interaction.response.send_message("🔇 Muted.", ephemeral=True)

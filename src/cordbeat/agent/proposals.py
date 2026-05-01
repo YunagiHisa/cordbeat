@@ -7,8 +7,8 @@ import logging
 import re
 from typing import Any
 
-from cordbeat.gateway import GatewayServer
-from cordbeat.memory import MemoryStore
+from cordbeat.core.gateway import GatewayServer
+from cordbeat.memory.core import MemoryStore
 from cordbeat.models import (
     GatewayMessage,
     HeartbeatDecision,
@@ -17,9 +17,10 @@ from cordbeat.models import (
     ProposalType,
     SoulCaller,
 )
-from cordbeat.skill_validator import SkillValidationError, validate_skill_source
-from cordbeat.skills import SkillRegistry
-from cordbeat.soul import Soul
+from cordbeat.skills.registry import SkillRegistry
+from cordbeat.skills.validator import SkillValidationError, validate_skill_source
+
+from .soul import Soul
 
 logger = logging.getLogger(__name__)
 

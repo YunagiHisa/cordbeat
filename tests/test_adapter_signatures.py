@@ -7,11 +7,11 @@ import hashlib
 import hmac
 import time
 
-from cordbeat.adapter_signing import (
+from cordbeat.adapters.signing import (
     verify_line_signature,
     verify_slack_signature,
 )
-from cordbeat.whatsapp_adapter import verify_whatsapp_signature
+from cordbeat.adapters.whatsapp import verify_whatsapp_signature
 
 
 def _sign(secret: str, body: bytes) -> str:

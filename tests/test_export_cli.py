@@ -10,7 +10,7 @@ from textwrap import dedent
 
 import pytest
 
-from cordbeat import export_cli
+from cordbeat.tools import export as export_cli
 
 
 @pytest.fixture

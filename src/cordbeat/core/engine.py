@@ -10,11 +10,12 @@ from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
 from typing import Any
 
-from cordbeat.ai_backend import AIBackend
+from cordbeat.agent.soul import Soul
+from cordbeat.ai.backend import AIBackend
+from cordbeat.ai.extraction import MemoryExtractor
+from cordbeat.ai.prompt import build_context, build_soul_system_prompt, sanitize
 from cordbeat.config import MemoryConfig
-from cordbeat.extraction import MemoryExtractor
-from cordbeat.gateway import GatewayServer
-from cordbeat.memory import MemoryStore
+from cordbeat.memory.core import MemoryStore
 from cordbeat.models import (
     GatewayMessage,
     MessageType,
@@ -22,9 +23,9 @@ from cordbeat.models import (
     SoulCaller,
     UserSummary,
 )
-from cordbeat.prompt import build_context, build_soul_system_prompt, sanitize
-from cordbeat.skills import SkillRegistry
-from cordbeat.soul import Soul
+from cordbeat.skills.registry import SkillRegistry
+
+from .gateway import GatewayServer
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,25 @@ class CoreEngine:
         if message.type != MessageType.MESSAGE:
             return
 
+        try:
+            await self._process_chat_message(message)
+        except Exception:
+            logger.exception(
+                "Unexpected error processing message from %s", message.adapter_id
+            )
+            error_reply = GatewayMessage(
+                type=MessageType.ERROR,
+                adapter_id=message.adapter_id,
+                platform_user_id=message.platform_user_id,
+                content="An internal error occurred. Please try again.",
+            )
+            try:
+                await self._gateway.send_to_adapter(message.adapter_id, error_reply)
+            except Exception:
+                logger.exception("Failed to send error reply to %s", message.adapter_id)
+
+    async def _process_chat_message(self, message: GatewayMessage) -> None:
+        """Core chat handling — command routing, AI generation, memory storage."""
         # ── Command routing ───────────────────────────────────────────
         text = message.content.strip()
         if text.startswith("/"):
@@ -230,16 +250,22 @@ class CoreEngine:
         try:
             if self._vision_enabled and message.images:
                 try:
-                    return await self._ai.generate_with_vision(
+                    raw = await self._ai.generate_with_vision(
                         prompt=prompt,
                         images=message.images,
                         system=system_prompt,
+                    )
+                    return (
+                        re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
                     )
                 except Exception:
                     logger.warning(
                         "Vision generation failed, falling back to text-only response"
                     )
-            return await self._ai.generate(prompt=prompt, system=system_prompt)
+            raw = await self._ai.generate(prompt=prompt, system=system_prompt)
+            return (
+                re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            )
         except Exception:
             logger.exception("AI generation failed")
             error_reply = GatewayMessage(

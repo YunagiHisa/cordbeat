@@ -8,18 +8,16 @@ import zoneinfo
 from datetime import UTC, datetime, time, tzinfo
 from typing import Any
 
-from cordbeat.ai_backend import AIBackend
-from cordbeat.config import HeartbeatConfig, MemoryConfig
-from cordbeat.gateway import GatewayServer, MessageQueueProtocol
-from cordbeat.heartbeat_proposals import ProposalExecutor
-from cordbeat.heartbeat_sleep import SleepPhase
-from cordbeat.memory import MemoryStore
-from cordbeat.metrics import (
-    HEARTBEAT_TICK_LATENCY,
-    HEARTBEAT_TICK_TOTAL,
-    inc_counter,
-    time_block,
+from cordbeat.ai.backend import AIBackend
+from cordbeat.ai.prompt import build_context, sanitize
+from cordbeat.ai.validation import (
+    validate_heartbeat_decision,
+    validate_heartbeat_triage,
+    validated_ai_json,
 )
+from cordbeat.config import HeartbeatConfig, MemoryConfig
+from cordbeat.core.gateway import GatewayServer, MessageQueueProtocol
+from cordbeat.memory.core import MemoryStore
 from cordbeat.models import (
     GatewayMessage,
     HeartbeatAction,
@@ -28,14 +26,17 @@ from cordbeat.models import (
     SafetyLevel,
     UserSummary,
 )
-from cordbeat.prompt import build_context, sanitize
-from cordbeat.skills import SkillRegistry
-from cordbeat.soul import Soul
-from cordbeat.validation import (
-    validate_heartbeat_decision,
-    validate_heartbeat_triage,
-    validated_ai_json,
+from cordbeat.skills.registry import SkillRegistry
+from cordbeat.tools.metrics import (
+    HEARTBEAT_TICK_LATENCY,
+    HEARTBEAT_TICK_TOTAL,
+    inc_counter,
+    time_block,
 )
+
+from .proposals import ProposalExecutor
+from .sleep import SleepPhase
+from .soul import Soul
 
 logger = logging.getLogger(__name__)
 

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .exceptions import SkillError
+from ..exceptions import SkillError
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +121,7 @@ async def run_skill_in_subprocess(
     }
 
     py_exe = python_executable or sys.executable
-    runner_path = Path(__file__).parent / "skill_runner.py"
+    runner_path = Path(__file__).parent / "runner.py"
     proc = await asyncio.create_subprocess_exec(
         py_exe,
         "-I",  # isolated mode: ignore PYTHONPATH/user site

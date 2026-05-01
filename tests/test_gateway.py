@@ -7,7 +7,7 @@ import json
 from unittest.mock import AsyncMock, patch
 
 from cordbeat.config import GatewayConfig
-from cordbeat.gateway import GatewayServer, MessageQueue, RetryableConnection
+from cordbeat.core.gateway import GatewayServer, MessageQueue, RetryableConnection
 from cordbeat.models import GatewayMessage, MessageType
 
 
@@ -234,7 +234,7 @@ class TestGatewayServer:
         mock_ws.recv = slow_recv
 
         # Patch wait_for timeout to be very short
-        with patch("cordbeat.gateway.asyncio.wait_for", side_effect=TimeoutError):
+        with patch("cordbeat.core.gateway.asyncio.wait_for", side_effect=TimeoutError):
             await server._handle_connection(mock_ws)
         # Should not crash
 

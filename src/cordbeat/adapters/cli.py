@@ -22,20 +22,30 @@ async def main(ws_url: str = "ws://localhost:8765", auth_token: str = "") -> Non
         print(f"Connected: {ack.get('content', 'OK')}")
         print("Type a message and press Enter. Ctrl+C to quit.\n")
 
+        _waiting = False
+        _reply_event = asyncio.Event()
+
         # Listen for incoming messages in background
         async def listener() -> None:
+            nonlocal _waiting
             try:
                 async for raw in ws:
                     data = json.loads(raw)
                     msg_type = data.get("type", "")
                     content = data.get("content", "")
+                    _waiting = False
+                    _reply_event.set()
                     if msg_type == "error":
                         print(f"\n[error] {content}")
+                    elif msg_type in ("message", "ack"):
+                        print(f"\nBot: {content}")
                     else:
                         print(f"\n[{msg_type}] {content}")
                     print("> ", end="", flush=True)
             except websockets.ConnectionClosed:
                 print("\nDisconnected from Core.")
+            finally:
+                _reply_event.set()  # always unblock send loop on exit
 
         listen_task = asyncio.create_task(listener())
 
@@ -56,7 +66,13 @@ async def main(ws_url: str = "ws://localhost:8765", auth_token: str = "") -> Non
                     "content": line.strip(),
                     "timestamp": datetime.now(tz=UTC).isoformat(),
                 }
+                _reply_event.clear()
                 await ws.send(json.dumps(msg))
+                _waiting = True
+                print("  (thinking...) ", end="", flush=True)
+                # Wait for reply before next input; skip if listener already exited
+                if not listen_task.done():
+                    await _reply_event.wait()
         except (KeyboardInterrupt, EOFError):
             print("\nBye!")
         finally:

@@ -7,7 +7,7 @@ when auto-detection fails.
 
 from __future__ import annotations
 
-import shutil
+import os
 import subprocess
 import sys
 import urllib.error
@@ -19,42 +19,41 @@ import yaml
 
 from cordbeat.config import cordbeat_home
 
-# ANSI color helpers
-_P = "\033[95m"   # bright/light pink (magenta bright)
-_M = "\033[35m"   # magenta/dark pink
-_PD = "\033[91m"  # hot pink (bright red)
-_Y = "\033[33m"   # yellow
-_G = "\033[32m"   # green
-_R = "\033[31m"   # red
-_W = "\033[37m"   # white
+# -- ANSI color helpers ────────────────────────────────────────────────
+
+
+def _supports_color() -> bool:
+    """Return True when stdout likely supports ANSI escape codes."""
+    if os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("FORCE_COLOR"):
+        return True
+    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
+
+def _c(text: str, code: str) -> str:
+    """Wrap *text* in an ANSI escape sequence when color is supported."""
+    if not _supports_color():
+        return text
+    return f"{code}{text}\033[0m"
+
+
+_CYAN = "\033[96m"
 _BOLD = "\033[1m"
-_RESET = "\033[0m"
-# aliases kept for internal use
-_C = _P
-_B = _M
+_GREEN = "\033[92m"
+_YELLOW = "\033[93m"
+_RED = "\033[91m"
 
-
-def _colored(text: str) -> str:
-    """Apply alternating pink gradient to each line of banner text."""
-    colors = [_P, _M, _PD, _M, _P, _PD]
-    lines = text.splitlines(keepends=True)
-    result = []
-    for i, line in enumerate(lines):
-        result.append(colors[i % len(colors)] + _BOLD + line + _RESET)
-    return "".join(result)
-
-
-_BANNER_RAW = r"""
+_BANNER_ART = r"""
    ██████╗ ██████╗ ██████╗ ██████╗ ██████╗ ███████╗ █████╗ ████████╗
   ██╔════╝██╔═══██╗██╔══██╗██╔══██╗██╔══██╗██╔════╝██╔══██╗╚══██╔══╝
   ██║     ██║   ██║██████╔╝██║  ██║██████╔╝█████╗  ███████║   ██║
   ██║     ██║   ██║██╔══██╗██║  ██║██╔══██╗██╔══╝  ██╔══██║   ██║
   ╚██████╗╚██████╔╝██║  ██║██████╔╝██████╔╝███████╗██║  ██║   ██║
    ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝   ╚═╝
-
-  A local-first autonomous AI agent that stays by your side.
 """
-_BANNER = _colored(_BANNER_RAW)
+
+_BANNER_SUBTITLE = "  A local-first autonomous AI agent that stays by your side.\n"
 
 _DEFAULT_SOUL_CORE = {
     "immutable_rules": [
@@ -96,7 +95,7 @@ def _check_required_deps() -> None:
         return
 
     pip_names = [_REQUIRED_HEAVY_DEPS[n] for n in missing]
-    print("\n  [ERROR] Missing required dependencies:")
+    print(f"\n  {_c('[ERROR] Missing required dependencies:', _RED)}")
     for imp, pip in zip(missing, pip_names):
         print(f"      {imp!r}  ->  pip install {pip}")
     print(
@@ -112,16 +111,20 @@ def _check_required_deps() -> None:
 
 def _ask(prompt: str, default: str = "") -> str:
     suffix = f" [{default}]" if default else ""
-    answer = input(f"  {_W}{prompt}{_RESET}{suffix}: ").strip()
+    answer = input(f"  {_c(prompt, _BOLD)}{suffix}: ").strip()
     return answer or default
 
 
-def _ask_yn(prompt: str, default: bool = True) -> bool:
-    suffix = "[Y/n]" if default else "[y/N]"
-    answer = input(f"  {_W}{prompt}{_RESET} {suffix}: ").strip().lower()
-    if not answer:
-        return default
-    return answer in ("y", "yes")
+def _ok(msg: str) -> None:
+    print(f"  {_c('✓', _GREEN)} {msg}")
+
+
+def _warn(msg: str) -> None:
+    print(f"  {_c('⚠', _YELLOW)} {msg}")
+
+
+def _err(msg: str) -> None:
+    print(f"  {_c('✗', _RED)} {msg}")
 
 
 # -- Auto-detection ────────────────────────────────────────────────────
@@ -199,6 +202,90 @@ _PROVIDERS: dict[str, dict[str, str]] = {
 }
 
 
+# -- Adapter selection ─────────────────────────────────────────────────
+
+# (key, display_name, pip_packages, import_probe)
+_ADAPTER_SPECS: list[tuple[str, str, list[str], str]] = [
+    ("cli", "CLI only (no extra adapter)", [], ""),
+    ("discord", "Discord", ["discord.py>=2.0"], "discord"),
+    ("telegram", "Telegram", ["python-telegram-bot>=21.0"], "telegram"),
+    ("slack", "Slack", ["slack-sdk>=3.27", "aiohttp>=3.9"], "slack_sdk"),
+    ("line", "LINE", ["line-bot-sdk>=3.11", "aiohttp>=3.9"], "linebot"),
+    ("whatsapp", "WhatsApp", ["aiohttp>=3.9"], "aiohttp"),
+]
+
+_ADAPTER_TOKEN_PROMPT: dict[str, str] = {
+    "discord":  "Discord bot token",
+    "telegram": "Telegram bot token (from @BotFather)",
+    "slack":    "Slack bot token (xoxb-...)",
+    "line":     "LINE channel access token",
+    "whatsapp": "WhatsApp API token",
+}
+
+
+def _is_importable(module: str) -> bool:
+    """Return True if *module* can be imported without error."""
+    if not module:
+        return True
+    try:
+        __import__(module)
+        return True
+    except ImportError:
+        return False
+
+
+def _install_packages(packages: list[str]) -> bool:
+    """Install *packages* using pip in the current interpreter.
+
+    Returns True on success.
+    """
+    cmd = [sys.executable, "-m", "pip", "install", "--quiet", *packages]
+    result = subprocess.run(cmd, capture_output=True)
+    return result.returncode == 0
+
+
+def _select_adapter() -> tuple[str, str | None]:
+    """Prompt the user to choose a platform adapter.
+
+    Returns ``(adapter_key, token_or_none)``.
+    """
+    print("\n  Which platform adapter would you like to use?")
+    for i, (key, name, _, _) in enumerate(_ADAPTER_SPECS, 1):
+        print(f"    {i}. {name}")
+
+    raw = _ask("Choice", "1")
+    try:
+        idx = int(raw) - 1
+        if not 0 <= idx < len(_ADAPTER_SPECS):
+            idx = 0
+    except ValueError:
+        idx = 0
+
+    key, name, packages, probe = _ADAPTER_SPECS[idx]
+
+    if key == "cli":
+        return key, None
+
+    # Check / install dependencies
+    if not _is_importable(probe):
+        _warn(f"{name} requires additional packages: {', '.join(packages)}")
+        do_install = _ask("Install now?", "Y")
+        if do_install.strip().upper() in ("Y", "YES", ""):
+            print("  Installing packages...")
+            if _install_packages(packages):
+                _ok(f"{name} packages installed successfully")
+            else:
+                _err(
+                    f"Installation failed — install manually:\n"
+                    f"    pip install {' '.join(packages)}"
+                )
+
+    # Ask for credentials
+    prompt = _ADAPTER_TOKEN_PROMPT.get(key, f"{name} token")
+    token = _ask(prompt)
+    return key, token or None
+
+
 # -- Soul helpers ──────────────────────────────────────────────────────
 
 
@@ -228,6 +315,8 @@ def _build_config(
     base_url: str,
     model: str,
     api_key: str = "",
+    adapter: str = "cli",
+    adapter_token: str | None = None,
 ) -> dict[str, Any]:
     """Build a config dict with paths anchored to *home*."""
     import secrets
@@ -254,6 +343,11 @@ def _build_config(
     }
     if api_key:
         cfg["ai_backend"]["options"] = {"api_key": api_key}
+    if adapter != "cli":
+        adapter_cfg: dict[str, Any] = {"enabled": True}
+        if adapter_token:
+            adapter_cfg["options"] = {"token": adapter_token}
+        cfg["adapters"][adapter] = adapter_cfg
     return cfg
 
 
@@ -289,195 +383,6 @@ def _write_soul_files(soul_dir: Path, name: str, language: str) -> None:
         print(f"  ✓ {notes_path}")
 
 
-# -- Optional extras ──────────────────────────────────────────────────
-
-_EXTRAS: list[dict[str, Any]] = [
-    {
-        "key": "stt-local",
-        "label": "STT (local)  — Voice→text via Whisper on CPU/GPU",
-        "packages": ["faster-whisper"],
-        "config_hint": "stt.backend: whisper_local",
-    },
-    {
-        "key": "tts-edge",
-        "label": "TTS (Edge)   — Text→voice via Microsoft Edge TTS (free)",
-        "packages": ["edge-tts"],
-        "config_hint": "tts.backend: edge_tts",
-    },
-    {
-        "key": "stt-openai",
-        "label": "STT (OpenAI) — Voice→text via OpenAI Whisper API",
-        "packages": ["openai"],
-        "config_hint": "stt.backend: whisper_openai",
-    },
-    {
-        "key": "tts-openai",
-        "label": "TTS (OpenAI) — Text→voice via OpenAI TTS API",
-        "packages": ["openai"],
-        "config_hint": "tts.backend: openai",
-    },
-]
-
-# -- i18n strings ──────────────────────────────────────────────────────
-
-_T: dict[str, dict[str, str]] = {
-    "en": {
-        "builtin_skills": "Built-in skills:",
-        "enable_skills": "Enable skills (comma-separated numbers / 'all' / 'none')",
-        "optional_features": "Optional features:",
-        "install_extras": "Install extras (comma-separated numbers / 'none')",
-        "installing": "Installing",
-        "installed": "Packages installed",
-        "install_failed": "Install failed (you can run it manually later)",
-        "char_name": "Character name",
-        "lang_prompt": "Response language (en, ja, zh, ko, ...)",
-        "creating_dir": "Creating ~/.cordbeat/ ...",
-    },
-    "ja": {
-        "builtin_skills": "ビルトインスキル:",
-        "enable_skills": "有効にするスキルを選択 (番号をカンマ区切り / 'all' / 'none')",
-        "optional_features": "オプション機能:",
-        "install_extras": "追加パッケージをインストール (番号をカンマ区切り / 'none')",
-        "installing": "インストール中",
-        "installed": "パッケージをインストールしました",
-        "install_failed": "インストール失敗 (後から手動で実行してください)",
-        "char_name": "キャラクター名",
-        "lang_prompt": "応答言語 (en, ja, zh, ko, ...)",
-        "creating_dir": "~/.cordbeat/ を作成中 ...",
-    },
-}
-
-
-def _t(lang: str, key: str) -> str:
-    """Return a translated wizard UI string, falling back to English."""
-    return _T.get(lang, _T["en"]).get(key, _T["en"][key])
-
-
-_SAFE_SKILLS = {
-    "file_read", "file_write", "timer",
-    "web_search", "weather", "api_call", "read_diary",
-}
-_DANGEROUS_SKILLS = {"shell_exec"}
-
-
-def _discover_builtin_skills(bundled: Path, lang: str = "en") -> list[dict[str, str]]:
-    """Return list of {name, description, safety_level} for bundled skills."""
-    skills: list[dict[str, str]] = []
-    if not bundled.is_dir():
-        return skills
-    for d in sorted(bundled.iterdir()):
-        if not d.is_dir():
-            continue
-        yaml_path = d / "skill.yaml"
-        if not yaml_path.exists():
-            continue
-        try:
-            with yaml_path.open(encoding="utf-8") as f:
-                raw = yaml.safe_load(f) or {}
-            # Prefer description_{lang} (e.g. description_en), then description
-            desc = raw.get(f"description_{lang}") or raw.get("description", "")
-            skills.append({
-                "name": d.name,
-                "description": desc,
-                "safety_level": (raw.get("safety") or {}).get("level", "safe"),
-            })
-        except (OSError, yaml.YAMLError):
-            skills.append({"name": d.name, "description": "", "safety_level": "safe"})
-    return skills
-
-
-def _select_skills(bundled: Path, skills_dir: Path, lang: str = "en") -> None:
-    """Interactive skill selection; copies selected skills to skills_dir."""
-    skills = _discover_builtin_skills(bundled, lang)
-    if not skills:
-        return
-
-    print(f"\n  {_BOLD}{_t(lang, 'builtin_skills')}{_RESET}")
-    for i, s in enumerate(skills, 1):
-        safety = s["safety_level"]
-        if safety == "requires_confirmation":
-            color = _Y
-        elif safety == "dangerous":
-            color = _R
-        else:
-            color = _G
-        name_field = s["name"].ljust(14)
-        desc = s["description"]
-        print(f"  {_W}[{i}]{_RESET} {name_field} {color}({safety}){_RESET}  {desc}")
-
-    default_nums = ",".join(
-        str(i) for i, s in enumerate(skills, 1)
-        if s["name"] not in _DANGEROUS_SKILLS
-    )
-    raw = _ask(_t(lang, "enable_skills"), default_nums)
-    raw = raw.strip().lower()
-
-    if raw in ("all", "a"):
-        selected = {s["name"] for s in skills}
-    elif raw in ("none", "n", ""):
-        selected = set()
-    else:
-        selected = set()
-        for part in raw.split(","):
-            part = part.strip()
-            if part.isdigit():
-                idx = int(part) - 1
-                if 0 <= idx < len(skills):
-                    selected.add(skills[idx]["name"])
-
-    skills_dir.mkdir(parents=True, exist_ok=True)
-    for s in skills:
-        dst = skills_dir / s["name"]
-        src = bundled / s["name"]
-        if s["name"] in selected:
-            if not dst.exists():
-                shutil.copytree(src, dst)
-            print(f"  {_G}✓{_RESET} {s['name']}")
-        # Skills not selected are simply not copied; main.py won't add them
-        # unless the user manually copies them later.
-
-
-def _select_extras(lang: str = "en") -> None:
-    """Ask which optional features to install via uv pip."""
-    if not _EXTRAS:
-        return
-
-    if shutil.which("uv") is None:
-        return  # can't install without uv
-
-    print(f"\n  {_BOLD}{_t(lang, 'optional_features')}{_RESET}")
-    for i, ext in enumerate(_EXTRAS, 1):
-        print(f"  {_W}[{i}]{_RESET} {ext['label']}")
-        print(f"        {_W}→ {ext['config_hint']}{_RESET}")
-
-    raw = _ask(_t(lang, "install_extras"), "none")
-    raw = raw.strip().lower()
-    if raw in ("none", "n", ""):
-        return
-
-    to_install: set[str] = set()
-    for part in raw.split(","):
-        part = part.strip()
-        if part.isdigit():
-            idx = int(part) - 1
-            if 0 <= idx < len(_EXTRAS):
-                to_install.update(_EXTRAS[idx]["packages"])
-
-    if not to_install:
-        return
-
-    pkg_list = sorted(to_install)
-    print(f"\n  {_t(lang, 'installing')}: {', '.join(pkg_list)} ...")
-    try:
-        subprocess.run(  # noqa: S603
-            ["uv", "pip", "install", "--quiet", *pkg_list],  # noqa: S607
-            check=True,
-        )
-        print(f"  {_G}✓{_RESET} {_t(lang, 'installed')}")
-    except subprocess.CalledProcessError as exc:
-        print(f"  {_Y}⚠{_RESET} {_t(lang, 'install_failed')}: {exc}")
-
-
 # -- Main wizard ───────────────────────────────────────────────────────
 
 
@@ -487,10 +392,7 @@ def run_wizard(home: Path | None = None) -> Path:
     Returns the path to the created ``config.yaml``.
     """
     home = home or cordbeat_home()
-    print(_BANNER)
-
-    # ── Language selection (first — affects all subsequent prompts) ──
-    language = _ask("Response language (en, ja, zh, ko, ...)", "en")
+    print(_c(_BANNER_ART, _CYAN + _BOLD) + _BANNER_SUBTITLE)
 
     # ── Auto-detect AI backend ───────────────────────────────────
     print("  Detecting AI backend...")
@@ -498,7 +400,7 @@ def run_wizard(home: Path | None = None) -> Path:
 
     if detected_model:
         # Zero-question path — Ollama
-        print(f"  ✓ Ollama detected — model: {detected_model}\n")
+        _ok(f"Ollama detected — model: {detected_model}\n")
         provider = "ollama"
         base_url = "http://localhost:11434"
         model = detected_model
@@ -507,14 +409,14 @@ def run_wizard(home: Path | None = None) -> Path:
         # Try llama.cpp server
         llama_model = _probe_llama_cpp()
         if llama_model:
-            print(f"  ✓ llama.cpp detected — model: {llama_model}\n")
+            _ok(f"llama.cpp detected — model: {llama_model}\n")
             provider = "openai_compat"
             base_url = "http://localhost:8080/v1"
             model = llama_model
             api_key = ""
         else:
             # Fallback: ask minimal questions
-            print("  ✗ No local AI backend detected\n")
+            _err("No local AI backend detected\n")
             print("  Supported providers: ollama, openai, openai_compat (llama.cpp)")
             provider = _ask("AI provider", "ollama")
             preset = _PROVIDERS.get(provider, _PROVIDERS["ollama"])
@@ -525,22 +427,17 @@ def run_wizard(home: Path | None = None) -> Path:
             if provider in ("openai", "openai_compat"):
                 api_key = _ask("API key (leave empty to skip)", "")
 
-    # ── Character name ────────────────────────────────────────────
-    name = _ask(_t(language, "char_name"), "CordBeat")
+    # ── Character name (optional) ─────────────────────────────────
+    name = _ask("Character name", "CordBeat")
+    language = _ask("Response language (en, ja, zh, ko, ...)", "en")
+
+    # ── Adapter selection ─────────────────────────────────────────
+    adapter, adapter_token = _select_adapter()
 
     # ── Create directory structure ────────────────────────────────
-    print(f"\n  {_t(language, 'creating_dir')}")
+    print("\n  Creating ~/.cordbeat/ ...")
     home.mkdir(parents=True, exist_ok=True)
-    skills_dir = home / "skills"
-    skills_dir.mkdir(parents=True, exist_ok=True)
-
-    # ── Built-in skill selection ──────────────────────────────────
-    _here = Path(__file__).resolve()
-    bundled_skills = _here.parent.parent.parent / "skills"
-    _select_skills(bundled_skills, skills_dir, language)
-
-    # ── Optional feature extras ───────────────────────────────────
-    _select_extras(language)
+    (home / "skills").mkdir(parents=True, exist_ok=True)
 
     # ── Write soul files ──────────────────────────────────────────
     _write_soul_files(home / "soul", name, language)
@@ -553,22 +450,24 @@ def run_wizard(home: Path | None = None) -> Path:
         base_url=base_url,
         model=model,
         api_key=api_key,
+        adapter=adapter,
+        adapter_token=adapter_token,
     )
     config_path.write_text(
         yaml.dump(cfg, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
     )
-    print(f"  ✓ {config_path}")
+    _ok(str(config_path))
 
     # ── Connection test ───────────────────────────────────────────
     print(f"\n  Testing {provider} at {base_url}...")
     if _probe_provider(provider, base_url):
-        print("  ✓ AI backend is reachable!")
+        _ok("AI backend is reachable!")
     else:
-        print("  ✗ Could not reach AI backend (you can start it later)")
+        _warn("Could not reach AI backend (you can start it later)")
 
     # ── Done ──────────────────────────────────────────────────────
-    print(f"\n  ✨ {name} is ready to come alive!")
+    print(f"\n  {_c('✨', _YELLOW)} {name} is ready to come alive!")
     print("  Starting CordBeat...\n")
     return config_path
 

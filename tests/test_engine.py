@@ -8,8 +8,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from cordbeat.agent.soul import Soul
 from cordbeat.config import MemoryConfig
-from cordbeat.engine import CoreEngine
+from cordbeat.core.engine import CoreEngine
 from cordbeat.memory import MemoryStore
 from cordbeat.models import (
     Emotion,
@@ -21,7 +22,6 @@ from cordbeat.models import (
     SoulCaller,
 )
 from cordbeat.skills import SkillRegistry
-from cordbeat.soul import Soul
 
 
 @pytest.fixture

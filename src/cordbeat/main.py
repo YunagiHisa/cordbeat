@@ -9,16 +9,16 @@ import signal
 import sys
 from pathlib import Path
 
-from cordbeat.ai_backend import create_backend
+from cordbeat.agent.heartbeat import HeartbeatLoop
+from cordbeat.agent.soul import Soul
+from cordbeat.ai.backend import create_backend
 from cordbeat.config import cordbeat_home, load_config
-from cordbeat.engine import CoreEngine
-from cordbeat.gateway import GatewayServer, MessageQueue
-from cordbeat.heartbeat import HeartbeatLoop
+from cordbeat.core.engine import CoreEngine
+from cordbeat.core.gateway import GatewayServer, MessageQueue
 from cordbeat.memory import MemoryStore
-from cordbeat.metrics import REGISTRY as METRICS_REGISTRY
-from cordbeat.metrics_server import PrometheusServer
 from cordbeat.skills import SandboxConfig, SkillRateLimiter, SkillRegistry
-from cordbeat.soul import Soul
+from cordbeat.tools.metrics import REGISTRY as METRICS_REGISTRY
+from cordbeat.tools.metrics_server import PrometheusServer
 
 logger = logging.getLogger("cordbeat")
 
@@ -39,7 +39,7 @@ def _resolve_config_path() -> str:
         return "config.yaml"
 
     # Nothing found — run wizard
-    from cordbeat.setup_wizard import run_wizard
+    from cordbeat.tools.wizard import run_wizard
 
     return str(run_wizard())
 
@@ -231,7 +231,7 @@ async def main_with_cli(config_path: str) -> None:
     """
     import socket
 
-    from cordbeat.cli_adapter import main as cli_main
+    from cordbeat.adapters.cli import main as cli_main
 
     # Load config early so we know the WS URL & auth token.
     _cfg = load_config(config_path)
@@ -243,13 +243,29 @@ async def main_with_cli(config_path: str) -> None:
     # Wait until the WS port is actually accepting connections (up to 10 s).
     host = _cfg.gateway.host
     port = _cfg.gateway.port
+    connected = False
     for _ in range(50):
         await asyncio.sleep(0.2)
+        # Check if the server task crashed during startup.
+        if server_task.done():
+            exc = server_task.exception()
+            raise RuntimeError(
+                f"CordBeat server failed to start: {exc}"
+            ) from exc
         try:
             with socket.create_connection((host, port), timeout=0.1):
+                connected = True
                 break
         except OSError:
             pass
+
+    if not connected:
+        server_task.cancel()
+        raise RuntimeError(
+            f"CordBeat server did not open {host}:{port} within 10 s. "
+            "Check logs for startup errors (e.g. Ollama not running, "
+            "missing config, or port already in use)."
+        )
 
     try:
         await cli_main(ws_url, auth_token)
@@ -264,7 +280,7 @@ async def main_with_cli(config_path: str) -> None:
 def cli() -> None:
     # Handle subcommands
     if len(sys.argv) > 1 and sys.argv[1] == "doctor":
-        from cordbeat.doctor import run_doctor
+        from cordbeat.tools.doctor import run_doctor
 
         raise SystemExit(run_doctor())
 

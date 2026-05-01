@@ -6,8 +6,8 @@ import asyncio
 
 import pytest
 
-from cordbeat.metrics import REGISTRY
-from cordbeat.metrics_server import PrometheusServer
+from cordbeat.tools.metrics import REGISTRY
+from cordbeat.tools.metrics_server import PrometheusServer
 
 
 async def _http_get(host: str, port: int, path: str) -> tuple[int, bytes]:

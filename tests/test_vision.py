@@ -5,13 +5,13 @@ from __future__ import annotations
 import base64
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from cordbeat.ai_backend import (
+from cordbeat.ai.backend import (
     OllamaBackend,
     OpenAICompatBackend,
     _detect_image_mime,
 )
 from cordbeat.config import AIBackendConfig
-from cordbeat.engine import CoreEngine
+from cordbeat.core.engine import CoreEngine
 from cordbeat.models import GatewayMessage, MessageType
 
 # ── Helper ────────────────────────────────────────────────────────────

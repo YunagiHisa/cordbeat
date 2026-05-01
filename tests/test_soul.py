@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from cordbeat.agent.soul import _BASELINE_INTENSITY, _DECAY_RATE, Soul
 from cordbeat.models import Emotion, SoulCaller, SoulPermissionError
-from cordbeat.soul import _BASELINE_INTENSITY, _DECAY_RATE, Soul
 
 
 class TestSoul:

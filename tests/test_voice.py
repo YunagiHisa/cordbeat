@@ -5,19 +5,19 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from cordbeat.config import STTConfig, TTSConfig
-from cordbeat.stt_backend import (
+from cordbeat.ai.stt import (
     OpenAICompatSTT,
     WhisperLocalSTT,
     WhisperOpenAISTT,
     create_stt_backend,
 )
-from cordbeat.tts_backend import (
+from cordbeat.ai.tts import (
     EdgeTTSBackend,
     OpenAICompatTTS,
     OpenAITTS,
     create_tts_backend,
 )
+from cordbeat.config import STTConfig, TTSConfig
 
 # ---------------------------------------------------------------------------
 # Config defaults
@@ -366,7 +366,7 @@ def test_load_config_stt_tts_from_yaml(tmp_path: Any) -> None:
 
 async def test_adapter_runner_passes_voice_configs(tmp_path: Any) -> None:
     """_run_adapter passes STTConfig/TTSConfig to TelegramAdapter."""
-    from cordbeat.adapter_runner import _run_adapter
+    from cordbeat.adapters.runner import _run_adapter
 
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(
@@ -382,7 +382,7 @@ async def test_adapter_runner_passes_voice_configs(tmp_path: Any) -> None:
     mock_instance.stop = AsyncMock(return_value=None)
 
     with patch(
-        "cordbeat.telegram_adapter.TelegramAdapter",
+        "cordbeat.adapters.telegram.TelegramAdapter",
         return_value=mock_instance,
     ) as mock_cls:
         await _run_adapter("telegram", str(cfg_path))

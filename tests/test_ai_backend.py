@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from cordbeat.ai_backend import (
+from cordbeat.ai.backend import (
     OllamaBackend,
     OpenAICompatBackend,
     create_backend,

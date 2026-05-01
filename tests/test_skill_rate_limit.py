@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from cordbeat.exceptions import SkillRateLimitError
-from cordbeat.skill_rate_limit import SkillRateLimiter
+from cordbeat.skills.rate_limit import SkillRateLimiter
 
 
 class TestSkillRateLimiter:

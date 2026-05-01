@@ -8,11 +8,12 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from cordbeat.ai_backend import AIBackend
+from cordbeat.ai.backend import AIBackend
 from cordbeat.config import MemoryConfig
-from cordbeat.memory import MemoryStore
+from cordbeat.memory.core import MemoryStore
 from cordbeat.models import MemoryEntry, MemoryLayer, UserSummary
-from cordbeat.soul import Soul
+
+from .soul import Soul
 
 logger = logging.getLogger(__name__)
 

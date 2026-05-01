@@ -26,6 +26,9 @@ from pathlib import Path
 _SRC = str(Path(__file__).parent.parent / "src")
 
 
+_SUBPROCESS_TIMEOUT = 30  # seconds — prevents hangs in CI / on Windows
+
+
 def _run_import(
     block_pkg: str, module: str, symbol: str = ""
 ) -> subprocess.CompletedProcess[str]:
@@ -41,12 +44,21 @@ def _run_import(
         {import_stmt}
         print("ok")
     """)
-    return subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        env={**__import__("os").environ, "PYTHONPATH": _SRC},
-    )
+    try:
+        return subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=_SUBPROCESS_TIMEOUT,
+            env={**__import__("os").environ, "PYTHONPATH": _SRC},
+        )
+    except subprocess.TimeoutExpired:
+        raise AssertionError(
+            f"Subprocess hung for >{_SUBPROCESS_TIMEOUT}s while blocking {block_pkg!r} "
+            f"and importing {module!r}. "
+            "This usually means a module-level import triggered a blocking call "
+            "(e.g. network connect, heavy initialisation)."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -73,17 +85,17 @@ class TestNoTopLevelSqliteVec:
 
     def test_setup_wizard_importable(self) -> None:
         """cordbeat-init must start even without sqlite_vec installed."""
-        result = _run_import("sqlite_vec", "cordbeat.setup_wizard")
+        result = _run_import("sqlite_vec", "cordbeat.tools.wizard")
         assert result.returncode == 0, (
-            "cordbeat.setup_wizard (cordbeat-init entry point) crashed because "
+            "cordbeat.tools.wizard (cordbeat-init entry point) crashed because "
             "sqlite_vec was imported at module level in its import chain!\n"
             f"stderr: {result.stderr}"
         )
 
     def test_engine_importable(self) -> None:
-        result = _run_import("sqlite_vec", "cordbeat.engine", "CoreEngine")
+        result = _run_import("sqlite_vec", "cordbeat.core.engine", "CoreEngine")
         assert result.returncode == 0, (
-            "cordbeat.engine imported sqlite_vec at module level!\n"
+            "cordbeat.core.engine imported sqlite_vec at module level!\n"
             f"stderr: {result.stderr}"
         )
 
@@ -104,9 +116,9 @@ class TestNoTopLevelSentenceTransformers:
         )
 
     def test_setup_wizard_importable(self) -> None:
-        result = _run_import("sentence_transformers", "cordbeat.setup_wizard")
+        result = _run_import("sentence_transformers", "cordbeat.tools.wizard")
         assert result.returncode == 0, (
-            "cordbeat.setup_wizard crashed because sentence_transformers was "
+            "cordbeat.tools.wizard crashed because sentence_transformers was "
             "imported at module level in its import chain!\n"
             f"stderr: {result.stderr}"
         )
@@ -125,15 +137,22 @@ class TestCheckRequiredDeps:
         code = textwrap.dedent(f"""\
             import sys
             sys.modules[{block_pkg!r}] = None  # type: ignore[assignment]
-            from cordbeat.setup_wizard import _check_required_deps
+            from cordbeat.tools.wizard import _check_required_deps
             _check_required_deps()
         """)
-        return subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            env={**__import__("os").environ, "PYTHONPATH": _SRC},
-        )
+        try:
+            return subprocess.run(
+                [sys.executable, "-c", code],
+                capture_output=True,
+                text=True,
+                timeout=_SUBPROCESS_TIMEOUT,
+                env={**__import__("os").environ, "PYTHONPATH": _SRC},
+            )
+        except subprocess.TimeoutExpired:
+            raise AssertionError(
+                f"_check_required_deps() hung for >{_SUBPROCESS_TIMEOUT}s "
+                f"when {block_pkg!r} was blocked."
+            )
 
     def test_missing_sqlite_vec_exits_1(self) -> None:
         result = self._run_check_deps("sqlite_vec")
@@ -158,7 +177,7 @@ class TestCheckRequiredDeps:
 
     def test_all_present_returns_normally(self) -> None:
         code = textwrap.dedent("""\
-            from cordbeat.setup_wizard import _check_required_deps
+            from cordbeat.tools.wizard import _check_required_deps
             _check_required_deps()
             print("ok")
         """)
@@ -166,6 +185,7 @@ class TestCheckRequiredDeps:
             [sys.executable, "-c", code],
             capture_output=True,
             text=True,
+            timeout=_SUBPROCESS_TIMEOUT,
             env={**__import__("os").environ, "PYTHONPATH": _SRC},
         )
         assert result.returncode == 0 and "ok" in result.stdout, (

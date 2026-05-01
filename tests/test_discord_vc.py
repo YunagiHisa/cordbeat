@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from cordbeat.config import AdapterConfig, RVCConfig, TTSConfig
 
 if TYPE_CHECKING:
-    from cordbeat.discord_adapter import DiscordAdapter
+    from cordbeat.adapters.discord import DiscordAdapter
 
 # ---------------------------------------------------------------------------
 # VoiceReceiver
@@ -184,7 +184,7 @@ class TestRVCBackend:
 
 class TestRVCWrappedTTS:
     async def test_passthrough_when_rvc_not_loaded(self) -> None:
-        from cordbeat.tts_backend import RVCWrappedTTS
+        from cordbeat.ai.tts import RVCWrappedTTS
 
         inner = AsyncMock()
         inner.synthesize = AsyncMock(return_value=b"audio_bytes")
@@ -201,7 +201,7 @@ class TestRVCWrappedTTS:
         rvc.convert.assert_not_called()
 
     async def test_applies_rvc_when_loaded(self) -> None:
-        from cordbeat.tts_backend import RVCWrappedTTS
+        from cordbeat.ai.tts import RVCWrappedTTS
 
         inner = AsyncMock()
         inner.synthesize = AsyncMock(return_value=b"tts_wav")
@@ -217,7 +217,7 @@ class TestRVCWrappedTTS:
         assert result == b"rvc_wav"
 
     async def test_fallback_on_rvc_error(self) -> None:
-        from cordbeat.tts_backend import RVCWrappedTTS
+        from cordbeat.ai.tts import RVCWrappedTTS
 
         inner = AsyncMock()
         inner.synthesize = AsyncMock(return_value=b"original")
@@ -233,7 +233,7 @@ class TestRVCWrappedTTS:
         assert result == b"original"
 
     async def test_empty_audio_skips_rvc(self) -> None:
-        from cordbeat.tts_backend import RVCWrappedTTS
+        from cordbeat.ai.tts import RVCWrappedTTS
 
         inner = AsyncMock()
         inner.synthesize = AsyncMock(return_value=b"")
@@ -255,7 +255,7 @@ class TestRVCWrappedTTS:
 
 class TestDiscordAdapterVC:
     def _make_adapter(self) -> DiscordAdapter:
-        from cordbeat.discord_adapter import DiscordAdapter
+        from cordbeat.adapters.discord import DiscordAdapter
 
         config = AdapterConfig(options={"token": "test-token"})
         adapter = DiscordAdapter(config)
@@ -264,7 +264,7 @@ class TestDiscordAdapterVC:
     async def test_on_vc_speech_no_ws(self) -> None:
         adapter = self._make_adapter()
         adapter._ws = None
-        with patch("cordbeat.discord_adapter.logger") as mock_log:
+        with patch("cordbeat.adapters.discord.logger") as mock_log:
             await adapter._on_vc_speech(111, 222, b"wav")
             mock_log.warning.assert_called()
 
@@ -402,7 +402,7 @@ class TestDiscordAdapterVC:
 
 class TestSlashCommands:
     def _make_adapter(self) -> DiscordAdapter:
-        from cordbeat.discord_adapter import DiscordAdapter
+        from cordbeat.adapters.discord import DiscordAdapter
 
         config = AdapterConfig(options={"token": "test-token"})
         return DiscordAdapter(config)
@@ -561,36 +561,36 @@ class TestRVCConfig:
 
 class TestCreateTTSWithRVC:
     def test_returns_plain_when_rvc_disabled(self) -> None:
-        from cordbeat.tts_backend import create_tts_with_rvc
+        from cordbeat.ai.tts import create_tts_with_rvc
 
         tts_cfg = TTSConfig(backend="edge_tts")
         rvc_cfg = RVCConfig(enabled=False)
         backend = create_tts_with_rvc(tts_cfg, rvc_cfg)
-        from cordbeat.tts_backend import RVCWrappedTTS
+        from cordbeat.ai.tts import RVCWrappedTTS
 
         assert not isinstance(backend, RVCWrappedTTS)
 
     def test_returns_plain_when_rvc_config_none(self) -> None:
-        from cordbeat.tts_backend import create_tts_with_rvc
+        from cordbeat.ai.tts import create_tts_with_rvc
 
         tts_cfg = TTSConfig(backend="edge_tts")
         backend = create_tts_with_rvc(tts_cfg, None)
-        from cordbeat.tts_backend import RVCWrappedTTS
+        from cordbeat.ai.tts import RVCWrappedTTS
 
         assert not isinstance(backend, RVCWrappedTTS)
 
     def test_returns_plain_when_no_model_path(self) -> None:
-        from cordbeat.tts_backend import create_tts_with_rvc
+        from cordbeat.ai.tts import create_tts_with_rvc
 
         tts_cfg = TTSConfig(backend="edge_tts")
         rvc_cfg = RVCConfig(enabled=True, model_path="")
         backend = create_tts_with_rvc(tts_cfg, rvc_cfg)
-        from cordbeat.tts_backend import RVCWrappedTTS
+        from cordbeat.ai.tts import RVCWrappedTTS
 
         assert not isinstance(backend, RVCWrappedTTS)
 
     def test_falls_back_on_rvc_init_error(self) -> None:
-        from cordbeat.tts_backend import RVCWrappedTTS, create_tts_with_rvc
+        from cordbeat.ai.tts import RVCWrappedTTS, create_tts_with_rvc
 
         tts_cfg = TTSConfig(backend="edge_tts")
         rvc_cfg = RVCConfig(enabled=True, model_path="model.pth")

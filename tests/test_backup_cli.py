@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from cordbeat import backup_cli
+from cordbeat.tools import backup as backup_cli
 
 
 def _write_config(tmp_path: Path, db_path: Path) -> Path:

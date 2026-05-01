@@ -6,9 +6,16 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel in-progress runs for the same branch/PR so stale jobs don't waste
+# runner minutes and don't confuse the status display.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint-and-test:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -51,7 +58,12 @@ jobs:
 
   startup-check:
     name: Startup import safety (no heavy deps at module level)
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4.2.2
 

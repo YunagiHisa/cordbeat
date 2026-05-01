@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from cordbeat.doctor import run_doctor
+from cordbeat.tools.doctor import run_doctor
 
 
 class TestRunDoctor:
@@ -39,20 +39,20 @@ class TestRunDoctor:
     def test_healthy_installation(self, tmp_path: Path) -> None:
         home = tmp_path / ".cordbeat"
         self._setup_healthy(home)
-        with patch("cordbeat.doctor._probe", return_value=True):
+        with patch("cordbeat.tools.doctor._probe", return_value=True):
             assert run_doctor(home) == 0
 
     def test_missing_config(self, tmp_path: Path) -> None:
         home = tmp_path / ".cordbeat"
         home.mkdir()
         # No config.yaml → failure
-        with patch("cordbeat.doctor._probe", return_value=True):
+        with patch("cordbeat.tools.doctor._probe", return_value=True):
             assert run_doctor(home) == 1
 
     def test_unreachable_backend(self, tmp_path: Path) -> None:
         home = tmp_path / ".cordbeat"
         self._setup_healthy(home)
-        with patch("cordbeat.doctor._probe", return_value=False):
+        with patch("cordbeat.tools.doctor._probe", return_value=False):
             assert run_doctor(home) == 1
 
     def test_missing_soul_files(self, tmp_path: Path) -> None:
@@ -60,7 +60,7 @@ class TestRunDoctor:
         self._setup_healthy(home)
         # Remove a soul file
         (home / "soul" / "soul_core.yaml").unlink()
-        with patch("cordbeat.doctor._probe", return_value=True):
+        with patch("cordbeat.tools.doctor._probe", return_value=True):
             assert run_doctor(home) == 1
 
     def test_custom_home_via_env(
@@ -69,7 +69,7 @@ class TestRunDoctor:
         home = tmp_path / "custom"
         self._setup_healthy(home)
         monkeypatch.setenv("CORDBEAT_HOME", str(home))
-        with patch("cordbeat.doctor._probe", return_value=True):
+        with patch("cordbeat.tools.doctor._probe", return_value=True):
             # run_doctor() without argument should pick up CORDBEAT_HOME
             assert run_doctor() == 0
 
@@ -79,7 +79,7 @@ class TestRunDoctor:
         import shutil
 
         shutil.rmtree(home / "skills")
-        with patch("cordbeat.doctor._probe", return_value=True):
+        with patch("cordbeat.tools.doctor._probe", return_value=True):
             assert run_doctor(home) == 1
 
 

@@ -31,6 +31,8 @@ cordbeat-signal = "cordbeat.adapters.runner:signal_cli"
 cordbeat-backup = "cordbeat.tools.backup:backup_main"
 cordbeat-restore = "cordbeat.tools.backup:restore_main"
 cordbeat-export = "cordbeat.tools.export:export_main"
+cordbeat-doctor = "cordbeat.tools.doctor:main"
+cordbeat-add = "cordbeat.tools.add_cmd:cordbeat_add_cli"
 
 [project.optional-dependencies]
 discord = ["discord.py>=2.0"]

@@ -73,9 +73,7 @@ try:
             self.drop = _nn.Dropout(p_dropout)
             if gin_channels:
                 self.cond_layer = _wn(
-                    _nn.Conv1d(
-                        gin_channels, 2 * hidden_channels * n_layers, 1
-                    )
+                    _nn.Conv1d(gin_channels, 2 * hidden_channels * n_layers, 1)
                 )
             for i in range(n_layers):
                 d = dilation_rate**i
@@ -90,12 +88,8 @@ try:
                         )
                     )
                 )
-                out_ch = (
-                    hidden_channels if i == n_layers - 1 else 2 * hidden_channels
-                )
-                self.res_skip_layers.append(
-                    _wn(_nn.Conv1d(hidden_channels, out_ch, 1))
-                )
+                out_ch = hidden_channels if i == n_layers - 1 else 2 * hidden_channels
+                self.res_skip_layers.append(_wn(_nn.Conv1d(hidden_channels, out_ch, 1)))
 
         def forward(self, x: Any, x_mask: Any, g: Any = None) -> Any:
             output = _torch.zeros_like(x)
@@ -106,7 +100,9 @@ try:
                 g_l = (
                     g[
                         :,
-                        i * 2 * self.hidden_channels: (i + 1) * 2 * self.hidden_channels,  # noqa: E501
+                        i * 2 * self.hidden_channels : (i + 1)
+                        * 2
+                        * self.hidden_channels,  # noqa: E501
                         :,
                     ]
                     if g is not None
@@ -116,7 +112,7 @@ try:
                 rs = self.res_skip_layers[i](acts)
                 if i < self.n_layers - 1:
                     x = (x + rs[:, : self.hidden_channels, :]) * x_mask
-                    output = output + rs[:, self.hidden_channels:, :]
+                    output = output + rs[:, self.hidden_channels :, :]
                 else:
                     output = output + rs
             return output * x_mask
@@ -260,11 +256,7 @@ try:
 
         def forward(self, x: Any, c: Any, attn_mask: Any = None) -> Any:
             b, d, t = x.shape
-            q = (
-                self.conv_q(x)
-                .view(b, self.n_heads, self.k_channels, t)
-                .transpose(2, 3)
-            )
+            q = self.conv_q(x).view(b, self.n_heads, self.k_channels, t).transpose(2, 3)
             k = (
                 self.conv_k(c)
                 .view(b, self.n_heads, self.k_channels, -1)
@@ -275,18 +267,11 @@ try:
                 .view(b, self.n_heads, self.k_channels, -1)
                 .transpose(2, 3)
             )
-            scores = (
-                _torch.matmul(q, k.transpose(-2, -1))
-                / _math.sqrt(self.k_channels)
-            )
+            scores = _torch.matmul(q, k.transpose(-2, -1)) / _math.sqrt(self.k_channels)
             if attn_mask is not None:
                 scores = scores.masked_fill(attn_mask == 0, -1e4)
-            output = _torch.matmul(
-                self.drop(_F.softmax(scores, dim=-1)), v
-            )
-            return self.conv_o(
-                output.transpose(2, 3).contiguous().view(b, d, t)
-            )
+            output = _torch.matmul(self.drop(_F.softmax(scores, dim=-1)), v)
+            return self.conv_o(output.transpose(2, 3).contiguous().view(b, d, t))
 
     class FFN(_nn.Module):
         def __init__(
@@ -397,13 +382,15 @@ try:
                 x = x + self.emb_pitch(pitch)
             x = x.transpose(1, 2)
             x_mask = (
-                _torch.arange(x.size(2), device=x.device).unsqueeze(0)
-                < lengths.unsqueeze(1)
-            ).unsqueeze(1).to(x.dtype)
-            x = self.encoder(x, x_mask)
-            m, logs = _torch.split(
-                self.proj(x) * x_mask, self.out_channels, dim=1
+                (
+                    _torch.arange(x.size(2), device=x.device).unsqueeze(0)
+                    < lengths.unsqueeze(1)
+                )
+                .unsqueeze(1)
+                .to(x.dtype)
             )
+            x = self.encoder(x, x_mask)
+            m, logs = _torch.split(self.proj(x) * x_mask, self.out_channels, dim=1)
             return m, logs, x_mask
 
     class TextEncoder256(_nn.Module):
@@ -441,13 +428,15 @@ try:
                 x = x + self.emb_pitch(pitch)
             x = x.transpose(1, 2)
             x_mask = (
-                _torch.arange(x.size(2), device=x.device).unsqueeze(0)
-                < lengths.unsqueeze(1)
-            ).unsqueeze(1).to(x.dtype)
-            x = self.encoder(x, x_mask)
-            m, logs = _torch.split(
-                self.proj(x) * x_mask, self.out_channels, dim=1
+                (
+                    _torch.arange(x.size(2), device=x.device).unsqueeze(0)
+                    < lengths.unsqueeze(1)
+                )
+                .unsqueeze(1)
+                .to(x.dtype)
             )
+            x = self.encoder(x, x_mask)
+            m, logs = _torch.split(self.proj(x) * x_mask, self.out_channels, dim=1)
             return m, logs, x_mask
 
     class SineGen(_nn.Module):
@@ -636,7 +625,7 @@ try:
                     )
                 )
                 stride_f0 = (
-                    _math.prod(upsample_rates[i + 1:])
+                    _math.prod(upsample_rates[i + 1 :])
                     if i + 1 < len(upsample_rates)
                     else 1
                 )
@@ -705,7 +694,10 @@ try:
             self.out_channels = out_channels
             self.pre = _nn.Conv1d(in_channels, hidden_channels, 1)
             self.enc = WN(
-                hidden_channels, kernel_size, dilation_rate, n_layers,
+                hidden_channels,
+                kernel_size,
+                dilation_rate,
+                n_layers,
                 gin_channels=gin_channels,
             )
             self.proj = _nn.Conv1d(hidden_channels, out_channels * 2, 1)
@@ -741,21 +733,42 @@ try:
             super().__init__()
             is_half = kwargs.get("is_half", False)
             self.enc_p = TextEncoder768(
-                inter_channels, hidden_channels, filter_channels,
-                n_heads, n_layers, kernel_size, p_dropout,
+                inter_channels,
+                hidden_channels,
+                filter_channels,
+                n_heads,
+                n_layers,
+                kernel_size,
+                p_dropout,
             )
             self.dec = GeneratorNSF(
-                inter_channels, resblock, resblock_kernel_sizes,
-                resblock_dilation_sizes, upsample_rates,
-                upsample_initial_channel, upsample_kernel_sizes,
-                gin_channels, sr, is_half=is_half,
+                inter_channels,
+                resblock,
+                resblock_kernel_sizes,
+                resblock_dilation_sizes,
+                upsample_rates,
+                upsample_initial_channel,
+                upsample_kernel_sizes,
+                gin_channels,
+                sr,
+                is_half=is_half,
             )
             self.enc_q = PosteriorEncoder(
-                spec_channels, inter_channels, hidden_channels, 5, 1, 16,
+                spec_channels,
+                inter_channels,
+                hidden_channels,
+                5,
+                1,
+                16,
                 gin_channels=gin_channels,
             )
             self.flow = ResidualCouplingBlock(
-                inter_channels, hidden_channels, 5, 1, 3, gin_channels=gin_channels,
+                inter_channels,
+                hidden_channels,
+                5,
+                1,
+                3,
+                gin_channels=gin_channels,
             )
             self.emb_g = _nn.Embedding(spk_embed_dim, gin_channels)
 
@@ -797,21 +810,42 @@ try:
             super().__init__()
             is_half = kwargs.get("is_half", False)
             self.enc_p = TextEncoder256(
-                inter_channels, hidden_channels, filter_channels,
-                n_heads, n_layers, kernel_size, p_dropout,
+                inter_channels,
+                hidden_channels,
+                filter_channels,
+                n_heads,
+                n_layers,
+                kernel_size,
+                p_dropout,
             )
             self.dec = GeneratorNSF(
-                inter_channels, resblock, resblock_kernel_sizes,
-                resblock_dilation_sizes, upsample_rates,
-                upsample_initial_channel, upsample_kernel_sizes,
-                gin_channels, sr, is_half=is_half,
+                inter_channels,
+                resblock,
+                resblock_kernel_sizes,
+                resblock_dilation_sizes,
+                upsample_rates,
+                upsample_initial_channel,
+                upsample_kernel_sizes,
+                gin_channels,
+                sr,
+                is_half=is_half,
             )
             self.enc_q = PosteriorEncoder(
-                spec_channels, inter_channels, hidden_channels, 5, 1, 16,
+                spec_channels,
+                inter_channels,
+                hidden_channels,
+                5,
+                1,
+                16,
                 gin_channels=gin_channels,
             )
             self.flow = ResidualCouplingBlock(
-                inter_channels, hidden_channels, 5, 1, 3, gin_channels=gin_channels,
+                inter_channels,
+                hidden_channels,
+                5,
+                1,
+                3,
+                gin_channels=gin_channels,
             )
             self.emb_g = _nn.Embedding(spk_embed_dim, gin_channels)
 
@@ -879,14 +913,14 @@ def _extract_f0_yin(audio_16k: Any) -> Any:
     f0 = _np.zeros(n_frames, dtype=_np.float32)
 
     for i in range(n_frames):
-        seg = audio_16k[i * hop: i * hop + win].astype(_np.float64)
+        seg = audio_16k[i * hop : i * hop + win].astype(_np.float64)
         seg -= seg.mean()
         x = seg[:lag_max]
         energy = _np.dot(x, x)
         if energy < 1e-8:
             continue
         acf = _np.array(
-            [_np.dot(x, seg[t: t + lag_max]) for t in range(lag_min, lag_max + 1)]
+            [_np.dot(x, seg[t : t + lag_max]) for t in range(lag_min, lag_max + 1)]
         )
         acf /= energy
         peak_lag = 0
@@ -963,9 +997,7 @@ class RVCBackend:
             device:      Compute device (``"cuda"``, ``"cpu"``). Auto-detects if None.
         """
         if not _TORCH_AVAILABLE:
-            logger.error(
-                "torch is not installed. Install with: uv sync --extra rvc"
-            )
+            logger.error("torch is not installed. Install with: uv sync --extra rvc")
             return
 
         self._f0_up_key = f0_up_key
@@ -1004,14 +1036,15 @@ class RVCBackend:
 
         sr_raw = cpt.get("sr", "40k")
         self._target_sr = (
-            _SR_MAP.get(str(sr_raw), 40000)
-            if isinstance(sr_raw, str)
-            else int(sr_raw)
+            _SR_MAP.get(str(sr_raw), 40000) if isinstance(sr_raw, str) else int(sr_raw)
         )
 
         logger.info(
             "RVC checkpoint: version=%s sr=%s f0=%s config_len=%d",
-            self._version, sr_raw, cpt.get("f0", "?"), len(model_cfg),
+            self._version,
+            sr_raw,
+            cpt.get("f0", "?"),
+            len(model_cfg),
         )
 
         model_cls = (
@@ -1055,7 +1088,10 @@ class RVCBackend:
 
         logger.info(
             "RVC ready (version=%s sr=%d half=%s f0_up_key=%d)",
-            self._version, self._target_sr, self._is_half, self._f0_up_key,
+            self._version,
+            self._target_sr,
+            self._is_half,
+            self._f0_up_key,
         )
 
     def is_loaded(self) -> bool:
@@ -1140,7 +1176,9 @@ class RVCBackend:
 
             phone = feats.to(self._device)
             phone_lengths = _torch.tensor(  # type: ignore[name-defined]
-                [t_frames], dtype=_torch.long, device=self._device  # type: ignore[name-defined]
+                [t_frames],
+                dtype=_torch.long,
+                device=self._device,  # type: ignore[name-defined]
             )
             pitch = (
                 _torch.from_numpy(pitch_coarse)  # type: ignore[name-defined]
@@ -1158,7 +1196,9 @@ class RVCBackend:
                 phone = phone.half()
                 pitchf = pitchf.half()
             sid = _torch.tensor(  # type: ignore[name-defined]
-                [0], dtype=_torch.long, device=self._device  # type: ignore[name-defined]
+                [0],
+                dtype=_torch.long,
+                device=self._device,  # type: ignore[name-defined]
             )
 
             with _torch.no_grad():  # type: ignore[name-defined]
@@ -1182,7 +1222,10 @@ class RVCBackend:
             ms_infer = int((t4 - t3) * 1000)
             logger.debug(
                 "RVC profile: resample=%dms hubert=%dms f0=%dms infer=%dms total=%dms",
-                ms_resample, ms_hubert, ms_f0, ms_infer,
+                ms_resample,
+                ms_hubert,
+                ms_f0,
+                ms_infer,
                 ms_resample + ms_hubert + ms_f0 + ms_infer,
             )
 

@@ -1,12 +1,19 @@
 # CordBeat Configuration
 # Copy this file to config.yaml and adjust settings.
 #
+# SECRETS → .env (NOT config.yaml)
+#   API keys, tokens, and passwords must be stored in a .env file
+#   placed next to config.yaml. Never put secrets in config.yaml.
+#   Example .env:
+#     CORDBEAT_GATEWAY__AUTH_TOKEN=your-hmac-secret
+#     CORDBEAT_AI_BACKEND__API_KEY=sk-...
+#     CORDBEAT_ADAPTERS__DISCORD__OPTIONS__TOKEN=your-discord-token
+#
 # Environment variable overrides:
 #   All settings can be overridden via env vars with the CORDBEAT_ prefix.
 #   Use double underscores (__) for nesting:
 #     CORDBEAT_GATEWAY__PORT=9000
 #     CORDBEAT_AI_BACKEND__MODEL=gpt-4
-#     CORDBEAT_ADAPTERS__DISCORD__OPTIONS__TOKEN=your-token
 #
 # You can also place a .env file next to config.yaml.
 
@@ -18,9 +25,9 @@ gateway:
 log:
   level: "INFO"                                            # DEBUG | INFO | WARNING | ERROR
   format: "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
-  # file: "data/cordbeat.log"    # Uncomment to enable file logging with rotation
-  # max_bytes: 10485760          # 10 MiB — rotate when file exceeds this size
-  # backup_count: 5              # Number of rotated backup files to keep
+  # file: "data/logs/cordbeat.log"  # Default: data/logs/cordbeat.log; set to "" to disable
+  # max_bytes: 10485760             # 10 MiB — rotate when file exceeds this size
+  # backup_count: 5                 # Number of rotated backup files to keep
 
 ai_backend:
   provider: ollama          # ollama | openai | openai_compat
@@ -35,6 +42,9 @@ ai_backend:
   # provider: openai_compat
   # base_url: "http://localhost:8080/v1"
   # model: "default"
+  # options:
+  #   enable_thinking: false  # Qwen3/DeepSeek-R1 thinking models: disable <think> phase
+  #                           # for JSON-mode heartbeat requests (prevents empty responses)
 
   # --- Alternative: OpenAI API ---
   # provider: openai
@@ -97,56 +107,42 @@ skills:
     allow_network_by_default: false  # default for skills without explicit network flag
 
 adapters:
+  # Secrets (tokens, keys) → .env file.  See .env.example.
   discord:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60  # max seconds between reconnection attempts
+    # options:
+    #   respond_mode: "all"          # all | mention_only | ai_decision
+    #   channel_whitelist: []        # only respond in these channel IDs (server channels only; DMs always bypass)
+    #   channel_blacklist: []        # never respond in these channel IDs (server channels only)
+    #   user_blocklist: []           # never respond to these user IDs
+    #   ai_decision_keywords: []     # keywords for ai_decision mode (default: soul name)
   telegram:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60
     # options:
-    #   token: "YOUR_TELEGRAM_BOT_TOKEN"
+    #   respond_mode: "all"          # all | mention_only | ai_decision  (groups only; DMs always respond)
+    #   channel_whitelist: []        # only respond in these chat IDs (groups only; DMs always bypass)
+    #   channel_blacklist: []        # never respond in these chat IDs (groups only)
+    #   user_blocklist: []           # never respond to these Telegram user IDs
+    #   ai_decision_keywords: []     # keywords for ai_decision mode (default: soul name)
 
-  # --- v1.0+ scaffolds (uv sync --extra <name> to install SDKs) -------
-
+  # --- v1.0+ scaffolds (uv sync --extra <name> to install SDKs) -----------
   slack:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60
-    # options:
-    #   bot_token: "xoxb-..."   # Bot User OAuth Token
-    #   app_token: "xapp-..."   # App-Level Token (connections:write)
-
   line:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60
-    # options:
-    #   channel_access_token: "..."
-    #   channel_secret: "..."
-    #   webhook_host: "0.0.0.0"
-    #   webhook_port: 8080
-    #   webhook_path: "/webhook"
-
   whatsapp:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60
-    # options:
-    #   access_token: "..."
-    #   phone_number_id: "..."
-    #   verify_token: "your-verify-token"
-    #   app_secret: "meta-app-secret"  # verifies X-Hub-Signature-256 on inbound webhooks
-    #   webhook_host: "0.0.0.0"
-    #   webhook_port: 8081
-    #   webhook_path: "/webhook"
-
   signal:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60
-    # options:
-    #   rpc_url: "http://localhost:8088/api/v1/rpc"
-    #   phone_number: "+1234567890"
-    #   poll_interval: 2

@@ -344,9 +344,7 @@ class VoiceReceiver:
         dave = getattr(conn, "dave_session", None) if conn else None
         can_encrypt = getattr(conn, "can_encrypt", False) if conn else False
 
-        logger.info(
-            "DAVE: session=%s, can_encrypt=%s", dave is not None, can_encrypt
-        )
+        logger.info("DAVE: session=%s, can_encrypt=%s", dave is not None, can_encrypt)
 
         if dave and hasattr(dave, "decrypt"):
             self._dave_session = dave
@@ -377,9 +375,7 @@ class VoiceReceiver:
         if self._dave_skip or not self._dave_session or not self._dave_media_audio:
             return data
         try:
-            result = self._dave_session.decrypt(
-                user_id, self._dave_media_audio, data
-            )
+            result = self._dave_session.decrypt(user_id, self._dave_media_audio, data)
             if result is not None:
                 self._dave_ok += 1
                 if self._dave_ok == 1:
@@ -404,8 +400,7 @@ class VoiceReceiver:
             _stats_tick += 1
             if _stats_tick % 100 == 0 and self._pkt_count > 0:
                 logger.info(
-                    "VC stats: pkt=%d opus_ok=%d opus_fail=%d "
-                    "dave_ok=%d dave_fail=%d",
+                    "VC stats: pkt=%d opus_ok=%d opus_fail=%d dave_ok=%d dave_fail=%d",
                     self._pkt_count,
                     self._decode_ok,
                     self._decode_fail,
@@ -426,9 +421,7 @@ class VoiceReceiver:
 
                 duration = len(pcm) / (SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH)
                 if duration < self._min_speech_sec:
-                    logger.debug(
-                        "Skipping short utterance (%.1f s)", duration
-                    )
+                    logger.debug("Skipping short utterance (%.1f s)", duration)
                     continue
 
                 is_noise, rms, active_ratio = _is_non_speech_noise(
@@ -459,8 +452,6 @@ class VoiceReceiver:
                     try:
                         await cb(user_id, wav_data)
                     except Exception:
-                        logger.exception(
-                            "Speech callback error for user %d", user_id
-                        )
+                        logger.exception("Speech callback error for user %d", user_id)
 
             await asyncio.sleep(0.1)

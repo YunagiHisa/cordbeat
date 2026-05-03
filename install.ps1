@@ -9,13 +9,20 @@ param(
 $ErrorActionPreference = "Stop"
 $repo = "https://github.com/YunagiHisa/cordbeat.git"
 
+# Ctrl+C / pipeline interruption → clean exit
+trap {
+    Write-Host ""
+    Write-Host "  Installation interrupted." -ForegroundColor Yellow
+    exit 1
+}
+
 Write-Host ""
 Write-Host "   ██████╗ ██████╗ ██████╗ ██████╗ ██████╗ ███████╗ █████╗ ████████╗" -ForegroundColor Magenta
 Write-Host "  ██╔════╝██╔═══██╗██╔══██╗██╔══██╗██╔══██╗██╔════╝██╔══██╗╚══██╔══╝" -ForegroundColor DarkMagenta
-Write-Host "  ██║     ██║   ██║██████╔╝██║  ██║██████╔╝█████╗  ███████║   ██║   " -ForegroundColor Magenta
-Write-Host "  ██║     ██║   ██║██╔══██╗██║  ██║██╔══██╗██╔══╝  ██╔══██║   ██║   " -ForegroundColor DarkMagenta
-Write-Host "  ╚██████╗╚██████╔╝██║  ██║██████╔╝██████╔╝███████╗██║  ██║   ██║   " -ForegroundColor Magenta
-Write-Host "   ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝   ╚═╝   " -ForegroundColor DarkMagenta
+Write-Host "  ██║     ██║   ██║██████╔╝██║  ██║██████╔╝█████╗  ███████║   ██║   " -ForegroundColor Red
+Write-Host "  ██║     ██║   ██║██╔══██╗██║  ██║██╔══██╗██╔══╝  ██╔══██║   ██║   " -ForegroundColor Magenta
+Write-Host "  ╚██████╗╚██████╔╝██║  ██║██████╔╝██████╔╝███████╗██║  ██║   ██║   " -ForegroundColor DarkMagenta
+Write-Host "   ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝   ╚═╝   " -ForegroundColor Red
 Write-Host ""
 Write-Host "  A local-first autonomous AI agent that stays by your side." -ForegroundColor White
 Write-Host ""

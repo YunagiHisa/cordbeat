@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -20,6 +21,7 @@ from cordbeat.models import (
     GatewayMessage,
     MessageType,
     ProposalStatus,
+    SafetyLevel,
     SoulCaller,
     UserSummary,
 )
@@ -28,6 +30,17 @@ from cordbeat.skills.registry import SkillRegistry
 from .gateway import GatewayServer
 
 logger = logging.getLogger(__name__)
+
+# Pattern for inline draw-intent tags the AI may emit in chat responses.
+# Example: [DRAW: a red circle on a white background]
+_DRAW_TAG_RE = re.compile(r"\[DRAW:\s*(.+?)\]", re.DOTALL | re.IGNORECASE)
+
+# Pattern for inline skill-invocation tags.
+# Example: [SKILL: web_search | query=latest AI news]
+_SKILL_TAG_RE = re.compile(
+    r"\[SKILL:\s*([^\|\]\n]+?)(?:\s*\|\s*([^\]\n]*))?\]",
+    re.IGNORECASE,
+)
 
 
 class CoreEngine:
@@ -42,6 +55,7 @@ class CoreEngine:
         gateway: GatewayServer,
         memory_config: MemoryConfig | None = None,
         vision_enabled: bool = False,
+        timezone_name: str = "UTC",
     ) -> None:
         self._ai = ai
         self._soul = soul
@@ -50,7 +64,9 @@ class CoreEngine:
         self._gateway = gateway
         self._memory_config = memory_config or MemoryConfig()
         self._vision_enabled = vision_enabled
+        self._timezone_name = timezone_name
         self._extractor = MemoryExtractor(ai, soul, memory, self._memory_config)
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     async def handle_message(self, message: GatewayMessage) -> None:
         """Handle a single incoming message from the queue."""
@@ -99,28 +115,36 @@ class CoreEngine:
         if response is None:
             return  # AI failure already handled
 
-        # Phase 3: Store conversation and extract memories
-        await self._memory.add_message(
-            user_id, "user", message.content, message.adapter_id
-        )
-        await self._memory.add_message(
-            user_id, "assistant", response, message.adapter_id
-        )
-        await self._extractor.infer_and_update_emotion(
-            user_id, message.content, response
-        )
-        await self._extractor.extract_and_store_memories(
-            user_id, user.display_name, message.content, response
-        )
+        # Phase 3: Dispatch any [SKILL: ...] tags the AI emitted
+        response = await self._dispatch_skill_tags(response, message)
 
-        # Phase 4: Send reply
+        # Phase 4: Send reply immediately — do NOT wait for post-processing
+        clean_response, draw_images = await self._maybe_draw(response)
         reply = GatewayMessage(
             type=MessageType.MESSAGE,
             adapter_id=message.adapter_id,
             platform_user_id=message.platform_user_id,
-            content=response,
+            content=clean_response,
+            images=draw_images,
         )
         await self._gateway.send_to_adapter(message.adapter_id, reply)
+
+        # Phase 5: Background post-processing (memory storage + emotion update).
+        # Runs concurrently so the user already has the reply.
+        task = asyncio.create_task(
+            self._post_process_message(user_id, user, message, response)
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def drain(self) -> None:
+        """Wait for all background post-processing tasks to complete.
+
+        Primarily useful in tests to ensure side effects are visible before
+        making assertions.
+        """
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
 
     async def _resolve_user(self, message: GatewayMessage) -> tuple[str, UserSummary]:
         """Resolve or create the user and update their summary."""
@@ -153,7 +177,29 @@ class CoreEngine:
             user_id, limit=self._memory_config.conversation_history_limit
         )
 
-        system_prompt = build_soul_system_prompt(soul_snap)
+        system_prompt = build_soul_system_prompt(
+            soul_snap, timezone_name=self._timezone_name
+        )
+        if self._skills.get("draw") is not None:
+            system_prompt += (
+                "\n\nYou can create images for the user. When drawing would enhance"
+                " your response, include exactly one"
+                " [DRAW: <description in English>] tag in your message."
+                " Example: [DRAW: a red circle on a white background]."
+                " The image will be rendered automatically and sent with your reply."
+            )
+
+        # Inject available skill catalog so the AI knows what tools it can call.
+        skills_desc = self._skills.get_skill_descriptions_for_prompt()
+        if skills_desc and skills_desc != "(no skills available)":
+            system_prompt += (
+                "\n\nYou have access to the following tools. When using a tool,"
+                " include exactly one [SKILL: <name> | <param>=<value>] tag in your"
+                " reply. Only safe tools run automatically; others are queued for"
+                " approval. Only use a tool when it genuinely helps the user."
+                "\nExample: [SKILL: web_search | query=latest AI news]"
+                f"\nAvailable tools:\n{skills_desc}"
+            )
 
         # Phase 1: Direct keyword search (message.content → vector search)
         semantic_memories = await self._memory.search_semantic(
@@ -247,6 +293,17 @@ class CoreEngine:
         )
         prompt = f"{context}\n\nUser says: {safe_content}"
 
+        logger.debug(
+            "[AI INPUT] system_prompt(%d chars):\n%s",
+            len(system_prompt),
+            system_prompt,
+        )
+        logger.debug(
+            "[AI INPUT] full_prompt(%d chars):\n%s",
+            len(prompt),
+            prompt,
+        )
+
         try:
             if self._vision_enabled and message.images:
                 try:
@@ -255,17 +312,34 @@ class CoreEngine:
                         images=message.images,
                         system=system_prompt,
                     )
-                    return (
-                        re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-                    )
+                    return re.sub(
+                        r"<think>.*?</think>", "", raw, flags=re.DOTALL
+                    ).strip()
                 except Exception:
                     logger.warning(
                         "Vision generation failed, falling back to text-only response"
                     )
             raw = await self._ai.generate(prompt=prompt, system=system_prompt)
-            return (
-                re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            logger.debug(
+                "[AI OUTPUT] raw(%d chars):\n%s",
+                len(raw),
+                raw,
             )
+            logger.debug("[AI OUTPUT] cleaned: %s", cleaned)
+            if not cleaned:
+                logger.warning(
+                    "[AI OUTPUT] empty response — model returned nothing useful"
+                )
+                error_reply = GatewayMessage(
+                    type=MessageType.ERROR,
+                    adapter_id=message.adapter_id,
+                    platform_user_id=message.platform_user_id,
+                    content="（AIが応答を生成できませんでした。もう一度お試しください）",
+                )
+                await self._gateway.send_to_adapter(message.adapter_id, error_reply)
+                return None
+            return cleaned
         except Exception:
             logger.exception("AI generation failed")
             error_reply = GatewayMessage(
@@ -276,6 +350,146 @@ class CoreEngine:
             )
             await self._gateway.send_to_adapter(message.adapter_id, error_reply)
             return None
+
+    async def _post_process_message(
+        self,
+        user_id: str,
+        user: UserSummary,
+        message: GatewayMessage,
+        response: str,
+    ) -> None:
+        """Background task: persist conversation + run emotion/memory extraction."""
+        try:
+            await self._memory.add_message(
+                user_id, "user", message.content, message.adapter_id
+            )
+            await self._memory.add_message(
+                user_id, "assistant", response, message.adapter_id
+            )
+            await self._extractor.infer_and_update_emotion(
+                user_id, message.content, response
+            )
+            await self._extractor.extract_and_store_memories(
+                user_id, user.display_name, message.content, response
+            )
+        except Exception:
+            logger.exception(
+                "Background post-processing failed for user %s", user_id
+            )
+
+    async def _dispatch_skill_tags(
+        self, response: str, message: GatewayMessage
+    ) -> str:
+        """Execute the first [SKILL: name | param=value] tag in the AI response.
+
+        Only ``safe`` skills run automatically. Others are silently removed.
+        The tag is replaced with the skill's output inline.
+        """
+        match = _SKILL_TAG_RE.search(response)
+        if match is None:
+            return response
+
+        skill_name = match.group(1).strip()
+        params_raw = (match.group(2) or "").strip()
+
+        skill = self._skills.get(skill_name)
+        if skill is None or not skill.meta.enabled:
+            logger.debug("SKILL tag references unknown/disabled skill: %r", skill_name)
+            return _SKILL_TAG_RE.sub("", response, count=1).strip()
+
+        if skill.meta.safety_level != SafetyLevel.SAFE:
+            logger.info(
+                "SKILL tag %r requires confirmation; skipping auto-execution",
+                skill_name,
+            )
+            return _SKILL_TAG_RE.sub("", response, count=1).strip()
+
+        # Parse "key=value | key2=value2 ..." pairs
+        params: dict[str, Any] = {}
+        for part in params_raw.split("|"):
+            part = part.strip()
+            if "=" in part:
+                k, _, v = part.partition("=")
+                params[k.strip()] = v.strip()
+
+        try:
+            result = await skill.execute(params, memory=self._memory)
+            output = str(result.get("output", result.get("result", ""))).strip()
+            if output:
+                inline = f"\n[{skill_name}: {output[:800]}]"
+                response = _SKILL_TAG_RE.sub(inline, response, count=1)
+            else:
+                response = _SKILL_TAG_RE.sub("", response, count=1)
+        except Exception:
+            logger.warning("Auto-skill execution failed: %s", skill_name, exc_info=True)
+            response = _SKILL_TAG_RE.sub("", response, count=1)
+
+        return response.strip()
+
+    async def _maybe_draw(self, response: str) -> tuple[str, list[str]]:
+        """Parse [DRAW: ...] tags from LLM response and execute the draw skill.
+
+        Returns (clean_text, images). Only the first tag is processed.
+        Falls back to (original_response, []) on any failure.
+        """
+        if self._skills.get("draw") is None:
+            return response, []
+
+        matches = _DRAW_TAG_RE.findall(response)
+        if not matches:
+            return response, []
+
+        clean_text = _DRAW_TAG_RE.sub("", response).strip()
+        description = matches[0].strip()
+
+        try:
+            dsl = await self._generate_draw_dsl(description)
+            if not dsl:
+                return clean_text, []
+            skill = self._skills.get("draw")
+            if skill is None:
+                return clean_text, []
+            result = await skill.execute({"commands": dsl}, memory=self._memory)
+            output = result.get("output", "")
+            if output and "error" not in result:
+                return clean_text, [output]
+        except Exception:
+            logger.exception("Auto-draw pipeline failed (description=%r)", description)
+
+        return clean_text, []
+
+    async def _generate_draw_dsl(self, description: str) -> str:
+        """Ask the AI to produce Draw DSL for the given plain-text description.
+
+        Returns an empty string on failure so callers can skip gracefully.
+        """
+        safe_desc = sanitize(description, max_len=500)
+        system = (
+            "You are a drawing DSL generator. "
+            "Given a description, output ONLY valid Draw DSL"
+            " commands — no prose, no markdown fences.\n"
+            "Available commands (one per line):\n"
+            "  SIZE <width> <height>\n"
+            "  CANVAS <color>\n"
+            "  CIRCLE <cx> <cy> <radius> <color>\n"
+            "  RECT <x1> <y1> <x2> <y2> <color>\n"
+            "  ELLIPSE <x1> <y1> <x2> <y2> <color>\n"
+            "  LINE <x1> <y1> <x2> <y2> <color>\n"
+            "  POLYGON <color> <x1> <y1> <x2> <y2> ...\n"
+            "  TEXT <x> <y> <text> <color> [size]\n"
+            "  STAR <cx> <cy> <outer_r> <inner_r> <points> <color>\n"
+            "  SPIRAL <cx> <cy> <turns> <spacing> <color>\n"
+            "  OUTPUT\n"
+            "Colors: named colors (white, red, blue, ...) or #RRGGBB."
+            " Always end with OUTPUT."
+        )
+        prompt = f"Draw this: {safe_desc}"
+        try:
+            raw = await self._ai.generate(prompt=prompt, system=system)
+            return raw.strip()
+        except Exception:
+            logger.exception("DSL generation failed for description=%r", safe_desc)
+            return ""
 
     async def _handle_link_request(self, message: GatewayMessage) -> None:
         """Generate a link token and send it back to the requester."""

@@ -75,6 +75,7 @@ class WhatsAppAdapter(RetryableConnection):
     def __init__(self, config: AdapterConfig) -> None:
         self._config = config
         self._ws_url = config.core_ws_url
+        self._auth_token = config.auth_token
         opts = config.options
         self._access_token: str = opts.get("access_token", "")
         self._phone_number_id: str = opts.get("phone_number_id", "")

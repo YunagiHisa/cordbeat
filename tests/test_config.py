@@ -307,7 +307,10 @@ class TestPathResolution:
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text("log:\n  level: DEBUG\n", encoding="utf-8")
         config = load_config(cfg_file)
-        assert config.log.file == ""
+        # When log.file is not set in config, a default path under data_dir is used
+        assert config.log.file != ""
+        assert "logs" in config.log.file
+        assert "cordbeat.log" in config.log.file
 
     def test_default_paths_resolved_to_config_dir(self, tmp_path: Path) -> None:
         """Even default values like 'data/cordbeat.db' get resolved."""
@@ -327,7 +330,8 @@ class TestLogRotationConfig:
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text("", encoding="utf-8")
         config = load_config(cfg_file)
-        assert config.log.file == ""
+        # Default log file is auto-set to <data_dir>/logs/cordbeat.log
+        assert "cordbeat.log" in config.log.file
         assert config.log.max_bytes == 10_485_760
         assert config.log.backup_count == 5
 

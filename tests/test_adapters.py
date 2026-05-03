@@ -157,6 +157,7 @@ class TestDiscordAdapter:
         mock_user = AsyncMock()
         adapter._bot = MagicMock()
         adapter._bot.get_channel = MagicMock(return_value=None)
+        adapter._bot.fetch_channel = AsyncMock(return_value=None)
         adapter._bot.fetch_user = AsyncMock(return_value=mock_user)
         adapter._user_channels["123"] = 456
 

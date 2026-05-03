@@ -207,11 +207,7 @@ def create_tts_with_rvc(
 ) -> TTSBackend:
     """Factory: create a TTS backend, optionally wrapped with RVC."""
     backend = create_tts_backend(tts_config)
-    if (
-        rvc_config is None
-        or not rvc_config.enabled
-        or not rvc_config.model_path
-    ):
+    if rvc_config is None or not rvc_config.enabled or not rvc_config.model_path:
         return backend
     try:
         from cordbeat.rvc_backend import RVCBackend

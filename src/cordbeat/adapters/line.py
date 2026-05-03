@@ -41,6 +41,7 @@ class LineAdapter(RetryableConnection):
     def __init__(self, config: AdapterConfig) -> None:
         self._config = config
         self._ws_url = config.core_ws_url
+        self._auth_token = config.auth_token
         opts = config.options
         self._channel_access_token: str = opts.get("channel_access_token", "")
         self._channel_secret: str = opts.get("channel_secret", "")

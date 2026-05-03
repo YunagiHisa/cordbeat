@@ -38,20 +38,30 @@ def _c(text: str, code: str) -> str:
     return f"{code}{text}\033[0m"
 
 
-_CYAN = "\033[96m"
+_PINK = "\033[95m"  # bright magenta (matches install.ps1 Magenta)
+_DARK_PINK = "\033[35m"  # regular magenta (matches install.ps1 DarkMagenta)
 _BOLD = "\033[1m"
 _GREEN = "\033[92m"
 _YELLOW = "\033[93m"
 _RED = "\033[91m"
 
-_BANNER_ART = r"""
-   ██████╗ ██████╗ ██████╗ ██████╗ ██████╗ ███████╗ █████╗ ████████╗
-  ██╔════╝██╔═══██╗██╔══██╗██╔══██╗██╔══██╗██╔════╝██╔══██╗╚══██╔══╝
-  ██║     ██║   ██║██████╔╝██║  ██║██████╔╝█████╗  ███████║   ██║
-  ██║     ██║   ██║██╔══██╗██║  ██║██╔══██╗██╔══╝  ██╔══██║   ██║
-  ╚██████╗╚██████╔╝██║  ██║██████╔╝██████╔╝███████╗██║  ██║   ██║
-   ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝   ╚═╝
-"""
+_BANNER_LINES = [
+    r"   ██████╗ ██████╗ ██████╗ ██████╗ ██████╗ ███████╗ █████╗ ████████╗",
+    r"  ██╔════╝██╔═══██╗██╔══██╗██╔══██╗██╔══██╗██╔════╝██╔══██╗╚══██╔══╝",
+    r"  ██║     ██║   ██║██████╔╝██║  ██║██████╔╝█████╗  ███████║   ██║   ",
+    r"  ██║     ██║   ██║██╔══██╗██║  ██║██╔══██╗██╔══╝  ██╔══██║   ██║   ",
+    r"  ╚██████╗╚██████╔╝██║  ██║██████╔╝██████╔╝███████╗██║  ██║   ██║   ",
+    r"   ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝   ╚═╝  ",
+]
+_BANNER_COLORS = [_PINK, _DARK_PINK, _RED]  # 3-color cycle (install.ps1 / install.sh)
+_BANNER_ART = (
+    "\n"
+    + "\n".join(
+        _c(line, _BANNER_COLORS[i % 3] + _BOLD)
+        for i, line in enumerate(_BANNER_LINES)
+    )
+    + "\n"
+)
 
 _BANNER_SUBTITLE = "  A local-first autonomous AI agent that stays by your side.\n"
 
@@ -215,10 +225,10 @@ _ADAPTER_SPECS: list[tuple[str, str, list[str], str]] = [
 ]
 
 _ADAPTER_TOKEN_PROMPT: dict[str, str] = {
-    "discord":  "Discord bot token",
+    "discord": "Discord bot token",
     "telegram": "Telegram bot token (from @BotFather)",
-    "slack":    "Slack bot token (xoxb-...)",
-    "line":     "LINE channel access token",
+    "slack": "Slack bot token (xoxb-...)",
+    "line": "LINE channel access token",
     "whatsapp": "WhatsApp API token",
 }
 
@@ -244,46 +254,65 @@ def _install_packages(packages: list[str]) -> bool:
     return result.returncode == 0
 
 
-def _select_adapter() -> tuple[str, str | None]:
-    """Prompt the user to choose a platform adapter.
+def _select_adapters() -> dict[str, str | None]:
+    """Prompt the user to choose one or more platform adapters.
 
-    Returns ``(adapter_key, token_or_none)``.
+    Returns a dict mapping adapter key → token (or None for CLI/no token).
+    Multiple adapters can be selected by entering comma-separated numbers
+    (e.g. ``2,3`` to enable both Discord and Telegram).
+    Entering nothing or ``1`` selects CLI only.
     """
-    print("\n  Which platform adapter would you like to use?")
-    for i, (key, name, _, _) in enumerate(_ADAPTER_SPECS, 1):
+    # Separate CLI from SNS adapters for clearer presentation
+    sns_specs = [
+        (key, name, pkgs, probe)
+        for key, name, pkgs, probe in _ADAPTER_SPECS
+        if key != "cli"
+    ]
+
+    print("\n  Which platform adapter(s) would you like to enable?")
+    print("    0. CLI only (no extra adapter)")
+    for i, (key, name, _, _) in enumerate(sns_specs, 1):
         print(f"    {i}. {name}")
+    print("  (Enter comma-separated numbers, e.g. 1,2 for Discord + Telegram)")
 
-    raw = _ask("Choice", "1")
-    try:
-        idx = int(raw) - 1
-        if not 0 <= idx < len(_ADAPTER_SPECS):
-            idx = 0
-    except ValueError:
-        idx = 0
+    raw = _ask("Choice(s)", "0")
+    selected_indices: list[int] = []
+    for part in raw.replace(" ", "").split(","):
+        try:
+            n = int(part)
+            if 1 <= n <= len(sns_specs):
+                selected_indices.append(n - 1)
+        except ValueError:
+            pass
 
-    key, name, packages, probe = _ADAPTER_SPECS[idx]
+    if not selected_indices:
+        # CLI-only path
+        return {"cli": None}
 
-    if key == "cli":
-        return key, None
+    result: dict[str, str | None] = {"cli": None}
+    for idx in selected_indices:
+        key, name, packages, probe = sns_specs[idx]
 
-    # Check / install dependencies
-    if not _is_importable(probe):
-        _warn(f"{name} requires additional packages: {', '.join(packages)}")
-        do_install = _ask("Install now?", "Y")
-        if do_install.strip().upper() in ("Y", "YES", ""):
-            print("  Installing packages...")
-            if _install_packages(packages):
-                _ok(f"{name} packages installed successfully")
-            else:
-                _err(
-                    f"Installation failed — install manually:\n"
-                    f"    pip install {' '.join(packages)}"
-                )
+        # Check / install dependencies
+        if probe and not _is_importable(probe):
+            _warn(f"{name} requires additional packages: {', '.join(packages)}")
+            do_install = _ask("Install now?", "Y")
+            if do_install.strip().upper() in ("Y", "YES", ""):
+                print("  Installing packages...")
+                if _install_packages(packages):
+                    _ok(f"{name} packages installed successfully")
+                else:
+                    _err(
+                        f"Installation failed — install manually:\n"
+                        f"    pip install {' '.join(packages)}"
+                    )
 
-    # Ask for credentials
-    prompt = _ADAPTER_TOKEN_PROMPT.get(key, f"{name} token")
-    token = _ask(prompt)
-    return key, token or None
+        # Ask for credentials
+        prompt = _ADAPTER_TOKEN_PROMPT.get(key, f"{name} token")
+        token = _ask(prompt)
+        result[key] = token or None
+
+    return result
 
 
 # -- Soul helpers ──────────────────────────────────────────────────────
@@ -315,11 +344,13 @@ def _build_config(
     base_url: str,
     model: str,
     api_key: str = "",
-    adapter: str = "cli",
-    adapter_token: str | None = None,
+    adapters: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     """Build a config dict with paths anchored to *home*."""
     import secrets
+
+    if adapters is None:
+        adapters = {"cli": None}
 
     cfg: dict[str, Any] = {
         "gateway": {
@@ -343,11 +374,13 @@ def _build_config(
     }
     if api_key:
         cfg["ai_backend"]["options"] = {"api_key": api_key}
-    if adapter != "cli":
+    for adapter_key, adapter_token in adapters.items():
+        if adapter_key == "cli":
+            continue  # CLI is always on by default above
         adapter_cfg: dict[str, Any] = {"enabled": True}
         if adapter_token:
             adapter_cfg["options"] = {"token": adapter_token}
-        cfg["adapters"][adapter] = adapter_cfg
+        cfg["adapters"][adapter_key] = adapter_cfg
     return cfg
 
 
@@ -392,7 +425,7 @@ def run_wizard(home: Path | None = None) -> Path:
     Returns the path to the created ``config.yaml``.
     """
     home = home or cordbeat_home()
-    print(_c(_BANNER_ART, _CYAN + _BOLD) + _BANNER_SUBTITLE)
+    print(_BANNER_ART + _BANNER_SUBTITLE)
 
     # ── Auto-detect AI backend ───────────────────────────────────
     print("  Detecting AI backend...")
@@ -432,7 +465,7 @@ def run_wizard(home: Path | None = None) -> Path:
     language = _ask("Response language (en, ja, zh, ko, ...)", "en")
 
     # ── Adapter selection ─────────────────────────────────────────
-    adapter, adapter_token = _select_adapter()
+    selected_adapters = _select_adapters()
 
     # ── Create directory structure ────────────────────────────────
     print("\n  Creating ~/.cordbeat/ ...")
@@ -450,8 +483,7 @@ def run_wizard(home: Path | None = None) -> Path:
         base_url=base_url,
         model=model,
         api_key=api_key,
-        adapter=adapter,
-        adapter_token=adapter_token,
+        adapters=selected_adapters,
     )
     config_path.write_text(
         yaml.dump(cfg, default_flow_style=False, sort_keys=False),
@@ -486,9 +518,16 @@ def cordbeat_init_cli() -> None:
 
     _check_required_deps()  # exits with friendly message if deps are missing
 
+    # Windows: set SelectorEventLoop policy before asyncio.run() so Ctrl+C
+    # works reliably when launched via install.ps1 or other subprocess chains.
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
     config_path = run_wizard()
     try:
         asyncio.run(main_with_cli(str(config_path)))
+    except KeyboardInterrupt:
+        pass  # Clean Ctrl+C exit — asyncio re-raises on Windows
     except MemorySubsystemError as exc:
         # Safety net: any dep check we missed surfaces here with a clear message.
         print(f"\n  [ERROR] Failed to start: {exc}")

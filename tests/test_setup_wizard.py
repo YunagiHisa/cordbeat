@@ -210,7 +210,7 @@ class TestRunWizard:
                 "cordbeat.tools.wizard._probe_provider",
                 return_value=True,
             ),
-            patch("cordbeat.tools.wizard._select_adapter", return_value=("none", None)),
+            patch("cordbeat.tools.wizard._select_adapters", return_value={"cli": None}),
         ):
             config_path = run_wizard(tmp_path)
 
@@ -235,7 +235,7 @@ class TestRunWizard:
                 "cordbeat.tools.wizard._probe_provider",
                 return_value=False,
             ),
-            patch("cordbeat.tools.wizard._select_adapter", return_value=("none", None)),
+            patch("cordbeat.tools.wizard._select_adapters", return_value={"cli": None}),
         ):
             config_path = run_wizard(tmp_path)
 
@@ -257,7 +257,7 @@ class TestRunWizard:
                 "cordbeat.tools.wizard._probe_provider",
                 return_value=True,
             ),
-            patch("cordbeat.tools.wizard._select_adapter", return_value=("none", None)),
+            patch("cordbeat.tools.wizard._select_adapters", return_value={"cli": None}),
         ):
             config_path = run_wizard(tmp_path)
 
@@ -286,7 +286,7 @@ class TestRunWizard:
                 "cordbeat.tools.wizard._probe_provider",
                 return_value=True,
             ),
-            patch("cordbeat.tools.wizard._select_adapter", return_value=("none", None)),
+            patch("cordbeat.tools.wizard._select_adapters", return_value={"cli": None}),
         ):
             config_path = run_wizard(tmp_path)
 
@@ -306,7 +306,7 @@ class TestRunWizard:
                 "cordbeat.tools.wizard._probe_provider",
                 return_value=True,
             ),
-            patch("cordbeat.tools.wizard._select_adapter", return_value=("none", None)),
+            patch("cordbeat.tools.wizard._select_adapters", return_value={"cli": None}),
         ):
             run_wizard(tmp_path)
 

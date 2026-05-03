@@ -1,4 +1,5 @@
 """Skills subsystem."""
+
 from cordbeat.skills.rate_limit import SkillRateLimiter
 from cordbeat.skills.registry import Skill, SkillRegistry
 from cordbeat.skills.sandbox import (

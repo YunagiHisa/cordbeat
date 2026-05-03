@@ -48,6 +48,7 @@ class SignalAdapter(RetryableConnection):
     def __init__(self, config: AdapterConfig) -> None:
         self._config = config
         self._ws_url = config.core_ws_url
+        self._auth_token = config.auth_token
         opts = config.options
         self._rpc_url: str = opts.get("rpc_url", "http://localhost:8088/api/v1/rpc")
         self._phone_number: str = opts.get("phone_number", "")

@@ -10,6 +10,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from cordbeat.adapters._utils import _read_soul_keywords
 from cordbeat.config import AdapterConfig, STTConfig, TTSConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -36,6 +37,7 @@ class TelegramAdapter(RetryableConnection):
     ) -> None:
         self._config = config
         self._ws_url = config.core_ws_url
+        self._auth_token = config.auth_token
         self._token: str = config.options.get("token", "")
         self._app: Any = None
         self._ws: Any = None
@@ -43,6 +45,8 @@ class TelegramAdapter(RetryableConnection):
         self._max_backoff = config.reconnect_max_backoff
         # Map platform_user_id → chat_id for reply routing
         self._chat_map: dict[str, int] = {}
+        # Typing indicator tasks: chat_id → asyncio.Task
+        self._typing_tasks: dict[int, asyncio.Task[None]] = {}
         # Track which users last communicated via voice (for TTS routing)
         self._voice_users: set[str] = set()
 
@@ -95,6 +99,51 @@ class TelegramAdapter(RetryableConnection):
                 return
             user_id = str(user.id)
             chat_id = msg.chat_id
+
+            # ── E-4 response filtering ────────────────────────────────
+            opts = self._config.options
+            user_blocklist: list[str] = [str(u) for u in opts.get("user_blocklist", [])]
+            if user_id in user_blocklist:
+                return
+
+            is_private = getattr(msg.chat, "type", "private") == "private"
+
+            # channel_whitelist/blacklist apply only to group chats; DMs always bypass.
+            if not is_private:
+                channel_whitelist: list[int] = [
+                    int(c) for c in opts.get("channel_whitelist", [])
+                ]
+                channel_blacklist: list[int] = [
+                    int(c) for c in opts.get("channel_blacklist", [])
+                ]
+                if channel_whitelist and chat_id not in channel_whitelist:
+                    return
+                if chat_id in channel_blacklist:
+                    return
+
+            respond_mode: str = opts.get("respond_mode", "all")
+            if respond_mode == "mention_only":
+                if not is_private:
+                    raw_text = (msg.text or msg.caption or "").lower()
+                    bot_username = (context.bot.username or "").lower()
+                    if not (bot_username and f"@{bot_username}" in raw_text):
+                        return
+            elif respond_mode == "ai_decision":
+                if not is_private:
+                    raw_text = (msg.text or msg.caption or "").lower()
+                    keywords: list[str] = [
+                        str(k) for k in opts.get("ai_decision_keywords", [])
+                    ]
+                    if not keywords:
+                        keywords = _read_soul_keywords()
+                    if not keywords:
+                        bot_username = (context.bot.username or "").lower()
+                        if bot_username:
+                            keywords = [bot_username]
+                    if keywords and not any(kw.lower() in raw_text for kw in keywords):
+                        return
+            # ─────────────────────────────────────────────────────────
+
             self._chat_map[user_id] = chat_id
             display_name = user.full_name or user.username or ""
 
@@ -270,6 +319,44 @@ class TelegramAdapter(RetryableConnection):
             await self._ws.send(payload)
         except Exception:
             logger.exception("Failed to forward message to Core")
+        else:
+            # Show typing indicator while core processes the message
+            if chat_id:
+                self._start_typing(chat_id)
+
+    def _start_typing(self, chat_id: int) -> None:
+        """Start a background typing indicator loop for the given chat."""
+        existing = self._typing_tasks.pop(chat_id, None)
+        if existing is not None:
+            existing.cancel()
+        self._typing_tasks[chat_id] = asyncio.create_task(
+            self._keep_typing_telegram(chat_id)
+        )
+
+    def _stop_typing(self, chat_id: int) -> None:
+        """Cancel the typing indicator for the given chat."""
+        task = self._typing_tasks.pop(chat_id, None)
+        if task is not None:
+            task.cancel()
+
+    async def _keep_typing_telegram(self, chat_id: int) -> None:
+        """Send Telegram typing action every 4 s until cancelled.
+
+        Telegram typing actions expire after ~5 seconds.
+        """
+        try:
+            while True:
+                try:
+                    from telegram import ChatAction  # type: ignore[attr-defined]
+
+                    await self._app.bot.send_chat_action(
+                        chat_id=chat_id, action=ChatAction.TYPING
+                    )
+                except Exception:
+                    pass  # best-effort; don't crash if typing fails
+                await asyncio.sleep(4)
+        except asyncio.CancelledError:
+            pass
 
     async def _send_to_telegram(
         self,
@@ -291,6 +378,7 @@ class TelegramAdapter(RetryableConnection):
                 )
                 return
 
+        self._stop_typing(chat_id)
         try:
             await self._app.bot.send_message(
                 chat_id=chat_id,

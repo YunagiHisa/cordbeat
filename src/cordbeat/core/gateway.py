@@ -58,6 +58,7 @@ class RetryableConnection(ABC):
     _ws: Any
     _running: bool
     _ws_url: str
+    _auth_token: str
     adapter_id: str
 
     async def _connect_to_core(self) -> None:
@@ -66,12 +67,16 @@ class RetryableConnection(ABC):
         while self._running:
             try:
                 self._ws = await websockets.connect(self._ws_url)
-                await self._ws.send(json.dumps({"adapter_id": self.adapter_id}))
+                handshake: dict[str, str] = {"adapter_id": self.adapter_id}
+                if getattr(self, "_auth_token", ""):
+                    handshake["auth_token"] = self._auth_token
+                await self._ws.send(json.dumps(handshake))
                 ack = json.loads(await self._ws.recv())
                 logger.info("Connected to Core: %s", ack.get("content", "OK"))
                 backoff = 1
                 await self._listen_core()
             except Exception:
+                self._ws = None  # ensure stale WS is not used by _forward_to_core
                 if not self._running:
                     break
                 logger.warning(

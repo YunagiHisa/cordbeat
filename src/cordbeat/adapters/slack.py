@@ -45,6 +45,7 @@ class SlackAdapter(RetryableConnection):
     def __init__(self, config: AdapterConfig) -> None:
         self._config = config
         self._ws_url = config.core_ws_url
+        self._auth_token = config.auth_token
         self._bot_token: str = config.options.get("bot_token", "")
         self._app_token: str = config.options.get("app_token", "")
         self._socket_client: Any = None

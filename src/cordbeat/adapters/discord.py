@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from cordbeat.adapters._utils import _read_soul_keywords
 from cordbeat.config import AdapterConfig, RVCConfig, STTConfig, TTSConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -44,12 +45,16 @@ class DiscordAdapter(RetryableConnection):
     ) -> None:
         self._config = config
         self._ws_url = config.core_ws_url
+        self._auth_token = config.auth_token
         self._token: str = config.options.get("token", "")
         self._bot: Any = None
         self._ws: Any = None
         self._running = False
         self._max_backoff = config.reconnect_max_backoff
         self._user_channels: OrderedDict[str, int] = OrderedDict()
+
+        # Typing indicator tasks: channel_id → asyncio.Task
+        self._typing_tasks: dict[int, asyncio.Task[None]] = {}
 
         # Voice channel state
         self._vc_receivers: dict[int, Any] = {}
@@ -141,6 +146,26 @@ class DiscordAdapter(RetryableConnection):
         if self._bot:
             await self._bot.close()
 
+    def _matches_ai_keywords(self, message: Any) -> bool:
+        """Return True if the message content contains any configured keyword.
+
+        Used for ``respond_mode: ai_decision``.  Keywords are case-insensitive.
+        Priority: 1) ``ai_decision_keywords`` in config, 2) AI name from soul.yaml,
+        3) bot's Discord display name as last resort.
+        """
+        opts = self._config.options
+        keywords: list[str] = [str(k) for k in opts.get("ai_decision_keywords", [])]
+        if not keywords:
+            keywords = _read_soul_keywords()
+        if not keywords and self._bot is not None and self._bot.user is not None:
+            name: str = self._bot.user.display_name or self._bot.user.name or ""
+            if name:
+                keywords = [name]
+        if not keywords:
+            return True  # no filter available → allow
+        text = (message.content or "").lower()
+        return any(kw.lower() in text for kw in keywords)
+
     async def _dispatch_core_message(
         self, platform_user_id: str, content: str, images: list[str]
     ) -> None:
@@ -156,12 +181,49 @@ class DiscordAdapter(RetryableConnection):
             return
 
         user_id = str(message.author.id)
-        channel_id = message.channel.id
+        channel_id: int = message.channel.id
+
+        # ── E-4 response filtering ────────────────────────────────────
+        opts = self._config.options
+        user_blocklist: list[str] = [str(u) for u in opts.get("user_blocklist", [])]
+        if user_id in user_blocklist:
+            return
+
+        is_guild_channel = message.guild is not None  # False = DM
+        channel_whitelist: list[int] = [
+            int(c) for c in opts.get("channel_whitelist", [])
+        ]
+        channel_blacklist: list[int] = [
+            int(c) for c in opts.get("channel_blacklist", [])
+        ]
+        # channel_whitelist/blacklist apply only to guild channels; DMs always bypass.
+        if is_guild_channel:
+            if channel_whitelist and channel_id not in channel_whitelist:
+                return
+            if channel_id in channel_blacklist:
+                return
+
+        respond_mode: str = opts.get("respond_mode", "all")
+        if respond_mode == "mention_only":
+            bot_mentioned = (
+                self._bot is not None
+                and self._bot.user is not None
+                and self._bot.user.mentioned_in(message)
+            )
+            if is_guild_channel and not bot_mentioned:
+                return
+        elif respond_mode == "ai_decision":
+            if is_guild_channel and not self._matches_ai_keywords(message):
+                return
+        # ─────────────────────────────────────────────────────────────
 
         self._user_channels[user_id] = channel_id
         self._user_channels.move_to_end(user_id)
         if len(self._user_channels) > _USER_CHANNEL_CACHE_MAX:
             self._user_channels.popitem(last=False)
+
+        # Show typing indicator while core is processing
+        self._start_typing(channel_id, message.channel)
 
         _max_images = 4
         _image_size_limit = 10 * 1024 * 1024  # 10 MB
@@ -248,6 +310,43 @@ class DiscordAdapter(RetryableConnection):
         except Exception:
             logger.exception("Failed to forward message to Core")
 
+    def _start_typing(self, channel_id: int, channel: Any) -> None:
+        """Start a background typing indicator loop for the given channel."""
+        existing = self._typing_tasks.pop(channel_id, None)
+        if existing is not None:
+            existing.cancel()
+        self._typing_tasks[channel_id] = asyncio.create_task(
+            self._keep_typing(channel)
+        )
+
+    def _stop_typing(self, channel_id: int) -> None:
+        """Cancel the typing indicator for the given channel."""
+        task = self._typing_tasks.pop(channel_id, None)
+        if task is not None:
+            task.cancel()
+
+    @staticmethod
+    async def _keep_typing(channel: Any) -> None:
+        """Show Discord typing indicator until this task is cancelled.
+
+        Uses ``channel.typing()`` context manager (discord.py v2 API).
+        The context manager handles repeated sends internally; we just wait
+        inside it until the task is cancelled by ``_stop_typing``.
+        """
+        try:
+            async with channel.typing():
+                # Wait indefinitely — cancelled by _stop_typing() when reply
+                # is ready, which propagates CancelledError out of here.
+                await asyncio.get_event_loop().create_future()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.debug(
+                "typing indicator failed for channel %s",
+                getattr(channel, "id", channel),
+                exc_info=True,
+            )
+
     async def _send_to_discord(
         self,
         platform_user_id: str,
@@ -273,17 +372,54 @@ class DiscordAdapter(RetryableConnection):
             except Exception:
                 logger.exception("Failed to decode images for Discord")
 
+        # Discord 400s on empty string content; use None to allow files-only messages.
+        # Discord enforces a 2000-character limit per message — split long content.
+        discord_limit = 2000
+        chunks: list[str] = []
+        if content:
+            remaining = content
+            while len(remaining) > discord_limit:
+                # Prefer splitting on a newline boundary within the limit
+                split_at = remaining.rfind("\n", 0, discord_limit)
+                if split_at <= 0:
+                    split_at = remaining.rfind(" ", 0, discord_limit)
+                if split_at <= 0:
+                    split_at = discord_limit
+                chunks.append(remaining[:split_at])
+                remaining = remaining[split_at:].lstrip("\n")
+            if remaining:
+                chunks.append(remaining)
+
+        if not chunks and not discord_files:
+            return
+
         try:
             channel_id = self._user_channels.get(platform_user_id)
             if channel_id:
-                channel = self._bot.get_channel(channel_id)
+                self._stop_typing(channel_id)
+                # get_channel() only checks the cache; fall back to fetch_channel()
+                # to reliably reach channels not in the bot's in-memory cache.
+                channel = (
+                    self._bot.get_channel(channel_id)
+                    or await self._bot.fetch_channel(channel_id)
+                )
                 if channel:
-                    await channel.send(content, files=discord_files)
+                    for i, chunk in enumerate(chunks):
+                        # Attach files to the last chunk (or first if no text)
+                        files = discord_files if i == len(chunks) - 1 else []
+                        await channel.send(chunk, files=files)
+                    if not chunks:
+                        await channel.send(None, files=discord_files)
                     return
 
+            # No channel mapping found → fall back to DM
             user = await self._bot.fetch_user(int(platform_user_id))
             if user:
-                await user.send(content, files=discord_files)
+                for i, chunk in enumerate(chunks):
+                    files = discord_files if i == len(chunks) - 1 else []
+                    await user.send(chunk, files=files)
+                if not chunks:
+                    await user.send(None, files=discord_files)
         except Exception:
             logger.exception(
                 "Failed to send message to Discord user %s",
@@ -292,9 +428,7 @@ class DiscordAdapter(RetryableConnection):
 
     # ── Voice channel helpers ────────────────────────────────────────────────
 
-    async def _on_vc_speech(
-        self, guild_id: int, user_id: int, wav_data: bytes
-    ) -> None:
+    async def _on_vc_speech(self, guild_id: int, user_id: int, wav_data: bytes) -> None:
         """Called by VoiceReceiver when a user finishes speaking."""
         if guild_id in self._vc_muted:
             return

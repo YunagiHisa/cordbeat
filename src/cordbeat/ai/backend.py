@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -84,8 +85,24 @@ class AIBackend(ABC):
         import re
 
         raw = await self.generate(prompt, system, temperature, max_tokens)
+        if not raw:
+            logger.warning(
+                "generate_json: empty raw response (prompt=%d chars) — "
+                "model may have hit context limit or returned only thinking tokens. "
+                "For Qwen3/DeepSeek thinking models set "
+                "ai.options.enable_thinking: false in config.yaml.",
+                len(prompt),
+            )
+        logger.debug("generate_json raw(%d chars): %.500s", len(raw), raw)
         # Strip <think>...</think> reasoning blocks (Qwen3, DeepSeek-R1, etc.)
         text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        # If thinking model put ALL output inside <think> (e.g. JSON-only prompts),
+        # fall back to extracting the outermost {...} from the raw response.
+        if not text:
+            m = re.search(r"\{.*\}", raw, re.DOTALL)
+            if m:
+                text = m.group(0)
+                logger.debug("generate_json: extracted JSON from think block")
         # Extract JSON from potential markdown code blocks
         if text.startswith("```"):
             lines = text.split("\n")
@@ -93,6 +110,13 @@ class AIBackend(ABC):
             if lines and lines[-1].strip() == "```":
                 lines = lines[:-1]
             text = "\n".join(lines)
+        if not text:
+            msg = (
+                f"generate_json: no JSON content extracted from model response "
+                f"(raw={len(raw)} chars). "
+                "If using a thinking model, set ai.options.enable_thinking: false"
+            )
+            raise json.JSONDecodeError(msg, "", 0)
         return dict(json.loads(text))
 
 
@@ -128,6 +152,12 @@ class OllamaBackend(AIBackend):
         if system:
             payload["system"] = system
 
+        logger.debug(
+            "ollama request: model=%s system=%d chars prompt=%d chars",
+            self._model,
+            len(system),
+            len(prompt),
+        )
         labels = {"backend": "ollama", "model": self._model}
         try:
             async with time_block(LLM_GENERATE_LATENCY, labels):
@@ -142,8 +172,11 @@ class OllamaBackend(AIBackend):
             raise
         inc_counter(LLM_GENERATE_TOTAL, {"backend": "ollama", "outcome": "ok"})
         logger.debug("Ollama raw keys: %s", list(data.keys()))
-        logger.debug("Ollama response: %.200s", data.get("response", ""))
-        return str(data.get("response", ""))
+        response_text = str(data.get("response", ""))
+        logger.debug(
+            "ollama response: %d chars: %.300s", len(response_text), response_text
+        )
+        return response_text
 
     async def generate_with_vision(
         self,
@@ -196,6 +229,10 @@ class OpenAICompatBackend(AIBackend):
         self._base_url = config.base_url.rstrip("/")
         self._model = config.model
         self._api_key = config.options.get("api_key", "")
+        # Qwen3 / DeepSeek-R1 thinking models: set enable_thinking: false in
+        # ai.options to skip the <think> phase for JSON-mode requests.
+        # Defaults to None (not sent) to avoid breaking non-thinking models.
+        self._enable_thinking: bool | None = config.options.get("enable_thinking")
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
@@ -212,21 +249,43 @@ class OpenAICompatBackend(AIBackend):
         max_tokens: int = 1024,
     ) -> str:
         messages: list[dict[str, str]] = []
-        if system:
-            messages.append({"role": "system", "content": system})
+        effective_system = system
+        if self._enable_thinking is False:
+            # Belt-and-suspenders: inject /no_think soft-switch into the system
+            # message so Qwen3 disables thinking even if the server ignores
+            # chat_template_kwargs (works across all llama.cpp versions).
+            effective_system = (
+                (system + "\n/no_think").lstrip() if system else "/no_think"
+            )
+        if effective_system:
+            messages.append({"role": "system", "content": effective_system})
         messages.append({"role": "user", "content": prompt})
 
+        logger.debug(
+            "openai_compat request: model=%s system=%d chars prompt=%d chars",
+            self._model,
+            len(effective_system),
+            len(prompt),
+        )
         labels = {"backend": "openai_compat", "model": self._model}
         try:
+            payload: dict[str, Any] = {
+                "model": self._model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            if self._enable_thinking is not None:
+                # llama.cpp passes template kwargs via chat_template_kwargs;
+                # keep the legacy top-level field for other servers (vLLM etc.)
+                payload["chat_template_kwargs"] = {
+                    "enable_thinking": self._enable_thinking
+                }
+                payload["enable_thinking"] = self._enable_thinking
             async with time_block(LLM_GENERATE_LATENCY, labels):
                 resp = await self._client.post(
                     f"{self._base_url}/chat/completions",
-                    json={
-                        "model": self._model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                    },
+                    json=payload,
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -238,7 +297,67 @@ class OpenAICompatBackend(AIBackend):
             raise
         inc_counter(LLM_GENERATE_TOTAL, {"backend": "openai_compat", "outcome": "ok"})
         try:
-            return str(data["choices"][0]["message"]["content"])
+            message = data["choices"][0]["message"]
+            content = message.get("content")
+
+            # Log reasoning_content (chain-of-thought) at DEBUG level so it
+            # appears in logs when log.level=DEBUG without polluting responses.
+            reasoning_content: str = message.get("reasoning_content") or ""
+            if reasoning_content:
+                logger.debug(
+                    "openai_compat thinking (%d chars):\n%.2000s",
+                    len(reasoning_content),
+                    reasoning_content,
+                )
+
+            if not content:
+                # Some thinking-model backends (llama.cpp + Qwen3/DeepSeek) return
+                # reasoning_content with content=null or content="".
+                # reasoning_content is internal chain-of-thought, NOT user-facing
+                # output — using it as the response would leak raw thinking text.
+                # Return empty string; callers (engine, generate_json) handle empty.
+                if reasoning_content:
+                    logger.warning(
+                        "openai_compat: content=null but reasoning_content=%d chars. "
+                        "Model produced only thinking tokens with no actual response. "
+                        "Set ai.options.enable_thinking: false in config.yaml "
+                        "to force the model to generate a direct reply.",
+                        len(reasoning_content),
+                    )
+                else:
+                    logger.warning(
+                        "OpenAI-compat backend returned empty content and no "
+                        "reasoning_content; model may have emitted nothing"
+                    )
+                result = ""
+            else:
+                raw_content = str(content)
+                # Extract and log any inline <think>...</think> blocks before stripping.
+                think_blocks = re.findall(
+                    r"<think>(.*?)</think>", raw_content, flags=re.DOTALL
+                )
+                if think_blocks:
+                    combined_thinking = "\n---\n".join(think_blocks)
+                    logger.debug(
+                        "openai_compat inline thinking (%d chars):\n%.2000s",
+                        len(combined_thinking),
+                        combined_thinking,
+                    )
+                stripped = re.sub(
+                    r"<think>.*?</think>", "", raw_content, flags=re.DOTALL
+                ).strip()
+                if not stripped:
+                    logger.warning(
+                        "openai_compat: content was entirely <think> blocks; "
+                        "set ai.options.enable_thinking: false in config.yaml"
+                    )
+                    result = raw_content
+                else:
+                    result = stripped
+            logger.debug(
+                "openai_compat response: %d chars: %.300s", len(result), result
+            )
+            return result
         except (KeyError, IndexError) as exc:
             msg = f"Unexpected response format from {self._base_url}"
             raise AIBackendError(msg) from exc

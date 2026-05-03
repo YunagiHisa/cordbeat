@@ -442,6 +442,7 @@ class TestSlashCommands:
                 await adapter._handle_join(interaction)
 
         interaction.response.send_message.assert_called()
+
     async def test_handle_leave_cleans_up(self) -> None:
         adapter = self._make_adapter()
         guild_id = 456

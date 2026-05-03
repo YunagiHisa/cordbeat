@@ -103,6 +103,7 @@ class TestCoreEngine:
             content="Hi!",
         )
         await engine.handle_message(msg)
+        await engine.drain()
         # Called four times: recall keywords, response, emotion, extraction
         assert mock_ai.generate.await_count == 4
 
@@ -200,6 +201,7 @@ class TestCoreEngine:
             content="Remember this!",
         )
         await engine.handle_message(msg)
+        await engine.drain()
         user_id = await memory.resolve_user("test", "user1")
         assert user_id is not None
         msgs = await memory.get_recent_messages(user_id)
@@ -218,6 +220,7 @@ class TestCoreEngine:
             content="Great news!",
         )
         await engine.handle_message(msg)
+        await engine.drain()
         assert soul.emotion.primary == Emotion.JOY
         assert soul.emotion.primary_intensity == pytest.approx(0.7)
 
@@ -277,6 +280,7 @@ class TestCoreEngine:
             content="My name is Alice",
         )
         await engine.handle_message(msg1)
+        await engine.drain()  # ensure msg1 background tasks finish before msg2
 
         # Send second message — history should be included
         msg2 = GatewayMessage(
@@ -335,6 +339,7 @@ class TestCoreEngine:
             content="I just got married!",
         )
         await eng.handle_message(msg)
+        await eng.drain()
 
         # Emotion should be updated
         assert soul.emotion.primary == Emotion.JOY
@@ -378,6 +383,7 @@ class TestCoreEngine:
             content="Hi!",
         )
         await engine.handle_message(msg)
+        await engine.drain()
         # 4 calls: recall keywords, main generate, emotion, extraction
         assert mock_ai.generate.await_count == 4
 
@@ -416,6 +422,7 @@ class TestCoreEngine:
             content="I love Python!",
         )
         await eng.handle_message(msg)
+        await eng.drain()
 
         user_id = await memory.resolve_user("test", "user1")
         assert user_id is not None
@@ -459,6 +466,7 @@ class TestCoreEngine:
             content="I got a new job!",
         )
         await eng.handle_message(msg)
+        await eng.drain()
 
         user_id = await memory.resolve_user("test", "user1")
         assert user_id is not None
@@ -500,6 +508,7 @@ class TestCoreEngine:
             content="Check out this recipe!",
         )
         await eng.handle_message(msg)
+        await eng.drain()
 
         user_id = await memory.resolve_user("test", "user1")
         assert user_id is not None
@@ -1943,3 +1952,162 @@ class TestSoulCommands:
 
         reply = mock_gateway.send_to_adapter.call_args[0][1]
         assert "not found" in reply.content.lower()
+
+
+class TestAutoDraw:
+    """Tests for the LLM-driven draw pipeline (_maybe_draw + _generate_draw_dsl)."""
+
+    async def test_maybe_draw_no_tag(
+        self,
+        engine: CoreEngine,
+    ) -> None:
+        """Response with no [DRAW: ...] tag returns unchanged text and no images."""
+        text, images = await engine._maybe_draw("Hello there!")
+        assert text == "Hello there!"
+        assert images == []
+
+    async def test_maybe_draw_no_skill(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """When draw skill is absent, [DRAW: ...] tags are left untouched."""
+        empty_skills = SkillRegistry(tmp_path / "no_skills")
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=empty_skills,
+            gateway=mock_gateway,
+        )
+        text, images = await eng._maybe_draw("Check [DRAW: a cat]!")
+        assert "[DRAW:" in text
+        assert images == []
+
+    async def test_maybe_draw_with_skill_success(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """[DRAW: ...] tag triggers DSL generation and skill execution."""
+        from unittest.mock import MagicMock
+
+        mock_skill = MagicMock()
+        mock_skill.execute = AsyncMock(
+            return_value={"output": "base64imgdata", "warnings": []}
+        )
+
+        fake_skills = MagicMock()
+        fake_skills.get = lambda name: mock_skill if name == "draw" else None
+
+        async def _gen(**kw: object) -> str:
+            prompt = kw.get("prompt", "")
+            if isinstance(prompt, str) and "Draw this:" in prompt:
+                return "SIZE 400 400\nCANVAS white\nCIRCLE 200 200 100 red\nOUTPUT"
+            return "Hello!"
+
+        mock_ai.generate = AsyncMock(side_effect=_gen)
+
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=fake_skills,
+            gateway=mock_gateway,
+        )
+        text, images = await eng._maybe_draw("Here you go! [DRAW: a red circle]")
+        assert "[DRAW:" not in text
+        assert images == ["base64imgdata"]
+
+    async def test_maybe_draw_skill_error_falls_back(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """If the draw skill raises, we fall back to clean text with no images."""
+        from unittest.mock import MagicMock
+
+        mock_skill = MagicMock()
+        mock_skill.execute = AsyncMock(side_effect=RuntimeError("Pillow missing"))
+
+        fake_skills = MagicMock()
+        fake_skills.get = lambda name: mock_skill if name == "draw" else None
+
+        async def _gen(**kw: object) -> str:
+            prompt = kw.get("prompt", "")
+            if isinstance(prompt, str) and "Draw this:" in prompt:
+                return "SIZE 400 400\nOUTPUT"
+            return "Hello!"
+
+        mock_ai.generate = AsyncMock(side_effect=_gen)
+
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=fake_skills,
+            gateway=mock_gateway,
+        )
+        text, images = await eng._maybe_draw("Check this [DRAW: a tree]!")
+        assert "[DRAW:" not in text
+        assert images == []
+
+    async def test_generate_draw_dsl_calls_ai(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """_generate_draw_dsl returns the AI output stripped of whitespace."""
+        dsl_response = "  SIZE 400 400\nCANVAS white\nOUTPUT\n  "
+
+        async def _gen(**kw: object) -> str:
+            return dsl_response
+
+        mock_ai.generate = AsyncMock(side_effect=_gen)
+        empty_skills = SkillRegistry(tmp_path / "skills2")
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=empty_skills,
+            gateway=mock_gateway,
+        )
+        dsl = await eng._generate_draw_dsl("a white canvas")
+        assert dsl == dsl_response.strip()
+
+    async def test_generate_draw_dsl_ai_failure_returns_empty(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """_generate_draw_dsl returns empty string when AI raises."""
+
+        async def _fail(**kw: object) -> str:
+            raise RuntimeError("timeout")
+
+        mock_ai.generate = AsyncMock(side_effect=_fail)
+        empty_skills = SkillRegistry(tmp_path / "skills3")
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=empty_skills,
+            gateway=mock_gateway,
+        )
+        dsl = await eng._generate_draw_dsl("a star")
+        assert dsl == ""

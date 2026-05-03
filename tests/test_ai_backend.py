@@ -180,3 +180,97 @@ class TestOpenAICompatBackend:
 
         with pytest.raises(AIBackendError, match="Unexpected response format"):
             await backend.generate("test")
+
+    async def test_reasoning_content_only_returns_empty(self) -> None:
+        """When content=null but reasoning_content is present, return empty string.
+
+        reasoning_content is internal chain-of-thought; leaking it to the user
+        would expose the model's raw thinking process verbatim.
+        """
+        cfg = AIBackendConfig(provider="openai_compat")
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "reasoning_content": "Here's a thinking process:\n1. ...",
+                    }
+                }
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        result = await backend.generate("test")
+        assert result == ""
+
+    async def test_enable_thinking_false_sent_in_payload(self) -> None:
+        """enable_thinking: false should be included in the API payload."""
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={"enable_thinking": False},
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"choices": [{"message": {"content": "Hi!"}}]}
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        await backend.generate("test")
+
+        call_kwargs = backend._client.post.call_args
+        payload = call_kwargs[1]["json"]
+        assert payload.get("enable_thinking") is False
+
+    async def test_enable_thinking_not_sent_by_default(self) -> None:
+        """enable_thinking should NOT be sent when not configured.
+
+        Avoids breaking non-thinking backends that don't recognise the param.
+        """
+        cfg = AIBackendConfig(provider="openai_compat")
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"choices": [{"message": {"content": "Hi!"}}]}
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        await backend.generate("test")
+
+        call_kwargs = backend._client.post.call_args
+        payload = call_kwargs[1]["json"]
+        assert "enable_thinking" not in payload
+
+
+class TestGenerateJsonEmptyResponse:
+    async def test_empty_raw_raises_json_decode_error(self) -> None:
+        """Empty LLM response should raise JSONDecodeError with a helpful message."""
+        cfg = AIBackendConfig(provider="ollama")
+        backend = OllamaBackend(cfg)
+        backend.generate = AsyncMock(return_value="")  # type: ignore[method-assign]
+
+        with pytest.raises(
+            json.JSONDecodeError, match="Empty AI response|no JSON content"
+        ):
+            await backend.generate_json("test")
+
+    async def test_think_only_response_raises_json_decode_error(self) -> None:
+        """Response with ONLY <think> block (no JSON) should raise JSONDecodeError."""
+        cfg = AIBackendConfig(provider="ollama")
+        backend = OllamaBackend(cfg)
+        backend.generate = AsyncMock(  # type: ignore[method-assign]
+            return_value="<think>I should respond with JSON but I won't</think>"
+        )
+
+        with pytest.raises(json.JSONDecodeError):
+            await backend.generate_json("test")

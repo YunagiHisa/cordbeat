@@ -57,8 +57,7 @@ _BANNER_COLORS = [_PINK, _DARK_PINK, _RED]  # 3-color cycle (install.ps1 / insta
 _BANNER_ART = (
     "\n"
     + "\n".join(
-        _c(line, _BANNER_COLORS[i % 3] + _BOLD)
-        for i, line in enumerate(_BANNER_LINES)
+        _c(line, _BANNER_COLORS[i % 3] + _BOLD) for i, line in enumerate(_BANNER_LINES)
     )
     + "\n"
 )

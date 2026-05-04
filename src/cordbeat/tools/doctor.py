@@ -344,8 +344,6 @@ def run_sync_config(home: Path, src_path: Path | None = None) -> int:
     return 0
 
 
-
-
 def main() -> None:
     """Interactive CordBeat Doctor CLI."""
     import sys

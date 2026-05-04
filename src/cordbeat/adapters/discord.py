@@ -315,9 +315,7 @@ class DiscordAdapter(RetryableConnection):
         existing = self._typing_tasks.pop(channel_id, None)
         if existing is not None:
             existing.cancel()
-        self._typing_tasks[channel_id] = asyncio.create_task(
-            self._keep_typing(channel)
-        )
+        self._typing_tasks[channel_id] = asyncio.create_task(self._keep_typing(channel))
 
     def _stop_typing(self, channel_id: int) -> None:
         """Cancel the typing indicator for the given channel."""
@@ -399,10 +397,9 @@ class DiscordAdapter(RetryableConnection):
                 self._stop_typing(channel_id)
                 # get_channel() only checks the cache; fall back to fetch_channel()
                 # to reliably reach channels not in the bot's in-memory cache.
-                channel = (
-                    self._bot.get_channel(channel_id)
-                    or await self._bot.fetch_channel(channel_id)
-                )
+                channel = self._bot.get_channel(
+                    channel_id
+                ) or await self._bot.fetch_channel(channel_id)
                 if channel:
                     for i, chunk in enumerate(chunks):
                         # Attach files to the last chunk (or first if no text)

@@ -246,6 +246,7 @@ async def main(
             pass
 
     logger.info("Shutting down...")
+
     # Use individual timeouts so one stuck subsystem can't hang the entire
     # shutdown sequence.
     async def _cancel_with_timeout(

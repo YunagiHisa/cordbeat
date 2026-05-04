@@ -373,13 +373,9 @@ class CoreEngine:
                 user_id, user.display_name, message.content, response
             )
         except Exception:
-            logger.exception(
-                "Background post-processing failed for user %s", user_id
-            )
+            logger.exception("Background post-processing failed for user %s", user_id)
 
-    async def _dispatch_skill_tags(
-        self, response: str, message: GatewayMessage
-    ) -> str:
+    async def _dispatch_skill_tags(self, response: str, message: GatewayMessage) -> str:
         """Execute the first [SKILL: name | param=value] tag in the AI response.
 
         Only ``safe`` skills run automatically. Others are silently removed.

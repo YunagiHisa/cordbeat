@@ -31,6 +31,7 @@ import io
 import math
 import re
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
@@ -281,12 +282,27 @@ class _DrawDSL:
             return
         self._ensure_canvas()
         assert self._img is not None
-        filename = args[0]
-        fmt = "PNG" if not filename.lower().endswith((".jpg", ".jpeg")) else "JPEG"
+        # Strip all directory components so the AI cannot perform path traversal
+        # (e.g. SAVE ../../../etc/passwd).  Files are always written to the
+        # cordbeat draw-output directory.
+        basename = Path(args[0]).name
+        if not basename:
+            self.warnings.append("SAVE: invalid filename")
+            return
+        safe_dir = Path.home() / ".cordbeat" / "draw_output"
+        safe_dir.mkdir(parents=True, exist_ok=True)
+        filepath = (safe_dir / basename).resolve()
+        # Defend against symlink-based escapes as well.
+        try:
+            filepath.relative_to(safe_dir.resolve())
+        except ValueError:
+            self.warnings.append("SAVE: path escaped safe directory")
+            return
+        fmt = "PNG" if not basename.lower().endswith((".jpg", ".jpeg")) else "JPEG"
         try:
             img = self._img.convert("RGB") if fmt == "JPEG" else self._img
-            img.save(filename, format=fmt)
-            self._saved = filename
+            img.save(str(filepath), format=fmt)
+            self._saved = str(filepath)
         except Exception as exc:
             self.warnings.append(f"SAVE error: {exc}")
 

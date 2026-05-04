@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 # Load the draw skill directly via importlib to avoid sys.path conflicts.
 _SKILL_DIR = Path(__file__).parent.parent / "skills" / "draw"
 _spec = importlib.util.spec_from_file_location(
@@ -176,18 +178,44 @@ def test_size_missing_args_warns() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_save_png(tmp_path: Path) -> None:
-    outfile = tmp_path / "test_draw.png"
-    result = run(f"SIZE 50 50\nCANVAS yellow\nSAVE {outfile}")
-    assert result.get("saved") == str(outfile)
-    assert outfile.exists()
+def test_save_png(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Redirect the safe_dir to tmp_path so tests don't write to ~/.cordbeat
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    result = run("SIZE 50 50\nCANVAS yellow\nSAVE test_draw.png")
+    expected = str(tmp_path / ".cordbeat" / "draw_output" / "test_draw.png")
+    assert result.get("saved") == expected
+    assert Path(expected).exists()
 
 
-def test_save_jpeg(tmp_path: Path) -> None:
-    outfile = tmp_path / "test_draw.jpg"
-    result = run(f"SIZE 50 50\nCANVAS cyan\nSAVE {outfile}")
-    assert result.get("saved") == str(outfile)
-    assert outfile.exists()
+def test_save_jpeg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    result = run("SIZE 50 50\nCANVAS cyan\nSAVE test_draw.jpg")
+    expected = str(tmp_path / ".cordbeat" / "draw_output" / "test_draw.jpg")
+    assert result.get("saved") == expected
+    assert Path(expected).exists()
+
+
+def test_save_path_traversal_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SAVE must not allow directory traversal (e.g. ../../etc/passwd)."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    result = run("SIZE 50 50\nCANVAS white\nSAVE ../../evil.png")
+    # The basename is 'evil.png', stored safely — traversal components stripped
+    expected = str(tmp_path / ".cordbeat" / "draw_output" / "evil.png")
+    assert result.get("saved") == expected
+    assert Path(expected).exists()
+
+
+def test_save_absolute_path_stripped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SAVE with an absolute path must save only the basename in safe_dir."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    result = run("SIZE 50 50\nCANVAS white\nSAVE /tmp/injected.png")
+    expected = str(tmp_path / ".cordbeat" / "draw_output" / "injected.png")
+    assert result.get("saved") == expected
+    assert Path(expected).exists()
 
 
 # ---------------------------------------------------------------------------

@@ -136,6 +136,14 @@ omit = [
     # that are not installed in the default test environment.
     "*/cordbeat/voice_recv.py",
     "*/cordbeat/rvc_backend.py",
+    # Entry point: starts the event loop; tested via integration tests.
+    "*/cordbeat/main.py",
+    # Interactive setup wizard: requires live user input; cannot be driven
+    # by a unit-test runner.
+    "*/cordbeat/tools/wizard.py",
+    # Metrics HTTP server: a long-lived daemon thread; requires a running
+    # TCP listener which is impractical to drive in pytest.
+    "*/cordbeat/tools/metrics_server.py",
 ]
 
 [tool.coverage.report]

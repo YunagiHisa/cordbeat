@@ -47,6 +47,7 @@ class AdapterConfig:
     core_ws_url: str = "ws://localhost:8765"
     enabled: bool = True
     reconnect_max_backoff: int = 60
+    auth_token: str = ""  # populated from gateway.auth_token by runner
     options: dict[str, Any] = field(default_factory=dict)
 
 
@@ -187,6 +188,26 @@ class TTSConfig:
 
 
 @dataclass
+class RVCConfig:
+    """Voice conversion (RVC) configuration.
+
+    When enabled, TTS audio is post-processed through an RVC model to apply
+    voice conversion. Requires the ``rvc`` extra: ``uv sync --extra rvc``.
+
+    Set ``model_path`` to the .pth checkpoint file.
+    Set ``index_path`` to the .index file (optional, improves quality).
+    ``f0_up_key`` shifts pitch (semitones, e.g. 0 = no shift, 12 = +1 octave).
+    ``device`` selects compute device (``cuda``, ``cpu``, or empty for auto).
+    """
+
+    enabled: bool = False
+    model_path: str = ""
+    index_path: str = ""
+    f0_up_key: int = 0
+    device: str = ""
+
+
+@dataclass
 class MetricsConfig:
     """In-process metrics collection.
 
@@ -216,6 +237,7 @@ class Config:
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
     stt: STTConfig = field(default_factory=STTConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
+    rvc: RVCConfig = field(default_factory=RVCConfig)
     skills_dir: str = "skills"
     data_dir: str = "data"
 
@@ -232,6 +254,75 @@ def _build_dataclass(cls: type, data: dict[str, Any]) -> Any:
     field_names = {f.name for f in dataclasses.fields(cls)}
     filtered = {k: v for k, v in data.items() if k in field_names}
     return cls(**filtered)
+
+
+_SECRET_YAML_PATHS: tuple[tuple[str, ...], ...] = (
+    ("gateway", "auth_token"),
+    ("ai_backend", "api_key"),
+    ("stt", "api_key"),
+    ("tts", "api_key"),
+)
+
+_SECRET_YAML_ADAPTER_KEYS = ("token", "api_key", "bot_token", "webhook_secret")
+
+
+_warned_paths: set[str] = set()
+
+
+def _warn_secrets_in_yaml(raw: dict[str, Any], path: Path) -> None:
+    """Emit a warning when secret-like keys are found directly in config YAML.
+
+    Secrets should live in a ``.env`` file next to ``config.yaml`` and be
+    referenced via ``CORDBEAT_*`` environment variables, not stored in YAML.
+    Warnings are deduplicated — if ``load_config`` is called multiple times
+    for the same file (e.g. during combined server + CLI startup), only the
+    first call emits warnings.
+    """
+    if str(path) in _warned_paths:
+        return
+    _warned_paths.add(str(path))
+    import logging as _logging
+
+    _log = _logging.getLogger(__name__)
+
+    def _check(d: Any, key_path: str) -> None:
+        if not isinstance(d, dict):
+            return
+        for k, v in d.items():
+            full = f"{key_path}.{k}" if key_path else k
+            if k in _SECRET_YAML_ADAPTER_KEYS and isinstance(v, str) and v:
+                _log.warning(
+                    "Secret key '%s' found in %s — move it to .env: "
+                    "CORDBEAT_%s=<value>",
+                    full,
+                    path.name,
+                    full.upper().replace(".", "__"),
+                )
+            elif isinstance(v, dict):
+                _check(v, full)
+
+    for key_path in _SECRET_YAML_PATHS:
+        node: Any = raw
+        for part in key_path[:-1]:
+            if not isinstance(node, dict):
+                break
+            node = node.get(part, {})
+        else:
+            leaf_key = key_path[-1]
+            leaf_val = node.get(leaf_key) if isinstance(node, dict) else None
+            if isinstance(leaf_val, str) and leaf_val:
+                dotted = ".".join(key_path)
+                env_name = "CORDBEAT_" + "__".join(k.upper() for k in key_path)
+                _log.warning(
+                    "Secret key '%s' found in %s — move it to .env: %s=<value>",
+                    dotted,
+                    path.name,
+                    env_name,
+                )
+
+    adapters_raw = raw.get("adapters", {})
+    if isinstance(adapters_raw, dict):
+        _check(adapters_raw, "adapters")
 
 
 def _load_dotenv(path: Path) -> None:
@@ -333,6 +424,10 @@ def _resolve_relative_paths(config: Config, config_dir: Path) -> None:
     config.skills_dir = _resolve(config.skills_dir)
     if config.log.file:
         config.log.file = _resolve(config.log.file)
+    if config.rvc.model_path:
+        config.rvc.model_path = _resolve(config.rvc.model_path)
+    if config.rvc.index_path:
+        config.rvc.index_path = _resolve(config.rvc.index_path)
 
 
 def load_config(path: str | Path) -> Config:
@@ -359,6 +454,7 @@ def load_config(path: str | Path) -> Config:
     else:
         with path.open(encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
+        _warn_secrets_in_yaml(raw, path)
 
     # Apply environment variable overrides
     _apply_env_overrides(raw)
@@ -398,7 +494,10 @@ def load_config(path: str | Path) -> Config:
         soul_raw["soul_dir"] = raw["soul_dir"]
     soul = _build_dataclass(SoulConfig, soul_raw)
 
-    log = _build_dataclass(LogConfig, raw.get("log", {}))
+    log_raw = raw.get("log", {})
+    # Track whether log.file was explicitly set (even to "") in the YAML / env
+    log_file_explicit = isinstance(log_raw, dict) and "file" in log_raw
+    log = _build_dataclass(LogConfig, log_raw if isinstance(log_raw, dict) else {})
 
     metrics_raw = raw.get("metrics", {})
     if not isinstance(metrics_raw, dict):
@@ -425,6 +524,11 @@ def load_config(path: str | Path) -> Config:
         tts_raw = {}
     tts = _build_dataclass(TTSConfig, tts_raw)
 
+    rvc_raw = raw.get("rvc", {})
+    if not isinstance(rvc_raw, dict):
+        rvc_raw = {}
+    rvc = _build_dataclass(RVCConfig, rvc_raw)
+
     cfg = Config(
         gateway=gateway,
         adapters=adapters,
@@ -437,9 +541,16 @@ def load_config(path: str | Path) -> Config:
         metrics=metrics,
         stt=stt,
         tts=tts,
+        rvc=rvc,
         skills_dir=raw.get("skills_dir", "skills"),
         data_dir=raw.get("data_dir", "data"),
     )
 
     _resolve_relative_paths(cfg, path.resolve().parent)
+
+    # Default log file: <data_dir>/logs/cordbeat.log
+    # Only set if NOT explicitly configured in YAML/env (empty string = user-disabled)
+    if not log_file_explicit and not cfg.log.file:
+        cfg.log.file = str(Path(cfg.data_dir) / "logs" / "cordbeat.log")
+
     return cfg

@@ -1,5 +1,6 @@
 name: api_call
 description: "外部APIにHTTPリクエストを送信する"
+description_en: "Send HTTP requests to an external API"
 version: "1.0.0"
 author: "cordbeat"
 

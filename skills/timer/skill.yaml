@@ -1,5 +1,6 @@
 name: timer
 description: "リマインダー・タイマーを設定する"
+description_en: "Set a reminder or timer"
 version: "1.0.0"
 author: "cordbeat"
 

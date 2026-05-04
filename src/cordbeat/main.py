@@ -4,23 +4,30 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import signal
 import sys
 from pathlib import Path
+from typing import Any
 
-from cordbeat.ai_backend import create_backend
+from cordbeat.agent.heartbeat import HeartbeatLoop
+from cordbeat.agent.soul import Soul
+from cordbeat.ai.backend import create_backend
 from cordbeat.config import cordbeat_home, load_config
-from cordbeat.engine import CoreEngine
-from cordbeat.gateway import GatewayServer, MessageQueue
-from cordbeat.heartbeat import HeartbeatLoop
+from cordbeat.core.engine import CoreEngine
+from cordbeat.core.gateway import GatewayServer, MessageQueue
 from cordbeat.memory import MemoryStore
-from cordbeat.metrics import REGISTRY as METRICS_REGISTRY
-from cordbeat.metrics_server import PrometheusServer
-from cordbeat.skill_sandbox import SandboxConfig
-from cordbeat.skills import SkillRateLimiter, SkillRegistry
-from cordbeat.soul import Soul
+from cordbeat.skills import SandboxConfig, SkillRateLimiter, SkillRegistry
+from cordbeat.tools.metrics import REGISTRY as METRICS_REGISTRY
+from cordbeat.tools.metrics_server import PrometheusServer
 
 logger = logging.getLogger("cordbeat")
+
+# Windows: use ProactorEventLoop (default since Python 3.8) to support
+# asyncio.create_subprocess_exec (required by skill uv-env builds).
+# SIGINT (Ctrl+C) is handled by the signal handlers below instead.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 
 def _resolve_config_path() -> str:
@@ -39,12 +46,42 @@ def _resolve_config_path() -> str:
         return "config.yaml"
 
     # Nothing found — run wizard
-    from cordbeat.setup_wizard import run_wizard
+    from cordbeat.tools.wizard import run_wizard
 
     return str(run_wizard())
 
 
-async def main(config_path: str = "config.yaml") -> None:
+def _sync_builtin_skills(skills_dir: Path) -> None:
+    """Copy missing built-in skills to the configured skills directory.
+
+    Skills that already exist in the target are left untouched so
+    that user modifications are preserved.  New built-in skills added
+    in future releases are automatically deployed on the next startup.
+    """
+    # Locate the bundled skills/ directory (project-root sibling of src/cordbeat/)
+    _here = Path(__file__).resolve()  # …/src/cordbeat/main.py
+    bundled = _here.parent.parent.parent / "skills"
+    if not bundled.is_dir():
+        return
+
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    for src_skill in bundled.iterdir():
+        if not src_skill.is_dir():
+            continue
+        dst_skill = skills_dir / src_skill.name
+        if dst_skill.exists():
+            continue  # user copy already present — don't overwrite
+        try:
+            shutil.copytree(src_skill, dst_skill)
+            logger.info("Installed built-in skill '%s' → %s", src_skill.name, dst_skill)
+        except OSError:
+            logger.exception("Failed to install built-in skill '%s'", src_skill.name)
+
+
+async def main(
+    config_path: str = "config.yaml",
+    _ready: asyncio.Event | None = None,
+) -> None:
     config = load_config(config_path)
 
     logging.basicConfig(
@@ -106,6 +143,7 @@ async def main(config_path: str = "config.yaml") -> None:
         config.ai_backend.model,
     )
 
+    _sync_builtin_skills(Path(config.skills_dir))
     skills = SkillRegistry(
         config.skills_dir,
         sandbox_config=SandboxConfig(
@@ -131,6 +169,7 @@ async def main(config_path: str = "config.yaml") -> None:
         gateway=gateway,
         memory_config=config.memory,
         vision_enabled=config.ai_backend.vision_enabled,
+        timezone_name=config.heartbeat.timezone,
     )
     queue.set_handler(engine.handle_message)
 
@@ -151,6 +190,9 @@ async def main(config_path: str = "config.yaml") -> None:
 
     queue_task = asyncio.create_task(queue.process_loop())
 
+    if _ready is not None:
+        _ready.set()  # Signal to main_with_cli that the gateway is up
+
     logger.info(
         "CordBeat is alive — %s is ready (ws://%s:%d)",
         soul.name,
@@ -169,39 +211,130 @@ async def main(config_path: str = "config.yaml") -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, _signal_handler)
-        except NotImplementedError:
-            # Windows doesn't support add_signal_handler for SIGTERM
-            pass
+        except (NotImplementedError, OSError):
+            # Windows: add_signal_handler is not supported for any signal.
+            # Fall back to the synchronous signal module; call_soon_threadsafe
+            # ensures the callback runs safely inside the running event loop.
+            try:
+                signal.signal(
+                    sig,
+                    lambda *_: loop.call_soon_threadsafe(_signal_handler),
+                )
+            except (ValueError, OSError):
+                pass
+
+    async def _interrupt_monitor() -> None:
+        """Belt-and-suspenders: catches KeyboardInterrupt raised by asyncio on
+        Windows when the process is sent SIGINT while the event loop is busy."""
+        try:
+            while not stop_event.is_set():
+                await asyncio.sleep(0.2)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            stop_event.set()
+
+    monitor_task = asyncio.create_task(_interrupt_monitor())
 
     try:
         await stop_event.wait()
     except KeyboardInterrupt:
-        pass
+        stop_event.set()
+    finally:
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            pass
 
     logger.info("Shutting down...")
-    await heartbeat.stop()
-    await gateway.stop()
+
+    # Use individual timeouts so one stuck subsystem can't hang the entire
+    # shutdown sequence.
+    async def _cancel_with_timeout(
+        coro_or_task: Any, label: str, timeout: float = 10.0
+    ) -> None:
+        try:
+            await asyncio.wait_for(coro_or_task, timeout=timeout)
+        except (TimeoutError, asyncio.CancelledError):
+            logger.warning("Shutdown timeout for %s (%.0fs)", label, timeout)
+        except Exception:
+            logger.exception("Error during shutdown of %s", label)
+
+    await _cancel_with_timeout(heartbeat.stop(), "heartbeat")
+    await _cancel_with_timeout(gateway.stop(), "gateway")
     queue_task.cancel()
-    try:
-        await queue_task
-    except asyncio.CancelledError:
-        pass
+    await _cancel_with_timeout(queue_task, "queue_task")
     if metrics_server is not None:
-        await metrics_server.stop()
+        await _cancel_with_timeout(metrics_server.stop(), "metrics_server")
     await ai.aclose()
     await memory.close()
     logger.info("CordBeat stopped")
 
 
+async def main_with_cli(config_path: str) -> None:
+    """Start the CordBeat server and connect the interactive CLI adapter.
+
+    The server runs as a background task; the CLI adapter runs in the
+    foreground.  When the user quits the CLI (Ctrl+C / EOF), the server
+    is shut down gracefully.
+    """
+    from cordbeat.adapters.cli import main as cli_main
+
+    # Load config early so we know the WS URL & auth token.
+    # (load_config deduplicates secret warnings, so the second call inside
+    # main() will not re-emit them.)
+    _cfg = load_config(config_path)
+    ws_url = f"ws://{_cfg.gateway.host}:{_cfg.gateway.port}"
+    auth_token = _cfg.gateway.auth_token
+
+    # Use an Event so main() signals us when the gateway is ready, avoiding
+    # the old socket-probe approach that caused a spurious WS handshake error.
+    _ready = asyncio.Event()
+    server_task = asyncio.create_task(main(config_path, _ready=_ready))
+
+    try:
+        await asyncio.wait_for(_ready.wait(), timeout=10.0)
+    except TimeoutError:
+        if server_task.done() and not server_task.cancelled():
+            exc = server_task.exception()
+            raise RuntimeError(f"CordBeat server failed to start: {exc}") from exc
+        server_task.cancel()
+        raise RuntimeError(
+            "CordBeat server did not start within 10 s. "
+            "Check logs for startup errors (e.g. Ollama not running, "
+            "missing config, or port already in use)."
+        )
+
+    try:
+        await cli_main(ws_url, auth_token)
+    finally:
+        server_task.cancel()
+        try:
+            await server_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+
 def cli() -> None:
     # Handle subcommands
     if len(sys.argv) > 1 and sys.argv[1] == "doctor":
-        from cordbeat.doctor import run_doctor
+        from cordbeat.tools.doctor import run_doctor
 
         raise SystemExit(run_doctor())
 
     config_path = _resolve_config_path()
-    asyncio.run(main(config_path))
+    try:
+        asyncio.run(main(config_path))
+    except KeyboardInterrupt:
+        pass
+
+
+def cli_chat() -> None:
+    """Start CordBeat in combined server + interactive CLI chat mode."""
+    config_path = _resolve_config_path()
+    try:
+        asyncio.run(main_with_cli(config_path))
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

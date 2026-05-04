@@ -8,7 +8,7 @@ import math
 import pytest
 import sqlite_vec
 
-import cordbeat._memory_vector as vector_module
+import cordbeat.memory.vector as vector_module
 
 _EMBEDDING_DIM = vector_module.EMBEDDING_DIM
 

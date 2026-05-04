@@ -1,5 +1,6 @@
 name: web_search
 description: "Web検索を行い結果を返す"
+description_en: "Perform a web search and return results"
 version: "1.0.0"
 author: "cordbeat"
 

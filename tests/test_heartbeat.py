@@ -9,9 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from cordbeat.agent.heartbeat import HeartbeatLoop, _in_quiet_hours, _parse_time
+from cordbeat.agent.soul import Soul
 from cordbeat.config import HeartbeatConfig, MemoryConfig
-from cordbeat.gateway import MessageQueue
-from cordbeat.heartbeat import HeartbeatLoop, _in_quiet_hours, _parse_time
+from cordbeat.core.gateway import MessageQueue
 from cordbeat.memory import MemoryStore
 from cordbeat.models import (
     HeartbeatAction,
@@ -24,7 +25,6 @@ from cordbeat.models import (
     UserSummary,
 )
 from cordbeat.skills import Skill, SkillRegistry
-from cordbeat.soul import Soul
 
 # ── Helper time parsing ───────────────────────────────────────────────
 
@@ -46,43 +46,43 @@ class TestParseTime:
 class TestInQuietHours:
     def test_inside_range(self) -> None:
         """03:00 is between 01:00-07:00."""
-        with patch("cordbeat.heartbeat.datetime") as mock_dt:
+        with patch("cordbeat.agent.heartbeat.datetime") as mock_dt:
             mock_dt.now.return_value = MagicMock(time=lambda: time(3, 0))
             assert _in_quiet_hours("01:00", "07:00") is True
 
     def test_outside_range(self) -> None:
         """12:00 is outside 01:00-07:00."""
-        with patch("cordbeat.heartbeat.datetime") as mock_dt:
+        with patch("cordbeat.agent.heartbeat.datetime") as mock_dt:
             mock_dt.now.return_value = MagicMock(time=lambda: time(12, 0))
             assert _in_quiet_hours("01:00", "07:00") is False
 
     def test_midnight_wrap_inside(self) -> None:
         """23:30 is inside 22:00-06:00 (wraps midnight)."""
-        with patch("cordbeat.heartbeat.datetime") as mock_dt:
+        with patch("cordbeat.agent.heartbeat.datetime") as mock_dt:
             mock_dt.now.return_value = MagicMock(time=lambda: time(23, 30))
             assert _in_quiet_hours("22:00", "06:00") is True
 
     def test_midnight_wrap_inside_early(self) -> None:
         """02:00 is inside 22:00-06:00 (wraps midnight)."""
-        with patch("cordbeat.heartbeat.datetime") as mock_dt:
+        with patch("cordbeat.agent.heartbeat.datetime") as mock_dt:
             mock_dt.now.return_value = MagicMock(time=lambda: time(2, 0))
             assert _in_quiet_hours("22:00", "06:00") is True
 
     def test_midnight_wrap_outside(self) -> None:
         """12:00 is outside 22:00-06:00 (wraps midnight)."""
-        with patch("cordbeat.heartbeat.datetime") as mock_dt:
+        with patch("cordbeat.agent.heartbeat.datetime") as mock_dt:
             mock_dt.now.return_value = MagicMock(time=lambda: time(12, 0))
             assert _in_quiet_hours("22:00", "06:00") is False
 
     def test_at_boundary_start(self) -> None:
         """01:00 (boundary) is inside 01:00-07:00."""
-        with patch("cordbeat.heartbeat.datetime") as mock_dt:
+        with patch("cordbeat.agent.heartbeat.datetime") as mock_dt:
             mock_dt.now.return_value = MagicMock(time=lambda: time(1, 0))
             assert _in_quiet_hours("01:00", "07:00") is True
 
     def test_at_boundary_end(self) -> None:
         """07:00 (boundary) is inside 01:00-07:00."""
-        with patch("cordbeat.heartbeat.datetime") as mock_dt:
+        with patch("cordbeat.agent.heartbeat.datetime") as mock_dt:
             mock_dt.now.return_value = MagicMock(time=lambda: time(7, 0))
             assert _in_quiet_hours("01:00", "07:00") is True
 
@@ -403,7 +403,7 @@ class TestTick:
         heartbeat: HeartbeatLoop,
     ) -> None:
         """During quiet hours → runs sleep once, then skips."""
-        with patch("cordbeat.heartbeat._in_quiet_hours", return_value=True):
+        with patch("cordbeat.agent.heartbeat._in_quiet_hours", return_value=True):
             result = await heartbeat._tick()
         assert result == 60
         assert heartbeat._sleep_done_today is True
@@ -423,7 +423,7 @@ class TestTick:
                 "next_heartbeat_minutes": 30,
             }
         )
-        with patch("cordbeat.heartbeat._in_quiet_hours", return_value=False):
+        with patch("cordbeat.agent.heartbeat._in_quiet_hours", return_value=False):
             result = await heartbeat._tick()
         mock_ai.generate_json.assert_called_once()
         assert result == 30
@@ -435,7 +435,7 @@ class TestTick:
         """Timezone from config is passed to _in_quiet_hours."""
         heartbeat._config.timezone = "Asia/Tokyo"
         with patch(
-            "cordbeat.heartbeat._in_quiet_hours",
+            "cordbeat.agent.heartbeat._in_quiet_hours",
             return_value=True,
         ) as mock_quiet:
             await heartbeat._tick()
@@ -451,7 +451,7 @@ class TestTick:
         """Invalid timezone string falls back to UTC."""
         heartbeat._config.timezone = "Invalid/Zone"
         with patch(
-            "cordbeat.heartbeat._in_quiet_hours",
+            "cordbeat.agent.heartbeat._in_quiet_hours",
             return_value=True,
         ) as mock_quiet:
             await heartbeat._tick()
@@ -515,7 +515,7 @@ class TestSleepPhase:
         mock_ai: AsyncMock,
     ) -> None:
         """Sleep phase runs only once during quiet hours."""
-        with patch("cordbeat.heartbeat._in_quiet_hours", return_value=True):
+        with patch("cordbeat.agent.heartbeat._in_quiet_hours", return_value=True):
             await heartbeat._tick()
             await heartbeat._tick()
 
@@ -532,7 +532,7 @@ class TestSleepPhase:
         heartbeat._sleep_done_today = True
         await memory.get_or_create_user("u1", "Alice")
 
-        with patch("cordbeat.heartbeat._in_quiet_hours", return_value=False):
+        with patch("cordbeat.agent.heartbeat._in_quiet_hours", return_value=False):
             await heartbeat._tick()
 
         assert heartbeat._sleep_done_today is False
@@ -1242,7 +1242,7 @@ class TestTwoLayerIntegration:
 
         mock_ai.generate_json = AsyncMock(side_effect=mock_generate_json)
 
-        with patch("cordbeat.heartbeat._in_quiet_hours", return_value=False):
+        with patch("cordbeat.agent.heartbeat._in_quiet_hours", return_value=False):
             result = await heartbeat._tick()
 
         # 2 AI calls: triage + evaluate
@@ -1265,7 +1265,7 @@ class TestTwoLayerIntegration:
             return_value={"users": [], "next_heartbeat_minutes": 60}
         )
 
-        with patch("cordbeat.heartbeat._in_quiet_hours", return_value=False):
+        with patch("cordbeat.agent.heartbeat._in_quiet_hours", return_value=False):
             result = await heartbeat._tick()
 
         assert mock_ai.generate_json.call_count == 1
@@ -1287,7 +1287,7 @@ class TestTwoLayerIntegration:
             }
         )
 
-        with patch("cordbeat.heartbeat._in_quiet_hours", return_value=False):
+        with patch("cordbeat.agent.heartbeat._in_quiet_hours", return_value=False):
             result = await heartbeat._tick()
 
         # Only triage call, no Layer 2

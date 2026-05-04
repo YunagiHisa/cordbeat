@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cordbeat.skill_validator import SkillValidationError, validate_skill_source
+from cordbeat.skills.validator import SkillValidationError, validate_skill_source
 
 VALID_SKILL = '''"""A simple valid skill."""
 

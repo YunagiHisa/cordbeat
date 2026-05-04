@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from cordbeat.adapter_runner import _run_adapter
+from cordbeat.adapters.runner import _run_adapter
 
 
 @pytest.fixture
@@ -50,11 +50,11 @@ class TestRunAdapter:
         )
         mock_adapter = AsyncMock()
         with patch(
-            "cordbeat.discord_adapter.DiscordAdapter",
+            "cordbeat.adapters.discord.DiscordAdapter",
             return_value=mock_adapter,
         ):
             with patch(
-                "cordbeat.adapter_runner.DiscordAdapter",
+                "cordbeat.adapters.runner.DiscordAdapter",
                 create=True,
                 return_value=mock_adapter,
             ):
@@ -66,11 +66,11 @@ class TestRunAdapter:
         """Discord adapter is instantiated and started."""
         mock_adapter = AsyncMock()
         with patch(
-            "cordbeat.discord_adapter.DiscordAdapter",
+            "cordbeat.adapters.discord.DiscordAdapter",
             return_value=mock_adapter,
         ):
             with patch(
-                "cordbeat.adapter_runner.DiscordAdapter",
+                "cordbeat.adapters.runner.DiscordAdapter",
                 create=True,
                 return_value=mock_adapter,
             ):
@@ -82,11 +82,11 @@ class TestRunAdapter:
         """Telegram adapter is instantiated and started."""
         mock_adapter = AsyncMock()
         with patch(
-            "cordbeat.telegram_adapter.TelegramAdapter",
+            "cordbeat.adapters.telegram.TelegramAdapter",
             return_value=mock_adapter,
         ):
             with patch(
-                "cordbeat.adapter_runner.TelegramAdapter",
+                "cordbeat.adapters.runner.TelegramAdapter",
                 create=True,
                 return_value=mock_adapter,
             ):
@@ -97,10 +97,10 @@ class TestRunAdapter:
     @pytest.mark.parametrize(
         "adapter_name,module_path,class_name",
         [
-            ("slack", "cordbeat.slack_adapter", "SlackAdapter"),
-            ("line", "cordbeat.line_adapter", "LineAdapter"),
-            ("whatsapp", "cordbeat.whatsapp_adapter", "WhatsAppAdapter"),
-            ("signal", "cordbeat.signal_adapter", "SignalAdapter"),
+            ("slack", "cordbeat.adapters.slack", "SlackAdapter"),
+            ("line", "cordbeat.adapters.line", "LineAdapter"),
+            ("whatsapp", "cordbeat.adapters.whatsapp", "WhatsAppAdapter"),
+            ("signal", "cordbeat.adapters.signal", "SignalAdapter"),
         ],
     )
     async def test_v1_adapter_created(

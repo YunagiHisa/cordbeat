@@ -1,5 +1,6 @@
 name: weather
 description: "指定した地域の天気情報を取得する"
+description_en: "Get weather information for a specified location"
 version: "1.0.0"
 author: "cordbeat"
 

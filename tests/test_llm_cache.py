@@ -6,10 +6,10 @@ from typing import Any
 
 import pytest
 
-from cordbeat.ai_backend import AIBackend, create_backend
+from cordbeat.ai.backend import AIBackend, create_backend
+from cordbeat.ai.cache import CACHE_HITS, CACHE_MISSES, CachingBackend
 from cordbeat.config import AIBackendConfig, LLMCacheConfig
-from cordbeat.llm_cache import CACHE_HITS, CACHE_MISSES, CachingBackend
-from cordbeat.metrics import REGISTRY
+from cordbeat.tools.metrics import REGISTRY
 
 
 class FakeBackend(AIBackend):

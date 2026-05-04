@@ -1,0 +1,26 @@
+name: draw
+description: "シンプルなDSLで画像を描画する（円・矩形・テキスト等）"
+description_en: "Draw images using a simple line-based DSL (circles, rects, text, etc.)"
+version: "1.0.0"
+author: "cordbeat"
+
+usage: |
+  テキスト形式のDSLコマンドで画像を生成する。
+  SIZE, CANVAS, CIRCLE, RECT, ELLIPSE, LINE, POLYGON, TEXT,
+  STAR, SPIRAL, SAVE, OUTPUT の各コマンドが使用可能。
+  OUTPUT コマンドで base64 画像を返す。
+
+parameters:
+  - name: commands
+    type: string
+    required: true
+    description: "改行区切りのDSLコマンド文字列"
+
+safety:
+  level: requires_confirmation
+  sandbox: true
+  network: false
+  filesystem: true
+
+rate_limit:
+  per_minute: 10

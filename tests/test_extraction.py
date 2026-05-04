@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from cordbeat.agent.soul import Soul
+from cordbeat.ai.extraction import MemoryExtractor
 from cordbeat.config import MemoryConfig
-from cordbeat.extraction import MemoryExtractor
 from cordbeat.memory import MemoryStore
-from cordbeat.soul import Soul
 
 
 @pytest.fixture

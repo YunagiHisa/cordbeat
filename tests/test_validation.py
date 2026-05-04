@@ -6,8 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from cordbeat.exceptions import OutputValidationError
-from cordbeat.validation import (
+from cordbeat.ai.validation import (
     validate_heartbeat_decision,
     validate_heartbeat_triage,
     validate_skill_selection,
@@ -15,6 +14,7 @@ from cordbeat.validation import (
     validate_user_summary_update,
     validated_ai_json,
 )
+from cordbeat.exceptions import OutputValidationError
 
 
 class TestHeartbeatValidation:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from cordbeat.cli_adapter import main
+from cordbeat.adapters.cli import main
 
 
 class TestCLIAdapter:
@@ -20,7 +20,9 @@ class TestCLIAdapter:
         mock_connect.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("cordbeat.cli_adapter.websockets.connect", return_value=mock_connect),
+            patch(
+                "cordbeat.adapters.cli.websockets.connect", return_value=mock_connect
+            ),
             patch("builtins.input", side_effect=EOFError),
         ):
             await main("ws://localhost:8765")
@@ -50,7 +52,9 @@ class TestCLIAdapter:
             raise EOFError
 
         with (
-            patch("cordbeat.cli_adapter.websockets.connect", return_value=mock_connect),
+            patch(
+                "cordbeat.adapters.cli.websockets.connect", return_value=mock_connect
+            ),
             patch("builtins.input", side_effect=fake_input),
         ):
             await main()
@@ -85,7 +89,9 @@ class TestCLIAdapter:
             raise EOFError
 
         with (
-            patch("cordbeat.cli_adapter.websockets.connect", return_value=mock_connect),
+            patch(
+                "cordbeat.adapters.cli.websockets.connect", return_value=mock_connect
+            ),
             patch("builtins.input", side_effect=fake_input),
         ):
             await main()
@@ -104,7 +110,9 @@ class TestCLIAdapter:
         mock_connect.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("cordbeat.cli_adapter.websockets.connect", return_value=mock_connect),
+            patch(
+                "cordbeat.adapters.cli.websockets.connect", return_value=mock_connect
+            ),
             patch("builtins.input", side_effect=KeyboardInterrupt),
         ):
             await main()

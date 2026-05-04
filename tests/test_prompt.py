@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cordbeat.prompt import (
+from cordbeat.ai.prompt import (
     MAX_USER_INPUT_LEN,
     build_context,
     build_soul_system_prompt,

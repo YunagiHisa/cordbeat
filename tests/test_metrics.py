@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cordbeat.metrics import (
+from cordbeat.tools.metrics import (
     REGISTRY,
     Counter,
     Histogram,

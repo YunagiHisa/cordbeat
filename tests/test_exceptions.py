@@ -18,8 +18,8 @@ from __future__ import annotations
 import cordbeat
 from cordbeat import exceptions
 from cordbeat.models import SoulPermissionError
-from cordbeat.skill_sandbox import SkillPermissionError, SkillSandboxError
-from cordbeat.skill_validator import SkillValidationError
+from cordbeat.skills.sandbox import SkillPermissionError, SkillSandboxError
+from cordbeat.skills.validator import SkillValidationError
 
 
 def test_base_is_exception() -> None:

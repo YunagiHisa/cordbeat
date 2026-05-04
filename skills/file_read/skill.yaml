@@ -1,5 +1,6 @@
 name: file_read
 description: "指定されたファイルの内容を読み込む"
+description_en: "Read the contents of a specified file"
 version: "1.0.0"
 author: "cordbeat"
 

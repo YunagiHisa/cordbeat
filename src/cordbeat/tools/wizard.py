@@ -252,8 +252,20 @@ def _install_packages(packages: list[str]) -> bool:
     """
     import shutil
 
-    if shutil.which("uv"):
-        cmd = ["uv", "pip", "install", *packages]
+    # Find uv: check PATH first, then common install locations on Linux/macOS.
+    _uv = shutil.which("uv") or next(
+        (
+            str(p)
+            for p in [
+                Path.home() / ".local" / "bin" / "uv",
+                Path.home() / ".cargo" / "bin" / "uv",
+            ]
+            if p.exists()
+        ),
+        None,
+    )
+    if _uv:
+        cmd = [_uv, "pip", "install", *packages]
     else:
         cmd = [sys.executable, "-m", "pip", "install", "--quiet", *packages]
     result = subprocess.run(cmd, capture_output=True)

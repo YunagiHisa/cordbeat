@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import signal
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -254,8 +256,10 @@ async def main(
     ) -> None:
         try:
             await asyncio.wait_for(coro_or_task, timeout=timeout)
-        except (TimeoutError, asyncio.CancelledError):
+        except TimeoutError:
             logger.warning("Shutdown timeout for %s (%.0fs)", label, timeout)
+        except asyncio.CancelledError:
+            pass  # expected when task was explicitly cancelled
         except Exception:
             logger.exception("Error during shutdown of %s", label)
 
@@ -267,6 +271,18 @@ async def main(
         await _cancel_with_timeout(metrics_server.stop(), "metrics_server")
     await ai.aclose()
     await memory.close()
+
+    # Cancel any tasks that outlived explicit shutdown to unblock asyncio.run()
+    # cleanup (e.g. loop.shutdown_default_executor).  ChromaDB, aiosqlite, and
+    # httpx may leave background tasks that would otherwise hang the process.
+    current = asyncio.current_task()
+    pending = {t for t in asyncio.all_tasks() if t is not current}
+    if pending:
+        logger.debug("Cancelling %d lingering task(s) before exit", len(pending))
+        for t in pending:
+            t.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
     logger.info("CordBeat stopped")
 
 
@@ -322,19 +338,30 @@ def cli() -> None:
         raise SystemExit(run_doctor())
 
     config_path = _resolve_config_path()
+    # Safety watchdog: force-exit if the process hangs more than 30 s after
+    # Ctrl+C.  Background threads from ChromaDB / httpx can prevent Python
+    # from exiting even after asyncio cleanup completes.
+    _watchdog = threading.Timer(30.0, lambda: os._exit(1))
+    _watchdog.daemon = True
     try:
         asyncio.run(main(config_path))
     except KeyboardInterrupt:
-        pass
+        _watchdog.start()
+    finally:
+        _watchdog.cancel()
 
 
 def cli_chat() -> None:
     """Start CordBeat in combined server + interactive CLI chat mode."""
     config_path = _resolve_config_path()
+    _watchdog = threading.Timer(30.0, lambda: os._exit(1))
+    _watchdog.daemon = True
     try:
         asyncio.run(main_with_cli(config_path))
     except KeyboardInterrupt:
-        pass
+        _watchdog.start()
+    finally:
+        _watchdog.cancel()
 
 
 if __name__ == "__main__":

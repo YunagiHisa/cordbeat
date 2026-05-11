@@ -244,11 +244,18 @@ def _is_importable(module: str) -> bool:
 
 
 def _install_packages(packages: list[str]) -> bool:
-    """Install *packages* using pip in the current interpreter.
+    """Install *packages* into the current virtual environment.
 
+    Tries ``uv pip install`` first (the native package manager used by
+    CordBeat), then falls back to ``pip`` if uv is unavailable.
     Returns True on success.
     """
-    cmd = [sys.executable, "-m", "pip", "install", "--quiet", *packages]
+    import shutil
+
+    if shutil.which("uv"):
+        cmd = ["uv", "pip", "install", *packages]
+    else:
+        cmd = [sys.executable, "-m", "pip", "install", "--quiet", *packages]
     result = subprocess.run(cmd, capture_output=True)
     return result.returncode == 0
 
@@ -303,7 +310,7 @@ def _select_adapters() -> dict[str, str | None]:
                 else:
                     _err(
                         f"Installation failed — install manually:\n"
-                        f"    pip install {' '.join(packages)}"
+                        f"    uv pip install {' '.join(packages)}"
                     )
 
         # Ask for credentials

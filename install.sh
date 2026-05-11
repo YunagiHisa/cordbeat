@@ -54,8 +54,8 @@ echo -e "${GREEN}  ✓ Source ready${NC}"
 cd "$INSTALL_DIR"
 
 # ── Install Python dependencies ───────────────────────────────────────────────
-echo -e "${YELLOW}  Installing dependencies (this may take a minute)...${NC}"
-uv sync --quiet
+echo -e "${YELLOW}  Installing dependencies (this may take several minutes on first run)...${NC}"
+uv sync
 echo -e "${GREEN}  ✓ Dependencies installed${NC}"
 
 # ── Run setup wizard ──────────────────────────────────────────────────────────

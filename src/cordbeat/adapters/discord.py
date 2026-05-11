@@ -113,8 +113,25 @@ class DiscordAdapter(RetryableConnection):
         async def on_ready() -> None:
             logger.info("Discord bot logged in as %s", self._bot.user)
             try:
-                await self._tree.sync()
-                logger.info("Slash commands synced globally")
+                guild_id = self._config.options.get("guild_id")
+                if guild_id:
+                    guild = discord.Object(id=int(guild_id))
+                    # Copy global commands to this guild for instant sync
+                    self._tree.copy_global_to(guild=guild)
+                    synced = await self._tree.sync(guild=guild)
+                    logger.info(
+                        "Slash commands synced to guild %s (%d command(s))",
+                        guild_id,
+                        len(synced),
+                    )
+                else:
+                    synced = await self._tree.sync()
+                    logger.info(
+                        "Slash commands synced globally (%d command(s)) — "
+                        "may take up to 1 hour to propagate.  "
+                        "Set adapters.discord.options.guild_id for instant dev sync.",
+                        len(synced),
+                    )
             except Exception:
                 logger.exception("Failed to sync slash commands")
             asyncio.create_task(self._connect_to_core())

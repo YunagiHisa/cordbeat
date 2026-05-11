@@ -118,6 +118,8 @@ adapters:
     #   channel_blacklist: []        # never respond in these channel IDs (server channels only)
     #   user_blocklist: []           # never respond to these user IDs
     #   ai_decision_keywords: []     # keywords for ai_decision mode (default: soul name)
+    #   guild_id: 123456789012345678 # set for instant slash-command sync (dev/single-server).
+    #                                # leave unset for global sync (up to 1 hour to propagate)
   telegram:
     core_ws_url: "ws://localhost:8765"
     enabled: false

@@ -9,7 +9,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **Voice support (STT + TTS) — E-2.** Opt-in audio processing on Telegram and
+- **Draw DSL skill — E-3.** New builtin skill `skills/draw/` implements a
+  domain-specific language for programmatic image generation with Pillow. Supported
+  commands: `SIZE`, `CANVAS`, `CIRCLE`, `RECT`, `LINE`, `TRIANGLE`, `STAR`,
+  `SPIRAL`, `LAYER`, `IF`, `REPEAT`, and affine transforms (rotate/scale/translate).
+  The `SAVE <filename>` command writes output to `~/.cordbeat/draw_output/` (fixed
+  safe directory; user-supplied paths are stripped to basename to prevent traversal).
+  Safety level `requires_confirmation`; dependency: `Pillow` only.
+- **Adapter respond-mode filtering — E-4.** All adapters now support a
+  `respond_mode` option (`all` | `mention_only` | `ai_decision`) plus
+  `channel_whitelist`, `channel_blacklist`, and `user_blocklist` lists configurable
+  in `config.yaml` under `adapters.<platform>.options`. In `mention_only` mode the
+  bot replies only when directly mentioned or in a DM. `ai_decision` mode calls the
+  LLM with a lightweight prompt to decide whether to interject.
+- **Package structure refactored into subpackages.** The previously flat
+  `src/cordbeat/` namespace is now organised into six subpackages mirroring
+  architectural domains: `adapters/` (Discord, Telegram, CLI, Slack, LINE,
+  WhatsApp, Signal, runner, signing), `ai/` (backend, cache, extraction, prompt,
+  STT, TTS, validation), `agent/` (heartbeat, proposals, sleep, soul), `core/`
+  (engine, gateway), `memory/` (core, vector, common, conversation, records, users,
+  migrations), `skills/` (registry, sandbox, runner, validator, env, rate_limit),
+  `tools/` (doctor, wizard, metrics, metrics_server, backup, export, add_cmd).
+  All public import paths are preserved via `__init__.py` re-exports so external
+  code is unaffected. `CLAUDE.md` file-structure table updated.
+- **Install scripts.** `install.sh` (Bash) and `install.ps1` (PowerShell) provide
+  one-shot bootstrap: clone repo, verify Python 3.11+/uv, install runtime deps,
+  run `cordbeat-init`. Supports optional `--extras` flag (e.g. `--extras stt-local`).
+- **Discord VC voice-receive scaffold.** `voice_recv.py` provides a
+  `VoiceReceiver` class (Opus decode → PCM buffer → silence detection → WAV
+  16kHz mono) for future full Discord VC support. Excluded from default coverage
+  measurement since it requires `discord.py[voice]` + `PyNaCl`.
+- **RVC voice-conversion scaffold.** `rvc_backend.py` provides a `RVCBackend`
+  class (HuBERT + RVC v2, F0 via pyworld/scipy) as an optional TTS post-processor.
+  Wired behind `rvc.enabled` config flag; excluded from coverage since it requires
+  the `rvc` extra (torch + transformers + torchaudio + pyworld).
+- **Voice support (STT + TTS) — E-2.**Opt-in audio processing on Telegram and
   Discord adapters. Set `stt.enabled: true` and/or `tts.enabled: true` in
   `config.yaml` to activate. Telegram voices (`filters.VOICE`) are transcribed
   to text via STT; if TTS is enabled and the user sent a voice message, the
@@ -31,6 +65,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`image_url` blocks with `data:` URIs). The cache layer passes vision calls
   straight through to the inner backend (no caching). A new
   `_detect_image_mime()` helper infers JPEG/PNG/GIF/WebP from magic bytes.
+
+### Fixed
+- **Path traversal in Draw skill `SAVE` command.** `SAVE <path>` previously
+  accepted arbitrary filenames including `../../evil` and absolute paths. The fix
+  strips all directory components with `Path(arg).name`, always writes into the
+  fixed safe directory `~/.cordbeat/draw_output/`, and resolves the final path with
+  `Path.resolve()` + `relative_to()` to catch symlink-based escapes. Two new
+  security regression tests added.
+- **Coverage gate restored to 85 %.** `main.py` (event-loop entry point),
+  `tools/wizard.py` (interactive setup), and `tools/metrics_server.py` (HTTP
+  daemon) added to `[tool.coverage.run] omit` with explanatory comments — standard
+  exclusions for modules that cannot be exercised by a unit-test runner.
 
 ### Changed
 - **BREAKING: Skills now run inside per-skill ``uv``-managed Python

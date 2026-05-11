@@ -1,0 +1,21 @@
+# Default: normalize to LF on commit, check out as LF on all platforms
+* text=auto eol=lf
+
+# Shell scripts must always be LF — CRLF breaks the shebang on Linux/macOS
+*.sh    text eol=lf
+
+# PowerShell scripts are Windows-native; allow CRLF on Windows checkouts
+*.ps1   text eol=crlf
+
+# Binary files — no EOL normalization
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.eot   binary
+*.pyc   binary
+uv.lock text eol=lf

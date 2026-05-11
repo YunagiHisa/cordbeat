@@ -1,9 +1,9 @@
 # CordBeat 設計 vs 実装 ギャップ分析レポート
 
-**日付**: 2026-04-20 (Batch C 完了反映)
-**ブランチ**: main (PR #79 sqlite-vec / #82 skill venv / #83 integration test +85% coverage マージ後)
-**テスト数**: 618 passed, 1 skipped (Windows symlink)
-**カバレッジ**: 90.85% (gate: 85%)
+**日付**: 2026-04-20 (PR #97 マージ後更新)
+**ブランチ**: main (PR #97 feat: E-2b/E-3/E-4 + package refactor マージ後)
+**テスト数**: 871 passed, 1 skipped (Windows symlink)
+**カバレッジ**: 85% (gate: 85%)
 
 ---
 
@@ -13,9 +13,10 @@
 |------|-----|
 | **全体実装率** | **100%** |
 | **設計ドキュメント** | 12 / 12 カバー |
-| **ソースモジュール** | 29 / 29 実装済 |
-| **ビルトインスキル** | 8 / 8 実装済 |
-| **Batch C** | **完了**（#2 / #3 / #4 / #7 / #10 すべてマージ済） |
+| **ソースモジュール** | 54 / 54 実装済（7 サブパッケージ構成） |
+| **ビルトインスキル** | 9 / 9 実装済（draw スキル追加） |
+| **Batch D** | **完了**（PR #84〜#94） |
+| **Batch E** | **完了**（PR #95〜#97） |
 | **残存ギャップ** | 0 件 |
 
 ---
@@ -152,37 +153,66 @@
 
 ## ソースモジュール一覧
 
+> PR #97 でパッケージ構造をサブパッケージへ整理済み (flat → 7 サブパッケージ)
+
 | モジュール | 役割 | テスト |
 |-----------|------|--------|
+| **core/** | | |
+| core/engine.py | メッセージ処理 + コマンドルーティング | ✅ |
+| core/gateway.py | WebSocketサーバー + アダプタ基盤 | ✅ |
+| **agent/** | | |
+| agent/heartbeat.py | 2層HEARTBEATループ | ✅ |
+| agent/proposals.py | 提案処理 | ✅ |
+| agent/sleep.py | sleep phase (日記/整理/decay) | ✅ |
+| agent/soul.py | アイデンティティ + 感情 | ✅ |
+| **ai/** | | |
+| ai/backend.py | バックエンド抽象化 | ✅ |
+| ai/cache.py | LLM レスポンスキャッシュ | ✅ |
+| ai/extraction.py | 会話からのメモリ抽出 | ✅ |
+| ai/prompt.py | プロンプト構築 | ✅ |
+| ai/stt.py | STT バックエンド抽象化 | ✅ |
+| ai/tts.py | TTS バックエンド抽象化 | ✅ |
+| ai/validation.py | AI出力バリデーション | ✅ |
+| **memory/** | | |
+| memory/core.py | 4層メモリシステム | ✅ |
+| memory/vector.py | sqlite-vec ベクトルストア | ✅ |
+| memory/common.py | 共通型・ユーティリティ | ✅ |
+| memory/conversation.py | 会話履歴管理 | ✅ |
+| memory/records.py | certain_records テーブル | ✅ |
+| memory/users.py | ユーザー管理 | ✅ |
+| memory/migrations.py | スキーママイグレーション | ✅ |
+| **skills/** | | |
+| skills/registry.py | スキルローディング + レジストリ | ✅ |
+| skills/sandbox.py | サンドボックス (subprocess隔離) | ✅ |
+| skills/runner.py | スキル実行 (subprocess内) | ✅ |
+| skills/validator.py | ASTベース静的検証 | ✅ |
+| skills/env.py | スキル専用 uv venv 管理 | ✅ |
+| skills/rate_limit.py | トークンバケット流量制限 | ✅ |
+| **adapters/** | | |
+| adapters/discord.py | Discordボット | ✅ |
+| adapters/telegram.py | Telegramボット | ✅ |
+| adapters/cli.py | CLIインターフェース | ✅ |
+| adapters/slack.py | Slackボット (Socket Mode, scaffold) | ✅ |
+| adapters/line.py | LINE Messaging API (webhook, scaffold) | ✅ |
+| adapters/whatsapp.py | WhatsApp Cloud API (webhook, scaffold) | ✅ |
+| adapters/signal.py | Signal (signal-cli RPC, scaffold) | ✅ |
+| adapters/runner.py | アダプタブートストラップ | ✅ |
+| adapters/signing.py | Slack/LINE webhook 署名検証ヘルパー | ✅ |
+| **tools/** | | |
+| tools/doctor.py | 診断ツール | ✅ |
+| tools/wizard.py | セットアップウィザード | ✅ |
+| tools/metrics.py | Prometheus メトリクスレジストリ | ✅ |
+| tools/metrics_server.py | Prometheus HTTP エクスポーター | ✅ |
+| tools/backup.py | バックアップ/リストア CLI | ✅ |
+| tools/export.py | 会話エクスポート CLI | ✅ |
+| tools/add_cmd.py | `/add` コマンド (skill 追加) | ✅ |
+| **トップレベル** | | |
 | config.py | YAML/env設定読み込み、パス解決 | ✅ |
 | models.py | データ型定義 | ✅ |
 | exceptions.py | `CordBeatError` 例外階層 | ✅ |
-| gateway.py | WebSocketサーバー + アダプタ基盤 | ✅ |
-| engine.py | メッセージ処理 + コマンドルーティング | ✅ |
-| heartbeat.py | 2層HEARTBEATループ | ✅ |
-| heartbeat_proposals.py | 提案処理 | ✅ |
-| heartbeat_sleep.py | sleep phase (日記/整理/decay) | ✅ |
-| memory.py | 4層メモリシステム | ✅ |
-| soul.py | アイデンティティ + 感情 | ✅ |
-| extraction.py | 会話からのメモリ抽出 | ✅ |
-| skills.py | スキルローディング + レジストリ | ✅ |
-| skill_runner.py | スキル実行 | ✅ |
-| skill_sandbox.py | サンドボックス | ✅ |
-| skill_validator.py | スキルバリデーション | ✅ |
-| validation.py | AI出力バリデーション | ✅ |
-| prompt.py | プロンプト構築 | ✅ |
-| ai_backend.py | バックエンド抽象化 | ✅ |
 | main.py | エントリポイント | ✅ |
-| setup_wizard.py | セットアップウィザード | ✅ |
-| discord_adapter.py | Discordボット | ✅ |
-| telegram_adapter.py | Telegramボット | ✅ |
-| slack_adapter.py | Slackボット（Socket Mode, scaffold） | ✅ |
-| line_adapter.py | LINE Messaging API（webhook, scaffold） | ✅ |
-| whatsapp_adapter.py | WhatsApp Cloud API（webhook, scaffold） | ✅ |
-| signal_adapter.py | Signal（signal-cli RPC, scaffold） | ✅ |
-| cli_adapter.py | CLIインターフェース | ✅ |
-| adapter_runner.py | アダプタブートストラップ | ✅ |
-| doctor.py | 診断ツール | ✅ |
+| voice_recv.py | Discord VC 音声受信 scaffold | ✅ |
+| rvc_backend.py | RVC 声質変換 scaffold | ✅ |
 
 ## ビルトインスキル一覧
 
@@ -196,6 +226,7 @@
 | web_search | safe | ✅ |
 | weather | safe | ✅ |
 | api_call | requires_confirmation | ✅ |
+| draw | requires_confirmation | ✅ (PR #97) |
 
 ---
 

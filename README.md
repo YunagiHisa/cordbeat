@@ -87,64 +87,94 @@ Self-contained and easy to add or remove.
 
 ## Quick Start
 
-### Prerequisites
+### Option A — One-liner installer (recommended)
+
+The install script handles everything: installs `uv`, clones the repo, installs
+dependencies, and launches the setup wizard.
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/YunagiHisa/cordbeat/main/install.sh | bash
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/YunagiHisa/cordbeat/main/install.ps1 | iex
+```
+
+After the wizard completes, start CordBeat with:
+
+```bash
+cd ~/cordbeat
+uv run cordbeat          # headless server mode
+uv run cordbeat-chat     # interactive CLI chat
+```
+
+---
+
+### Option B — Manual setup
+
+#### Prerequisites
 
 - Python 3.11+
-- [uv](https://docs.astral.sh/uv/) (package manager)
+- [uv](https://docs.astral.sh/uv/) — install with:
+  ```bash
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  source ~/.local/bin/env   # or restart your shell
+  ```
 - A local AI backend — one of:
   - [Ollama](https://ollama.com/) (auto-detected at `localhost:11434`)
   - [llama.cpp](https://github.com/ggerganov/llama.cpp) server (auto-detected at `localhost:8080`)
   - Any OpenAI-compatible API
 
-### Installation
+#### Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/YunagiHisa/cordbeat.git
 cd cordbeat
 
-# Install dependencies
-uv sync
-
-# Install with Discord support
-uv sync --extra discord
-
-# Install with development tools
-uv sync --extra dev
+uv sync                        # base install
+uv sync --extra discord        # add Discord support
+uv sync --extra dev            # add development tools
 ```
 
-### Running CordBeat
+> **Note:** `uv sync` installs everything into a local virtualenv managed by
+> uv. CordBeat's CLI commands are **not** added to your system `PATH` — always
+> run them via `uv run <command>` (or activate the venv with
+> `source .venv/bin/activate` first).
 
-The fastest way to get started is the **setup wizard**:
+#### Running CordBeat
 
 ```bash
 # Run the setup wizard — auto-detects Ollama or llama.cpp
-cordbeat-init
+uv run cordbeat-init
 
-# Start CordBeat
-cordbeat
+# Start CordBeat (headless server)
+uv run cordbeat
+
+# Or use the interactive CLI chat
+uv run cordbeat-chat
 ```
 
 The wizard automatically detects your local AI backend and generates
-`~/.cordbeat/config.yaml` with sensible defaults. No questions asked if
-Ollama or llama.cpp is running.
+`~/.cordbeat/config.yaml` with sensible defaults.
 
 <details>
-<summary>Manual setup (without wizard)</summary>
+<summary>Manual config (without wizard)</summary>
 
 ```bash
-# 1. Pull an AI model (e.g. qwen3.5:9b)
-ollama pull qwen3.5:9b
+# 1. Pull an AI model (e.g. qwen3:8b)
+ollama pull qwen3:8b
 
 # 2. Copy and edit the config
-cp config.example.yaml config.yaml
+cp config.example.yaml ~/.cordbeat/config.yaml
 # Edit config.yaml — set your model name and preferences
 
 # 3. Start CordBeat Core
 uv run cordbeat
 
 # 4. In another terminal, connect the CLI adapter
-uv run python -m cordbeat.cli_adapter
+uv run cordbeat-chat
 ```
 
 </details>
@@ -154,7 +184,7 @@ uv run python -m cordbeat.cli_adapter
 Run the built-in doctor to check your setup:
 
 ```bash
-cordbeat doctor
+uv run cordbeat-doctor
 ```
 
 ### Docker
@@ -184,27 +214,27 @@ Adapters run as separate processes and connect to Core via WebSocket.
 ```bash
 # Discord (requires discord.py)
 uv sync --extra discord
-cordbeat-discord
+uv run cordbeat-discord
 
 # Telegram (requires python-telegram-bot)
 uv sync --extra telegram
-cordbeat-telegram
+uv run cordbeat-telegram
 
 # Slack (requires slack-sdk; Socket Mode — no public webhook needed)
 uv sync --extra slack
-cordbeat-slack
+uv run cordbeat-slack
 
 # LINE (requires line-bot-sdk; exposes a webhook HTTP server)
 uv sync --extra line
-cordbeat-line
+uv run cordbeat-line
 
 # WhatsApp (Meta Cloud API; exposes a webhook HTTP server)
 uv sync --extra whatsapp
-cordbeat-whatsapp
+uv run cordbeat-whatsapp
 
 # Signal (requires a local signal-cli JSON-RPC daemon)
 uv sync --extra signal
-cordbeat-signal
+uv run cordbeat-signal
 ```
 
 Configure tokens in `config.yaml`:

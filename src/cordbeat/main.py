@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -330,13 +331,109 @@ async def main_with_cli(config_path: str) -> None:
             pass
 
 
+_HELP = """\
+CordBeat — local-first autonomous AI agent
+
+Usage:
+  cordbeat                     Start the CordBeat server
+  cordbeat chat                Start server + interactive CLI chat
+  cordbeat setup               Run the interactive setup wizard
+  cordbeat doctor              Check system health
+  cordbeat config              Show current configuration summary
+  cordbeat config edit         Open config.yaml in $EDITOR
+  cordbeat service install     Register CordBeat as a system service (auto-start)
+  cordbeat service start       Start the registered service
+  cordbeat service stop        Stop the running service
+  cordbeat service status      Show service status
+  cordbeat service uninstall   Remove the service registration
+  cordbeat update              Update CordBeat to the latest version
+"""
+
+
+def _cmd_config(args: list[str]) -> None:
+    config_path = _resolve_config_path()
+    if args and args[0] == "edit":
+        editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+        if not editor:
+            editor = "notepad" if sys.platform == "win32" else "nano"
+        os.execvp(editor, [editor, config_path])
+        return  # unreachable after exec
+    print(f"Config: {config_path}")
+    try:
+        import yaml
+
+        with open(config_path) as f:
+            data = yaml.safe_load(f)
+        ai_cfg = data.get("ai_backend", {})
+        gw_cfg = data.get("gateway", {})
+        print(f"  Backend : {ai_cfg.get('backend', '?')}")
+        print(f"  Model   : {ai_cfg.get('model', '?')}")
+        print(
+            f"  Gateway : {gw_cfg.get('host', '127.0.0.1')}:{gw_cfg.get('port', 8765)}"
+        )
+    except Exception:
+        pass
+
+
+def _cmd_update() -> None:
+    uv = shutil.which("uv") or str(Path.home() / ".local" / "bin" / "uv")
+    if Path(uv).exists() or shutil.which("uv"):
+        print("Updating CordBeat via uv…")
+        raise SystemExit(
+            subprocess.run([uv, "tool", "upgrade", "cordbeat"]).returncode
+        )
+    print("Updating CordBeat via pip…")
+    raise SystemExit(
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "cordbeat"]
+        ).returncode
+    )
+
+
 def cli() -> None:
-    # Handle subcommands
-    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
+    args = sys.argv[1:]
+
+    if not args or args[0] in ("-h", "--help"):
+        print(_HELP)
+        return
+
+    sub = args[0]
+
+    if sub == "doctor":
         from cordbeat.tools.doctor import run_doctor
 
         raise SystemExit(run_doctor())
 
+    if sub in ("chat", "--chat"):
+        sys.argv = [sys.argv[0]] + args[1:]
+        cli_chat()
+        return
+
+    if sub in ("setup", "init"):
+        from cordbeat.tools.wizard import cordbeat_init_cli
+
+        cordbeat_init_cli()
+        return
+
+    if sub == "config":
+        _cmd_config(args[1:])
+        return
+
+    if sub == "service":
+        action = args[1] if len(args) > 1 else "status"
+        from cordbeat.tools.service import run_service_command
+
+        raise SystemExit(run_service_command(action))
+
+    if sub == "update":
+        _cmd_update()
+        return
+
+    if sub.startswith("-"):
+        print(f"Unknown option: {sub}\n{_HELP}", file=sys.stderr)
+        raise SystemExit(1)
+
+    # No recognised subcommand → start server
     config_path = _resolve_config_path()
     # Safety watchdog: force-exit if the process hangs more than 30 s after
     # Ctrl+C.  Background threads from ChromaDB / httpx can prevent Python

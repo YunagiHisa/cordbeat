@@ -231,6 +231,28 @@ async def main(
         stop_event.set()
 
     loop = asyncio.get_running_loop()
+
+    # Suppress RecursionError from asyncio internal callbacks (Python 3.12 bug:
+    # Task.cancel() recursion in deep task trees printed as "Exception in callback").
+    _orig_exc_handler = loop.get_exception_handler()
+
+    def _loop_exc_handler(
+        lp: asyncio.AbstractEventLoop, context: dict[str, Any]
+    ) -> None:
+        exc = context.get("exception")
+        if isinstance(exc, RecursionError):
+            logger.warning(
+                "RecursionError in asyncio callback suppressed "
+                "(Python 3.12 task-cancel depth bug)"
+            )
+            return
+        if _orig_exc_handler is not None:
+            _orig_exc_handler(lp, context)
+        else:
+            lp.default_exception_handler(context)
+
+    loop.set_exception_handler(_loop_exc_handler)
+
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, _signal_handler)

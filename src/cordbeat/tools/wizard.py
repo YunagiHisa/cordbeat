@@ -287,28 +287,16 @@ def _select_adapters() -> dict[str, str | None]:
 
     selected_keys: list[str] = []
 
-    # SSH sessions (e.g. TeraTerm) can misrender prompt_toolkit's Unicode
-    # checkbox markers, doubling the last character of each choice name.
-    # Fall back to plain numbered list in SSH unless the user opts in.
-    _in_ssh = bool(os.environ.get("SSH_TTY") or os.environ.get("SSH_CLIENT"))
+    # Always try questionary (arrow-key UI) first when stdout is a real TTY.
+    # Some terminals (e.g. TeraTerm on Windows over SSH) misrender Unicode
+    # checkbox markers; set CORDBEAT_TEXT_UI=1 to force plain numbered mode.
     _force_text = bool(os.environ.get("CORDBEAT_TEXT_UI"))
-    _force_interactive = bool(os.environ.get("CORDBEAT_INTERACTIVE_UI"))
-    _use_questionary = (
-        sys.stdout.isatty()
-        and not _force_text
-        and (_force_interactive or not _in_ssh)
-    )
+    _use_questionary = sys.stdout.isatty() and not _force_text
 
     try:
         import questionary
 
         if _use_questionary:
-            if _in_ssh:
-                # Reached only when CORDBEAT_INTERACTIVE_UI=1
-                print(
-                    "  (Tip: if display looks garbled, Ctrl+C and re-run without"
-                    " CORDBEAT_INTERACTIVE_UI=1)"
-                )
             choices = [
                 questionary.Choice(title=name, value=key)
                 for key, name, _, _ in sns_specs
@@ -320,13 +308,13 @@ def _select_adapters() -> dict[str, str | None]:
             ).ask()
             selected_keys = list(chosen) if chosen else []
         else:
-            raise ImportError("non-interactive or SSH session")
+            raise ImportError("non-interactive terminal")
     except Exception:
-        # Fallback: numbered text input (default in SSH sessions)
-        if _in_ssh and not _force_text:
+        # Fallback: numbered text input (non-TTY or terminal doesn't support it)
+        if not _force_text:
             print(
-                "  (SSH session detected — using numbered selection."
-                " Set CORDBEAT_INTERACTIVE_UI=1 to enable arrow-key UI.)"
+                "  (Tip: if you expected arrow-key selection, check your terminal type."
+                " Set CORDBEAT_TEXT_UI=1 to suppress this fallback.)"
             )
         print("\n  Which platform adapter(s) would you like to enable?")
         print("    0. CLI only (no extra adapter)")

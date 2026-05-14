@@ -221,8 +221,13 @@ async def main(
     def _signal_handler() -> None:
         nonlocal _shutdown_started
         if _shutdown_started:
-            return  # prevent re-entrant shutdown from multiple Ctrl+C presses
+            # Second Ctrl+C during graceful shutdown → force-quit immediately.
+            # This matches the standard Unix convention where a second SIGINT
+            # means "I really want out now".
+            logger.warning("Forced exit (second interrupt during shutdown)")
+            os._exit(130)  # 130 = 128 + SIGINT, conventional exit code
         logger.info("Shutdown signal received")
+        _shutdown_started = True
         stop_event.set()
 
     loop = asyncio.get_running_loop()
@@ -264,7 +269,6 @@ async def main(
             pass
 
     logger.info("Shutting down...")
-    _shutdown_started = True
 
     # Use individual timeouts so one stuck subsystem can't hang the entire
     # shutdown sequence.

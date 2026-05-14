@@ -21,6 +21,7 @@ from cordbeat.models import (
     GatewayMessage,
     MessageType,
     ProposalStatus,
+    ProposalType,
     SafetyLevel,
     SoulCaller,
     UserSummary,
@@ -67,6 +68,8 @@ class CoreEngine:
         self._timezone_name = timezone_name
         self._extractor = MemoryExtractor(ai, soul, memory, self._memory_config)
         self._background_tasks: set[asyncio.Task[None]] = set()
+        # Skills that the user has approved for this session (no re-confirmation).
+        self._session_allowed_skills: set[str] = set()
 
     async def handle_message(self, message: GatewayMessage) -> None:
         """Handle a single incoming message from the queue."""
@@ -378,7 +381,8 @@ class CoreEngine:
     async def _dispatch_skill_tags(self, response: str, message: GatewayMessage) -> str:
         """Execute the first [SKILL: name | param=value] tag in the AI response.
 
-        Only ``safe`` skills run automatically. Others are silently removed.
+        ``safe`` skills run immediately.  ``requires_confirmation`` skills are
+        queued for user approval unless the skill is in the session allow-list.
         The tag is replaced with the skill's output inline.
         """
         match = _SKILL_TAG_RE.search(response)
@@ -393,20 +397,26 @@ class CoreEngine:
             logger.debug("SKILL tag references unknown/disabled skill: %r", skill_name)
             return _SKILL_TAG_RE.sub("", response, count=1).strip()
 
-        if skill.meta.safety_level != SafetyLevel.SAFE:
-            logger.info(
-                "SKILL tag %r requires confirmation; skipping auto-execution",
-                skill_name,
-            )
-            return _SKILL_TAG_RE.sub("", response, count=1).strip()
-
-        # Parse "key=value | key2=value2 ..." pairs
+        # Parse "key=value | key2=value2 ..." pairs early so we can include them
+        # in the confirmation request if needed.
         params: dict[str, Any] = {}
         for part in params_raw.split("|"):
             part = part.strip()
             if "=" in part:
                 k, _, v = part.partition("=")
                 params[k.strip()] = v.strip()
+
+        if skill.meta.safety_level != SafetyLevel.SAFE:
+            if skill_name not in self._session_allowed_skills:
+                logger.info(
+                    "SKILL tag %r requires confirmation; queuing proposal",
+                    skill_name,
+                )
+                await self._request_skill_confirmation(message, skill_name, params)
+                return _SKILL_TAG_RE.sub("", response, count=1).strip()
+            logger.info(
+                "SKILL tag %r is in session allow-list; executing", skill_name
+            )
 
         try:
             result = await skill.execute(params, memory=self._memory)
@@ -421,6 +431,58 @@ class CoreEngine:
             response = _SKILL_TAG_RE.sub("", response, count=1)
 
         return response.strip()
+
+    async def _request_skill_confirmation(
+        self,
+        message: GatewayMessage,
+        skill_name: str,
+        params: dict[str, Any],
+    ) -> None:
+        """Store a skill execution proposal and notify the adapter with a confirm UI."""
+        user_id = await self._memory.resolve_user(
+            message.adapter_id, message.platform_user_id
+        )
+        if user_id is None:
+            logger.debug("Cannot request skill confirmation: user not found for %s", message.platform_user_id)
+            return
+
+        proposal_content = (
+            f"Skill '{skill_name}' requires confirmation.\n"
+            f"Parameters: {json.dumps(params)}"
+        )
+        metadata: dict[str, Any] = {
+            "status": ProposalStatus.PENDING,
+            "proposal_type": ProposalType.SKILL_EXECUTION,
+            "skill_name": skill_name,
+            "skill_params": params,
+            "adapter_id": message.adapter_id,
+        }
+        proposal_id = await self._memory.add_certain_record(
+            user_id=user_id,
+            content=proposal_content,
+            record_type="proposal",
+            metadata=metadata,
+        )
+
+        notification = GatewayMessage(
+            type=MessageType.SKILL_CONFIRM,
+            adapter_id=message.adapter_id,
+            platform_user_id=message.platform_user_id,
+            content=(
+                f"🔧 I want to run **{skill_name}**.\n"
+                f"Parameters: {json.dumps(params)}\n\n"
+                f"(proposal ID: {proposal_id})"
+            ),
+            metadata={
+                "proposal_id": proposal_id,
+                "skill_name": skill_name,
+                "skill_params": params,
+            },
+        )
+        await self._gateway.send_to_adapter(message.adapter_id, notification)
+        logger.info(
+            "Skill confirmation requested for '%s' (proposal=%s)", skill_name, proposal_id
+        )
 
     async def _maybe_draw(self, response: str) -> tuple[str, list[str]]:
         """Parse [DRAW: ...] tags from LLM response and execute the draw skill.
@@ -584,6 +646,7 @@ class CoreEngine:
 
         handlers: dict[str, Callable[[], Coroutine[Any, Any, None]]] = {
             "/approve": lambda: self._cmd_approve(message, arg),
+            "/approve_session": lambda: self._cmd_approve_session(message, arg),
             "/reject": lambda: self._cmd_reject(message, arg),
             "/proposals": lambda: self._cmd_proposals(message),
             "/link": lambda: self._cmd_link(message),
@@ -638,6 +701,57 @@ class CoreEngine:
             f"✅ Proposal approved: {proposal['content'][:80]}",
         )
         logger.info("Proposal %s approved by user %s", proposal_id, user_id)
+
+    async def _cmd_approve_session(
+        self, message: GatewayMessage, proposal_id: str
+    ) -> None:
+        """Approve a pending skill proposal AND allow it for the rest of this session."""
+        if not proposal_id:
+            await self._send_reply(
+                message, "Usage: /approve_session <proposal_id>"
+            )
+            return
+
+        user_id = await self._memory.resolve_user(
+            message.adapter_id, message.platform_user_id
+        )
+        if user_id is None:
+            await self._send_reply(message, "User not found.")
+            return
+
+        proposal = await self._memory.get_proposal(proposal_id)
+        if proposal is None:
+            await self._send_reply(message, "Proposal not found.")
+            return
+
+        if proposal["user_id"] != user_id:
+            await self._send_reply(message, "Proposal not found.")
+            return
+
+        meta = json.loads(proposal.get("metadata") or "{}")
+        status = meta.get("status", "")
+        if status != ProposalStatus.PENDING:
+            await self._send_reply(
+                message,
+                f"Cannot approve: proposal status is '{status}'.",
+            )
+            return
+
+        await self._memory.update_proposal_status(proposal_id, ProposalStatus.APPROVED)
+
+        skill_name = meta.get("skill_name", "")
+        if skill_name:
+            self._session_allowed_skills.add(skill_name)
+            logger.info(
+                "Skill '%s' added to session allow-list by user %s", skill_name, user_id
+            )
+
+        await self._send_reply(
+            message,
+            f"✅ Approved for this session: **{skill_name}** (proposal {proposal_id[:8]}…)\n"
+            "Future invocations of this skill will run automatically until restart.",
+        )
+        logger.info("Proposal %s approved (session) by user %s", proposal_id, user_id)
 
     async def _cmd_reject(self, message: GatewayMessage, proposal_id: str) -> None:
         """Reject a pending proposal."""

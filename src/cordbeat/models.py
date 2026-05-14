@@ -47,6 +47,7 @@ class MessageType(StrEnum):
     ERROR = "error"
     LINK_REQUEST = "link_request"
     LINK_CONFIRM = "link_confirm"
+    SKILL_CONFIRM = "skill_confirm"  # core → adapter: ask user to approve a skill run
 
 
 @dataclass

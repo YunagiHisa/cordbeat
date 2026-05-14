@@ -94,10 +94,23 @@ class RetryableConnection(ABC):
                 content = data.get("content", "")
                 platform_user_id = data.get("platform_user_id", "")
                 images: list[str] = data.get("images") or []
-                if msg_type in ("message", "heartbeat_message", "error"):
+                if msg_type == "skill_confirm":
+                    await self._dispatch_skill_confirm(platform_user_id, data)
+                elif msg_type in ("message", "heartbeat_message", "error"):
                     await self._dispatch_core_message(platform_user_id, content, images)
         except websockets.ConnectionClosed:
             logger.info("Core connection closed")
+
+    async def _dispatch_skill_confirm(
+        self, platform_user_id: str, data: dict[str, Any]
+    ) -> None:
+        """Handle a skill confirmation request from Core.
+
+        Default implementation falls back to a plain text message.
+        Override in subclasses to show a richer confirmation UI (e.g. buttons).
+        """
+        content = data.get("content", "")
+        await self._dispatch_core_message(platform_user_id, content, [])
 
     @abstractmethod
     async def _dispatch_core_message(

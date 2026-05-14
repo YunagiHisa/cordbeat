@@ -38,6 +38,23 @@ async def main(ws_url: str = "ws://localhost:8765", auth_token: str = "") -> Non
                     _reply_event.set()
                     if msg_type == "error":
                         print(f"\n[error] {content}")
+                    elif msg_type == "skill_confirm":
+                        meta = data.get("metadata") or {}
+                        skill_name = meta.get("skill_name", "unknown")
+                        skill_params = meta.get("skill_params") or {}
+                        proposal_id = meta.get("proposal_id", "")
+                        print("\n┌─────────────────────────────────────────────────┐")
+                        print(f"│  🔧  Skill Execution Required: {skill_name:<17}│")
+                        print("├─────────────────────────────────────────────────┤")
+                        if skill_params:
+                            for k, v in skill_params.items():
+                                line_ = f"│  • {k}: {v}"
+                                print(f"{line_:<51}│")
+                        print("├─────────────────────────────────────────────────┤")
+                        print(f"│  /approve {proposal_id[:32]}... (once)         │")
+                        print(f"│  /approve_session {proposal_id[:24]}... (session)  │")
+                        print(f"│  /reject  {proposal_id[:32]}... (deny)         │")
+                        print("└─────────────────────────────────────────────────┘")
                     elif msg_type in ("message", "ack"):
                         print(f"\nBot: {content}")
                     else:

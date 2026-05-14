@@ -192,6 +192,108 @@ class DiscordAdapter(RetryableConnection):
             return
         await self._send_to_discord(platform_user_id, content, images)
 
+    async def _dispatch_skill_confirm(
+        self, platform_user_id: str, data: dict[str, Any]
+    ) -> None:
+        """Send a rich skill-confirmation embed with interactive buttons to Discord."""
+        import discord  # noqa: PLC0415
+
+        meta = data.get("metadata") or {}
+        proposal_id: str = str(meta.get("proposal_id", ""))
+        skill_name: str = str(meta.get("skill_name", "unknown"))
+        skill_params: dict[str, Any] = meta.get("skill_params") or {}
+
+        channel_id = self._user_channels.get(platform_user_id)
+        if channel_id is None:
+            logger.warning(
+                "No cached channel for user %s; falling back to text", platform_user_id
+            )
+            content = data.get("content", "")
+            await self._dispatch_core_message(platform_user_id, content, [])
+            return
+
+        if self._bot is None:
+            return
+        channel = self._bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self._bot.fetch_channel(channel_id)
+            except Exception:
+                logger.warning("Cannot fetch channel %s for skill confirm", channel_id)
+                return
+
+        embed = discord.Embed(
+            title="🔧 Skill Execution Required",
+            description=f"**`{skill_name}`** wants to run with the following parameters:",
+            color=discord.Color.orange(),
+        )
+        if skill_params:
+            params_text = "\n".join(f"• **{k}**: `{v}`" for k, v in skill_params.items())
+            embed.add_field(name="Parameters", value=params_text, inline=False)
+        embed.set_footer(text=f"Proposal ID: {proposal_id}")
+
+        ws_ref = self._ws
+
+        class SkillConfirmView(discord.ui.View):  # type: ignore[misc]
+            def __init__(self) -> None:
+                super().__init__(timeout=300)
+
+            @discord.ui.button(label="✅ Allow Once", style=discord.ButtonStyle.success)  # type: ignore[misc]
+            async def allow_once(
+                self, interaction: discord.Interaction, button: discord.ui.Button[Any]  # type: ignore[type-arg]
+            ) -> None:
+                if ws_ref is not None:
+                    payload = json.dumps(
+                        {"type": "message", "content": f"/approve {proposal_id}"}
+                    )
+                    await ws_ref.send(payload)
+                await interaction.response.edit_message(
+                    content=f"✅ Approved once: `{skill_name}`", embed=None, view=None
+                )
+                self.stop()
+
+            @discord.ui.button(label="🔁 Allow Session", style=discord.ButtonStyle.primary)  # type: ignore[misc]
+            async def allow_session(
+                self, interaction: discord.Interaction, button: discord.ui.Button[Any]  # type: ignore[type-arg]
+            ) -> None:
+                if ws_ref is not None:
+                    payload = json.dumps(
+                        {
+                            "type": "message",
+                            "content": f"/approve_session {proposal_id}",
+                        }
+                    )
+                    await ws_ref.send(payload)
+                await interaction.response.edit_message(
+                    content=f"🔁 Approved for this session: `{skill_name}`",
+                    embed=None,
+                    view=None,
+                )
+                self.stop()
+
+            @discord.ui.button(label="❌ Deny", style=discord.ButtonStyle.danger)  # type: ignore[misc]
+            async def deny(
+                self, interaction: discord.Interaction, button: discord.ui.Button[Any]  # type: ignore[type-arg]
+            ) -> None:
+                if ws_ref is not None:
+                    payload = json.dumps(
+                        {"type": "message", "content": f"/reject {proposal_id}"}
+                    )
+                    await ws_ref.send(payload)
+                await interaction.response.edit_message(
+                    content=f"❌ Denied: `{skill_name}`", embed=None, view=None
+                )
+                self.stop()
+
+        try:
+            await channel.send(embed=embed, view=SkillConfirmView())
+        except Exception:
+            logger.warning(
+                "Failed to send skill-confirm embed; falling back to text", exc_info=True
+            )
+            content = data.get("content", "")
+            await self._dispatch_core_message(platform_user_id, content, [])
+
     async def _forward_to_core(self, message: Any) -> None:
         if self._ws is None:
             logger.warning("Not connected to Core, dropping message")

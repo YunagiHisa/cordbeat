@@ -116,3 +116,20 @@ if __name__ == "__main__":
         else f"ws://{_config.gateway.host}:{_config.gateway.port}"
     )
     asyncio.run(main(_ws_url, auth_token=_config.gateway.auth_token))
+
+
+def cli_main() -> None:
+    """Entry point: connect CLI to a running CordBeat server (no server started)."""
+    from cordbeat.config import cordbeat_home, load_config
+
+    config_path = (
+        sys.argv[1]
+        if len(sys.argv) > 1 and not sys.argv[1].startswith("-")
+        else str(cordbeat_home() / "config.yaml")
+    )
+    _config = load_config(config_path)
+    ws_url = f"ws://{_config.gateway.host}:{_config.gateway.port}"
+    try:
+        asyncio.run(main(ws_url, auth_token=_config.gateway.auth_token))
+    except KeyboardInterrupt:
+        pass

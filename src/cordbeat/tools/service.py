@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from cordbeat.config import cordbeat_home
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -56,7 +58,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart={exe}
+ExecStart={exe} {config_path}
 Restart=on-failure
 RestartSec=5
 
@@ -72,7 +74,7 @@ Requires=cordbeat.service
 
 [Service]
 Type=simple
-ExecStart={exe}
+ExecStart={exe} {config_path}
 Restart=on-failure
 RestartSec=5
 
@@ -83,7 +85,10 @@ WantedBy=default.target
 
 def _systemd_install(adapters: list[str] | None = None) -> None:
     _SYSTEMD_DIR.mkdir(parents=True, exist_ok=True)
-    _SYSTEMD_UNIT.write_text(_SYSTEMD_TEMPLATE.format(exe=_cordbeat_exe()))
+    config_path = str(cordbeat_home() / "config.yaml")
+    _SYSTEMD_UNIT.write_text(
+        _SYSTEMD_TEMPLATE.format(exe=_cordbeat_exe(), config_path=config_path)
+    )
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "--user", "enable", "--now", "cordbeat"], check=True)
     print("✅ CordBeat service installed and started (systemd user service).")
@@ -96,6 +101,7 @@ def _systemd_install(adapters: list[str] | None = None) -> None:
             _SYSTEMD_ADAPTER_TEMPLATE.format(
                 Adapter=adapter.title(),
                 exe=_adapter_exe(adapter),
+                config_path=config_path,
             )
         )
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
@@ -152,6 +158,7 @@ _LAUNCHD_TEMPLATE = """\
   <key>ProgramArguments</key>
   <array>
     <string>{exe}</string>
+    <string>{config_path}</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -176,6 +183,7 @@ _LAUNCHD_ADAPTER_TEMPLATE = """\
   <key>ProgramArguments</key>
   <array>
     <string>{exe}</string>
+    <string>{config_path}</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -192,8 +200,11 @@ _LAUNCHD_ADAPTER_TEMPLATE = """\
 
 def _launchd_install(adapters: list[str] | None = None) -> None:
     _LAUNCHD_DIR.mkdir(parents=True, exist_ok=True)
+    config_path = str(cordbeat_home() / "config.yaml")
     _LAUNCHD_PLIST.write_text(
-        _LAUNCHD_TEMPLATE.format(exe=_cordbeat_exe(), home=Path.home())
+        _LAUNCHD_TEMPLATE.format(
+            exe=_cordbeat_exe(), home=Path.home(), config_path=config_path
+        )
     )
     subprocess.run(["launchctl", "load", str(_LAUNCHD_PLIST)], check=True)
     print("✅ CordBeat service installed (launchd user agent).")
@@ -206,6 +217,7 @@ def _launchd_install(adapters: list[str] | None = None) -> None:
                 adapter=adapter,
                 exe=_adapter_exe(adapter),
                 home=Path.home(),
+                config_path=config_path,
             )
         )
         subprocess.run(["launchctl", "load", str(plist_path)], check=True)
@@ -243,6 +255,7 @@ _TASK_NAME = "CordBeat"
 
 def _windows_install(adapters: list[str] | None = None) -> None:
     exe = _cordbeat_exe()
+    config_path = str(cordbeat_home() / "config.yaml")
     # /SC ONLOGON = run every time the current user logs in
     subprocess.run(
         [
@@ -252,7 +265,7 @@ def _windows_install(adapters: list[str] | None = None) -> None:
             "/TN",
             _TASK_NAME,
             "/TR",
-            exe,
+            f'"{exe}" "{config_path}"',
             "/SC",
             "ONLOGON",
             "/RL",
@@ -273,7 +286,7 @@ def _windows_install(adapters: list[str] | None = None) -> None:
                 "/TN",
                 task_name,
                 "/TR",
-                _adapter_exe(adapter),
+                f'"{_adapter_exe(adapter)}" "{config_path}"',
                 "/SC",
                 "ONLOGON",
                 "/RL",

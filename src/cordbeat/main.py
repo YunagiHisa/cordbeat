@@ -398,6 +398,11 @@ Usage:
   cordbeat service uninstall   Remove the service registration
   cordbeat update              Update CordBeat to the latest version
   cordbeat uninstall           Remove CordBeat service + data directory
+
+Separate commands:
+  cordbeat-cli                 Connect CLI chat to a running CordBeat server
+  cordbeat-discord             Start the Discord adapter (connects to running server)
+  cordbeat-telegram            Start the Telegram adapter
 """
 
 
@@ -702,16 +707,50 @@ def cli() -> None:
 
 
 def cli_chat() -> None:
-    """Start CordBeat in combined server + interactive CLI chat mode."""
+    """Start CordBeat CLI chat.
+
+    If a CordBeat server is already listening on the configured port (e.g.,
+    started by ``cordbeat service install``), this connects the CLI adapter
+    to that running server — exiting the CLI does NOT stop the server.
+
+    If no server is found, falls back to the combined server + CLI mode where
+    both start in the same process and exit together.
+    """
     config_path = _resolve_config_path()
+    cfg = load_config(config_path)
+    ws_url = f"ws://{cfg.gateway.host}:{cfg.gateway.port}"
+
+    _server_running = _probe_ws(ws_url)
     _watchdog = threading.Timer(30.0, lambda: os._exit(1))
     _watchdog.daemon = True
+
+    if _server_running:
+        # Attach CLI to the already-running server; it keeps running after we exit.
+        from cordbeat.adapters.cli import cli_main  # noqa: PLC0415
+
+        cli_main()
+    else:
+        try:
+            asyncio.run(main_with_cli(config_path))
+        except KeyboardInterrupt:
+            _watchdog.start()
+        finally:
+            _watchdog.cancel()
+
+
+def _probe_ws(url: str, timeout: float = 0.5) -> bool:
+    """Return True if a WebSocket server is already listening at *url*."""
+    import socket  # noqa: PLC0415
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    parsed = urlparse(url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 8765
     try:
-        asyncio.run(main_with_cli(config_path))
-    except KeyboardInterrupt:
-        _watchdog.start()
-    finally:
-        _watchdog.cancel()
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 if __name__ == "__main__":

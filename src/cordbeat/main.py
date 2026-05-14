@@ -658,7 +658,9 @@ def cli() -> None:
         return
 
     if sub == "server":
-        # Headless server-only mode (no interactive CLI)
+        # Headless server-only mode (no interactive CLI).
+        # Strip "server" from argv so _resolve_config_path sees the right arg.
+        sys.argv = [sys.argv[0]] + args[1:]
         config_path = _resolve_config_path()
         _watchdog = threading.Timer(30.0, lambda: os._exit(1))
         _watchdog.daemon = True
@@ -707,41 +709,31 @@ def cli() -> None:
 
 
 def cli_chat() -> None:
-    """Start CordBeat CLI chat.
+    """Start an interactive CLI chat, auto-starting the server if needed.
 
-    If a CordBeat server is already listening on the configured port (e.g.,
-    started by ``cordbeat service install``), this connects the CLI adapter
-    to that running server — exiting the CLI does NOT stop the server.
-
-    If no server is found, falls back to the combined server + CLI mode where
-    both start in the same process and exit together.
+    If a CordBeat server is already listening on the configured port, this
+    attaches the CLI to it — quitting the CLI does NOT stop the server.
+    If no server is found, one is launched automatically as a detached
+    background process (also survives CLI exit).
+    Use ``cordbeat service stop`` or send SIGTERM to shut the server down.
     """
+    from cordbeat.adapters.cli import cli_main
+
     config_path = _resolve_config_path()
     cfg = load_config(config_path)
     ws_url = f"ws://{cfg.gateway.host}:{cfg.gateway.port}"
 
-    _server_running = _probe_ws(ws_url)
-    _watchdog = threading.Timer(30.0, lambda: os._exit(1))
-    _watchdog.daemon = True
+    if not _probe_ws(ws_url):
+        print("[CordBeat] Starting server in background...")
+        _start_server_background(config_path, ws_url)
 
-    if _server_running:
-        # Attach CLI to the already-running server; it keeps running after we exit.
-        from cordbeat.adapters.cli import cli_main  # noqa: PLC0415
-
-        cli_main()
-    else:
-        try:
-            asyncio.run(main_with_cli(config_path))
-        except KeyboardInterrupt:
-            _watchdog.start()
-        finally:
-            _watchdog.cancel()
+    cli_main()
 
 
 def _probe_ws(url: str, timeout: float = 0.5) -> bool:
-    """Return True if a WebSocket server is already listening at *url*."""
-    import socket  # noqa: PLC0415
-    from urllib.parse import urlparse  # noqa: PLC0415
+    """Return True if something is already listening at *url*."""
+    import socket
+    from urllib.parse import urlparse
 
     parsed = urlparse(url)
     host = parsed.hostname or "localhost"
@@ -751,6 +743,44 @@ def _probe_ws(url: str, timeout: float = 0.5) -> bool:
             return True
     except OSError:
         return False
+
+
+def _start_server_background(config_path: str, ws_url: str) -> None:
+    """Spawn the CordBeat server as a fully detached background process.
+
+    Blocks until the server's port is accepting connections (up to 15 s).
+    """
+    import time
+
+    exe = shutil.which("cordbeat")
+    if exe is not None:
+        cmd: list[str] = [exe, "server", config_path]
+    else:
+        # Fallback: invoke via the current interpreter
+        cmd = [sys.executable, __file__, "server", config_path]
+
+    popen_kwargs: dict[str, Any] = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        )
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    subprocess.Popen(cmd, **popen_kwargs)
+
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        time.sleep(0.5)
+        if _probe_ws(ws_url, timeout=0.3):
+            return
+    raise RuntimeError(
+        "CordBeat server did not become ready within 15 seconds.\n"
+        "Run 'cordbeat server' in a separate terminal to see startup errors."
+    )
 
 
 if __name__ == "__main__":

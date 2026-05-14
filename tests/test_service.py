@@ -80,7 +80,7 @@ class TestRunServiceCommandLinux:
         assert code == 0
         assert unit_file.exists()
         assert "/bin/cordbeat" in unit_file.read_text()
-        assert mock_run.call_count == 2  # daemon-reload + enable --now
+        assert mock_run.call_count == 3  # daemon-reload + enable --now + restart
 
     def test_start(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch("cordbeat.tools.service.subprocess.run") as mock_run:

@@ -28,15 +28,27 @@ class TestMainCliKeyboardInterrupt:
             cli()
 
     def test_cli_chat_keyboard_interrupt_is_swallowed(self) -> None:
-        """cordbeat-chat exits cleanly on KeyboardInterrupt."""
+        """cordbeat-chat exits cleanly on KeyboardInterrupt.
+
+        cli_chat() probes for a running server then delegates to cli_main()
+        which internally swallows KeyboardInterrupt.  We verify the whole
+        chain exits without raising.
+        """
+        from unittest.mock import MagicMock
+
         from cordbeat.main import cli_chat
+
+        mock_cfg = MagicMock()
+        mock_cfg.gateway.host = "localhost"
+        mock_cfg.gateway.port = 8765
 
         with (
             patch("cordbeat.main._resolve_config_path", return_value="config.yaml"),
-            patch(
-                "cordbeat.main.asyncio.run",
-                side_effect=KeyboardInterrupt,
-            ),
+            patch("cordbeat.main.load_config", return_value=mock_cfg),
+            # Pretend server is already running so _start_server_background is skipped
+            patch("cordbeat.main._probe_ws", return_value=True),
+            # cli_main swallows KeyboardInterrupt internally; mock it as a no-op
+            patch("cordbeat.adapters.cli.cli_main"),
         ):
             cli_chat()
 

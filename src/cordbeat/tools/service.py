@@ -91,6 +91,8 @@ def _systemd_install(adapters: list[str] | None = None) -> None:
     )
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "--user", "enable", "--now", "cordbeat"], check=True)
+    # Restart to pick up any ExecStart changes (enable --now is a no-op if running)
+    subprocess.run(["systemctl", "--user", "restart", "cordbeat"], check=False)
     print("✅ CordBeat service installed and started (systemd user service).")
     print("   Logs: journalctl --user -u cordbeat -f")
 
@@ -108,6 +110,10 @@ def _systemd_install(adapters: list[str] | None = None) -> None:
         subprocess.run(
             ["systemctl", "--user", "enable", "--now", f"cordbeat-{adapter}"],
             check=True,
+        )
+        subprocess.run(
+            ["systemctl", "--user", "restart", f"cordbeat-{adapter}"],
+            check=False,
         )
         print(f"✅ cordbeat-{adapter} adapter service installed and started.")
 
@@ -201,6 +207,10 @@ _LAUNCHD_ADAPTER_TEMPLATE = """\
 def _launchd_install(adapters: list[str] | None = None) -> None:
     _LAUNCHD_DIR.mkdir(parents=True, exist_ok=True)
     config_path = str(cordbeat_home() / "config.yaml")
+    # Unload first (no-op if not loaded) so we can re-load updated plist
+    subprocess.run(
+        ["launchctl", "unload", str(_LAUNCHD_PLIST)], check=False, capture_output=True
+    )
     _LAUNCHD_PLIST.write_text(
         _LAUNCHD_TEMPLATE.format(
             exe=_cordbeat_exe(), home=Path.home(), config_path=config_path
@@ -212,6 +222,9 @@ def _launchd_install(adapters: list[str] | None = None) -> None:
 
     for adapter in adapters or []:
         plist_path = _LAUNCHD_DIR / f"com.cordbeat.{adapter}.plist"
+        subprocess.run(
+            ["launchctl", "unload", str(plist_path)], check=False, capture_output=True
+        )
         plist_path.write_text(
             _LAUNCHD_ADAPTER_TEMPLATE.format(
                 adapter=adapter,

@@ -25,6 +25,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from cordbeat.adapters._utils import AdapterFilter
 from cordbeat.config import AdapterConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -54,6 +55,7 @@ class LineAdapter(RetryableConnection):
         self._ws: Any = None
         self._running = False
         self._max_backoff = config.reconnect_max_backoff
+        self._filter = AdapterFilter.from_options(config.options)
 
     async def start(self) -> None:
         try:
@@ -150,29 +152,25 @@ class LineAdapter(RetryableConnection):
             return
 
         # ── E-4 response filtering ────────────────────────────────────
-        opts = self._config.options
-        user_blocklist: list[str] = [str(u) for u in opts.get("user_blocklist", [])]
-        if user_id in user_blocklist:
+        # LINE groups don't have a platform @mention; treat keyword-match as "mentioned"
+        is_dm = not is_group
+        is_mentioned = False
+        if is_group:
+            from cordbeat.adapters._utils import _read_soul_keywords
+
+            kws = list(self._filter.ai_keywords) or _read_soul_keywords()
+            if kws:
+                is_mentioned = any(kw.lower() in text.lower() for kw in kws)
+            else:
+                is_mentioned = True  # no keywords → treat as mentioned
+        if not self._filter.should_respond(
+            user_id=user_id,
+            channel_id="",  # LINE groups have no stable channel_id for filtering
+            is_dm=is_dm,
+            is_mentioned=is_mentioned,
+            text=text,
+        ):
             return
-
-        respond_mode: str = opts.get("respond_mode", "all")
-        if respond_mode == "mention_only" and is_group:
-            # In LINE groups, the bot must be explicitly mentioned (@name in text)
-            keywords: list[str] = [str(k) for k in opts.get("ai_decision_keywords", [])]
-            if not keywords:
-                from cordbeat.adapters._utils import _read_soul_keywords
-
-                keywords = _read_soul_keywords()
-            if keywords and not any(kw.lower() in text.lower() for kw in keywords):
-                return
-        elif respond_mode == "ai_decision" and is_group:
-            keywords = [str(k) for k in opts.get("ai_decision_keywords", [])]
-            if not keywords:
-                from cordbeat.adapters._utils import _read_soul_keywords
-
-                keywords = _read_soul_keywords()
-            if keywords and not any(kw.lower() in text.lower() for kw in keywords):
-                return
         # ─────────────────────────────────────────────────────────────
 
         payload = json.dumps(

@@ -25,6 +25,7 @@ from collections import OrderedDict
 from datetime import UTC, datetime
 from typing import Any
 
+from cordbeat.adapters._utils import AdapterFilter
 from cordbeat.config import AdapterConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -57,6 +58,7 @@ class SlackAdapter(RetryableConnection):
         self._user_channels: OrderedDict[str, str] = OrderedDict()
         # Bot's own Slack user ID; fetched on start for mention_only mode.
         self._bot_user_id: str = ""
+        self._filter = AdapterFilter.from_options(config.options)
 
     async def start(self) -> None:
         try:
@@ -137,19 +139,6 @@ class SlackAdapter(RetryableConnection):
     ) -> None:
         await self._send_to_slack(platform_user_id, content)
 
-    def _matches_ai_keywords(self, text: str) -> bool:
-        """Return True if text contains any keyword (for ai_decision mode)."""
-        opts = self._config.options
-        keywords: list[str] = [str(k) for k in opts.get("ai_decision_keywords", [])]
-        if not keywords:
-            from cordbeat.adapters._utils import _read_soul_keywords
-
-            keywords = _read_soul_keywords()
-        if not keywords:
-            return True  # no filter available → allow
-        text_lower = text.lower()
-        return any(kw.lower() in text_lower for kw in keywords)
-
     async def _forward_to_core(
         self,
         *,
@@ -162,34 +151,18 @@ class SlackAdapter(RetryableConnection):
             return
 
         # ── E-4 response filtering ────────────────────────────────────
-        opts = self._config.options
-        user_blocklist: list[str] = [str(u) for u in opts.get("user_blocklist", [])]
-        if user_id in user_blocklist:
-            return
-
         is_dm = channel_type == "im"
-        channel_whitelist: list[str] = [
-            str(c) for c in opts.get("channel_whitelist", [])
-        ]
-        channel_blacklist: list[str] = [
-            str(c) for c in opts.get("channel_blacklist", [])
-        ]
-        if not is_dm:
-            if channel_whitelist and channel not in channel_whitelist:
-                return
-            if channel in channel_blacklist:
-                return
-
-        respond_mode: str = opts.get("respond_mode", "all")
-        if respond_mode == "mention_only":
-            bot_mentioned = is_dm or (
-                bool(self._bot_user_id) and f"<@{self._bot_user_id}>" in text
-            )
-            if not bot_mentioned:
-                return
-        elif respond_mode == "ai_decision":
-            if not is_dm and not self._matches_ai_keywords(text):
-                return
+        # For Slack: "mentioned" = <@BOT_USER_ID> present in text
+        is_mentioned = bool(self._bot_user_id) and f"<@{self._bot_user_id}>" in text
+        if not self._filter.should_respond(
+            user_id=user_id,
+            channel_id=channel,
+            is_dm=is_dm,
+            is_mentioned=is_mentioned,
+            text=text,
+            extra_keywords=[self._bot_user_id] if self._bot_user_id else None,
+        ):
+            return
         # ─────────────────────────────────────────────────────────────
 
         self._user_channels[user_id] = channel

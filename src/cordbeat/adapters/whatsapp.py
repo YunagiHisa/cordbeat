@@ -33,6 +33,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from cordbeat.adapters._utils import AdapterFilter
 from cordbeat.config import AdapterConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -89,6 +90,7 @@ class WhatsAppAdapter(RetryableConnection):
         self._ws: Any = None
         self._running = False
         self._max_backoff = config.reconnect_max_backoff
+        self._filter = AdapterFilter.from_options(config.options)
 
     async def start(self) -> None:
         try:
@@ -195,12 +197,10 @@ class WhatsAppAdapter(RetryableConnection):
         if self._ws is None or not user_id:
             return
 
-        # ── E-4 response filtering (user_blocklist) ───────────────────
-        opts = self._config.options
-        user_blocklist: list[str] = [str(u) for u in opts.get("user_blocklist", [])]
-        if user_id in user_blocklist:
+        # WhatsApp Cloud API is 1:1 — always a DM; no channel filters needed.
+        # respond_mode and ai_decision_keywords still apply.
+        if not self._filter.should_respond(user_id=user_id, is_dm=True):
             return
-        # ─────────────────────────────────────────────────────────────
 
         payload = json.dumps(
             {

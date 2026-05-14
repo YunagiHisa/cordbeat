@@ -10,7 +10,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from cordbeat.adapters._utils import _read_soul_keywords
+from cordbeat.adapters._utils import AdapterFilter
 from cordbeat.config import AdapterConfig, STTConfig, TTSConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -45,6 +45,7 @@ class TelegramAdapter(RetryableConnection):
         self._max_backoff = config.reconnect_max_backoff
         # Map platform_user_id → chat_id for reply routing
         self._chat_map: dict[str, int] = {}
+        self._filter = AdapterFilter.from_options(config.options)
         # Typing indicator tasks: chat_id → asyncio.Task
         self._typing_tasks: dict[int, asyncio.Task[None]] = {}
         # Track which users last communicated via voice (for TTS routing)
@@ -101,47 +102,22 @@ class TelegramAdapter(RetryableConnection):
             chat_id = msg.chat_id
 
             # ── E-4 response filtering ────────────────────────────────
-            opts = self._config.options
-            user_blocklist: list[str] = [str(u) for u in opts.get("user_blocklist", [])]
-            if user_id in user_blocklist:
-                return
-
             is_private = getattr(msg.chat, "type", "private") == "private"
-
-            # channel_whitelist/blacklist apply only to group chats; DMs always bypass.
-            if not is_private:
-                channel_whitelist: list[int] = [
-                    int(c) for c in opts.get("channel_whitelist", [])
-                ]
-                channel_blacklist: list[int] = [
-                    int(c) for c in opts.get("channel_blacklist", [])
-                ]
-                if channel_whitelist and chat_id not in channel_whitelist:
-                    return
-                if chat_id in channel_blacklist:
-                    return
-
-            respond_mode: str = opts.get("respond_mode", "all")
-            if respond_mode == "mention_only":
-                if not is_private:
-                    raw_text = (msg.text or msg.caption or "").lower()
-                    bot_username = (context.bot.username or "").lower()
-                    if not (bot_username and f"@{bot_username}" in raw_text):
-                        return
-            elif respond_mode == "ai_decision":
-                if not is_private:
-                    raw_text = (msg.text or msg.caption or "").lower()
-                    keywords: list[str] = [
-                        str(k) for k in opts.get("ai_decision_keywords", [])
-                    ]
-                    if not keywords:
-                        keywords = _read_soul_keywords()
-                    if not keywords:
-                        bot_username = (context.bot.username or "").lower()
-                        if bot_username:
-                            keywords = [bot_username]
-                    if keywords and not any(kw.lower() in raw_text for kw in keywords):
-                        return
+            raw_text = msg.text or msg.caption or ""
+            bot_username: str = context.bot.username or ""
+            # For Telegram: "mentioned" = @botname present in group text
+            is_mentioned = bool(
+                bot_username and f"@{bot_username}".lower() in raw_text.lower()
+            )
+            if not self._filter.should_respond(
+                user_id=user_id,
+                channel_id=str(chat_id),
+                is_dm=is_private,
+                is_mentioned=is_mentioned,
+                text=raw_text,
+                extra_keywords=[bot_username] if bot_username else None,
+            ):
+                return
             # ─────────────────────────────────────────────────────────
 
             self._chat_map[user_id] = chat_id

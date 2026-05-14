@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from cordbeat.adapters._utils import _read_soul_keywords
+from cordbeat.adapters._utils import AdapterFilter
 from cordbeat.config import AdapterConfig, RVCConfig, STTConfig, TTSConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -52,6 +52,7 @@ class DiscordAdapter(RetryableConnection):
         self._running = False
         self._max_backoff = config.reconnect_max_backoff
         self._user_channels: OrderedDict[str, int] = OrderedDict()
+        self._filter = AdapterFilter.from_options(config.options)
 
         # Typing indicator tasks: channel_id → asyncio.Task
         self._typing_tasks: dict[int, asyncio.Task[None]] = {}
@@ -162,26 +163,6 @@ class DiscordAdapter(RetryableConnection):
             await self._ws.close()
         if self._bot:
             await self._bot.close()
-
-    def _matches_ai_keywords(self, message: Any) -> bool:
-        """Return True if the message content contains any configured keyword.
-
-        Used for ``respond_mode: ai_decision``.  Keywords are case-insensitive.
-        Priority: 1) ``ai_decision_keywords`` in config, 2) AI name from soul.yaml,
-        3) bot's Discord display name as last resort.
-        """
-        opts = self._config.options
-        keywords: list[str] = [str(k) for k in opts.get("ai_decision_keywords", [])]
-        if not keywords:
-            keywords = _read_soul_keywords()
-        if not keywords and self._bot is not None and self._bot.user is not None:
-            name: str = self._bot.user.display_name or self._bot.user.name or ""
-            if name:
-                keywords = [name]
-        if not keywords:
-            return True  # no filter available → allow
-        text = (message.content or "").lower()
-        return any(kw.lower() in text for kw in keywords)
 
     async def _dispatch_core_message(
         self, platform_user_id: str, content: str, images: list[str]
@@ -308,39 +289,33 @@ class DiscordAdapter(RetryableConnection):
 
         user_id = str(message.author.id)
         channel_id: int = message.channel.id
+        is_guild = message.guild is not None  # False = DM
 
         # ── E-4 response filtering ────────────────────────────────────
-        opts = self._config.options
-        user_blocklist: list[str] = [str(u) for u in opts.get("user_blocklist", [])]
-        if user_id in user_blocklist:
-            return
-
-        is_guild_channel = message.guild is not None  # False = DM
-        channel_whitelist: list[int] = [
-            int(c) for c in opts.get("channel_whitelist", [])
-        ]
-        channel_blacklist: list[int] = [
-            int(c) for c in opts.get("channel_blacklist", [])
-        ]
-        # channel_whitelist/blacklist apply only to guild channels; DMs always bypass.
-        if is_guild_channel:
-            if channel_whitelist and channel_id not in channel_whitelist:
-                return
-            if channel_id in channel_blacklist:
-                return
-
-        respond_mode: str = opts.get("respond_mode", "all")
-        if respond_mode == "mention_only":
-            bot_mentioned = (
-                self._bot is not None
-                and self._bot.user is not None
-                and self._bot.user.mentioned_in(message)
+        bot_mentioned = (
+            is_guild
+            and self._bot is not None
+            and self._bot.user is not None
+            and self._bot.user.mentioned_in(message)
+        )
+        bot_name: str = (
+            (
+                self._bot.user.display_name
+                or self._bot.user.name
+                or ""
             )
-            if is_guild_channel and not bot_mentioned:
-                return
-        elif respond_mode == "ai_decision":
-            if is_guild_channel and not self._matches_ai_keywords(message):
-                return
+            if self._bot is not None and self._bot.user is not None
+            else ""
+        )
+        if not self._filter.should_respond(
+            user_id=user_id,
+            channel_id=str(channel_id),
+            is_dm=not is_guild,
+            is_mentioned=bot_mentioned,
+            text=message.content or "",
+            extra_keywords=[bot_name] if bot_name else None,
+        ):
+            return
         # ─────────────────────────────────────────────────────────────
 
         self._user_channels[user_id] = channel_id

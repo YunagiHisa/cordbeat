@@ -25,4 +25,4 @@ COPY --from=builder /app/pyproject.toml /app/
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 
-ENTRYPOINT ["python", "-m", "cordbeat.adapter_runner"]
+ENTRYPOINT ["python", "-m", "cordbeat.adapters.runner"]

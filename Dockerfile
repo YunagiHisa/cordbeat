@@ -9,6 +9,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Copy dependency files first for caching
 COPY pyproject.toml uv.lock README.md ./
 COPY src/ src/
+COPY skills/ skills/
 
 # Install dependencies (no dev extras)
 RUN uv sync --no-dev --frozen
@@ -21,6 +22,7 @@ WORKDIR /app
 # Copy virtual environment and source from builder
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src
+COPY --from=builder /app/skills /app/skills
 COPY --from=builder /app/pyproject.toml /app/
 
 # Ensure venv is on PATH

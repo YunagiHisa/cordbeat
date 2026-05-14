@@ -27,7 +27,7 @@ services:
       - ./config.yaml:/app/config.yaml:ro
     environment:
       - PYTHONUNBUFFERED=1
-    entrypoint: ["python", "-m", "cordbeat.adapter_runner"]
+    entrypoint: ["python", "-m", "cordbeat.adapters.runner"]
     command: ["discord", "config.yaml"]
     depends_on:
       - core
@@ -47,7 +47,7 @@ services:
       - ./config.yaml:/app/config.yaml:ro
     environment:
       - PYTHONUNBUFFERED=1
-    entrypoint: ["python", "-m", "cordbeat.adapter_runner"]
+    entrypoint: ["python", "-m", "cordbeat.adapters.runner"]
     command: ["telegram", "config.yaml"]
     depends_on:
       - core

@@ -62,6 +62,7 @@ ALLOWED_IMPORTS: frozenset[str] = frozenset(
         "decimal",
         "fractions",
         "random",
+        "colorsys",
         "uuid",
         "hashlib",
         "hmac",

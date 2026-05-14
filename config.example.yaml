@@ -136,15 +136,45 @@ adapters:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60
+    # options:
+    #   bot_token: "xoxb-..."          # Bot User OAuth Token
+    #   app_token: "xapp-..."          # App-Level Token (connections:write)
+    #   respond_mode: "all"            # all | mention_only | ai_decision
+    #   channel_whitelist: []          # only respond in these channel IDs (DMs always bypass)
+    #   channel_blacklist: []          # never respond in these channel IDs
+    #   user_blocklist: []             # never respond to these Slack user IDs
+    #   ai_decision_keywords: []       # keywords for ai_decision mode (default: soul name)
   line:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60
+    # options:
+    #   channel_access_token: "..."    # LINE Channel Access Token
+    #   channel_secret: "..."          # LINE Channel Secret
+    #   respond_mode: "all"            # all | mention_only | ai_decision (groups only)
+    #   user_blocklist: []             # never respond to these LINE user IDs
+    #   ai_decision_keywords: []       # keywords for ai_decision/mention_only (default: soul name)
+    #   webhook_host: "0.0.0.0"
+    #   webhook_port: 8080
+    #   webhook_path: "/webhook"
   whatsapp:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60
+    # options:
+    #   phone_number_id: "..."         # WhatsApp Business phone number ID
+    #   access_token: "..."            # Meta Cloud API access token
+    #   app_secret: "..."              # Webhook signature secret
+    #   user_blocklist: []             # never respond to these WhatsApp phone numbers
+    #   webhook_host: "0.0.0.0"
+    #   webhook_port: 8081
+    #   webhook_path: "/webhook"
   signal:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60
+    # options:
+    #   phone_number: "+1234567890"    # Signal phone number registered with signal-cli
+    #   user_blocklist: []             # never respond to these Signal numbers
+    #   rpc_url: "http://localhost:7583"  # signal-cli JSON-RPC URL
+    #   poll_interval: 1.0             # seconds between receive polls

@@ -55,6 +55,8 @@ class SlackAdapter(RetryableConnection):
         self._max_backoff = config.reconnect_max_backoff
         # Bounded LRU of platform_user_id → channel for reply routing.
         self._user_channels: OrderedDict[str, str] = OrderedDict()
+        # Bot's own Slack user ID; fetched on start for mention_only mode.
+        self._bot_user_id: str = ""
 
     async def start(self) -> None:
         try:
@@ -77,6 +79,14 @@ class SlackAdapter(RetryableConnection):
 
         self._running = True
         self._web_client = AsyncWebClient(token=self._bot_token)
+        # Fetch bot's own user_id for mention_only mode
+        try:
+            auth_resp = await self._web_client.auth_test()
+            self._bot_user_id = str(auth_resp.get("user_id", ""))
+        except Exception:
+            logger.warning(
+                "Could not fetch Slack bot user_id; mention_only may not work"
+            )
         self._socket_client = SocketModeClient(
             app_token=self._app_token,
             web_client=self._web_client,
@@ -98,6 +108,7 @@ class SlackAdapter(RetryableConnection):
                 user_id=event.get("user", ""),
                 text=event.get("text", ""),
                 channel=event.get("channel", ""),
+                channel_type=event.get("channel_type", "channel"),
             )
 
         self._socket_client.socket_mode_request_listeners.append(handle_socket)
@@ -126,9 +137,60 @@ class SlackAdapter(RetryableConnection):
     ) -> None:
         await self._send_to_slack(platform_user_id, content)
 
-    async def _forward_to_core(self, *, user_id: str, text: str, channel: str) -> None:
+    def _matches_ai_keywords(self, text: str) -> bool:
+        """Return True if text contains any keyword (for ai_decision mode)."""
+        opts = self._config.options
+        keywords: list[str] = [str(k) for k in opts.get("ai_decision_keywords", [])]
+        if not keywords:
+            from cordbeat.adapters._utils import _read_soul_keywords
+
+            keywords = _read_soul_keywords()
+        if not keywords:
+            return True  # no filter available → allow
+        text_lower = text.lower()
+        return any(kw.lower() in text_lower for kw in keywords)
+
+    async def _forward_to_core(
+        self,
+        *,
+        user_id: str,
+        text: str,
+        channel: str,
+        channel_type: str = "channel",
+    ) -> None:
         if self._ws is None or not user_id:
             return
+
+        # ── E-4 response filtering ────────────────────────────────────
+        opts = self._config.options
+        user_blocklist: list[str] = [str(u) for u in opts.get("user_blocklist", [])]
+        if user_id in user_blocklist:
+            return
+
+        is_dm = channel_type == "im"
+        channel_whitelist: list[str] = [
+            str(c) for c in opts.get("channel_whitelist", [])
+        ]
+        channel_blacklist: list[str] = [
+            str(c) for c in opts.get("channel_blacklist", [])
+        ]
+        if not is_dm:
+            if channel_whitelist and channel not in channel_whitelist:
+                return
+            if channel in channel_blacklist:
+                return
+
+        respond_mode: str = opts.get("respond_mode", "all")
+        if respond_mode == "mention_only":
+            bot_mentioned = is_dm or (
+                bool(self._bot_user_id) and f"<@{self._bot_user_id}>" in text
+            )
+            if not bot_mentioned:
+                return
+        elif respond_mode == "ai_decision":
+            if not is_dm and not self._matches_ai_keywords(text):
+                return
+        # ─────────────────────────────────────────────────────────────
 
         self._user_channels[user_id] = channel
         self._user_channels.move_to_end(user_id)

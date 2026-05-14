@@ -135,6 +135,14 @@ class SignalAdapter(RetryableConnection):
     async def _forward_to_core(self, *, user_id: str, text: str) -> None:
         if self._ws is None or not user_id:
             return
+
+        # ── E-4 response filtering (user_blocklist) ───────────────────
+        opts = self._config.options
+        user_blocklist: list[str] = [str(u) for u in opts.get("user_blocklist", [])]
+        if user_id in user_blocklist:
+            return
+        # ─────────────────────────────────────────────────────────────
+
         payload = json.dumps(
             {
                 "type": "message",

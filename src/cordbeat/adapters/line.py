@@ -107,6 +107,7 @@ class LineAdapter(RetryableConnection):
                     await self._forward_to_core(
                         user_id=event.source.user_id or "",
                         text=event.message.text,
+                        is_group=getattr(event.source, "type", "user") != "user",
                     )
             return web.Response(text="OK")
 
@@ -142,9 +143,37 @@ class LineAdapter(RetryableConnection):
     ) -> None:
         await self._send_to_line(platform_user_id, content)
 
-    async def _forward_to_core(self, *, user_id: str, text: str) -> None:
+    async def _forward_to_core(
+        self, *, user_id: str, text: str, is_group: bool = False
+    ) -> None:
         if self._ws is None or not user_id:
             return
+
+        # ── E-4 response filtering ────────────────────────────────────
+        opts = self._config.options
+        user_blocklist: list[str] = [str(u) for u in opts.get("user_blocklist", [])]
+        if user_id in user_blocklist:
+            return
+
+        respond_mode: str = opts.get("respond_mode", "all")
+        if respond_mode == "mention_only" and is_group:
+            # In LINE groups, the bot must be explicitly mentioned (@name in text)
+            keywords: list[str] = [str(k) for k in opts.get("ai_decision_keywords", [])]
+            if not keywords:
+                from cordbeat.adapters._utils import _read_soul_keywords
+
+                keywords = _read_soul_keywords()
+            if keywords and not any(kw.lower() in text.lower() for kw in keywords):
+                return
+        elif respond_mode == "ai_decision" and is_group:
+            keywords = [str(k) for k in opts.get("ai_decision_keywords", [])]
+            if not keywords:
+                from cordbeat.adapters._utils import _read_soul_keywords
+
+                keywords = _read_soul_keywords()
+            if keywords and not any(kw.lower() in text.lower() for kw in keywords):
+                return
+        # ─────────────────────────────────────────────────────────────
 
         payload = json.dumps(
             {

@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 # Probe connections (raw TCP / health checks) cause a harmless
 # "did not receive a valid HTTP request" error inside the websockets library.
 # Raise its threshold to WARNING so these don't pollute the user's log.
-logging.getLogger("websockets.server").setLevel(logging.WARNING)
+logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
+logging.getLogger("websockets.asyncio.server").setLevel(logging.CRITICAL)
 
 _MAX_BACKOFF = 60
 

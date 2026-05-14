@@ -42,6 +42,17 @@ def _resolve_config_path() -> str:
     # Try ~/.cordbeat/config.yaml
     home_config = cordbeat_home() / "config.yaml"
     if home_config.is_file():
+        cwd_config = Path("config.yaml")
+        if cwd_config.is_file():
+            # Both exist — warn so users aren't confused about which is active
+            import warnings
+
+            warnings.warn(
+                f"Two config files found: {home_config} (active) and {cwd_config} "
+                f"(ignored). CordBeat always uses ~/.cordbeat/config.yaml. "
+                f"You can safely delete {cwd_config} to avoid confusion.",
+                stacklevel=1,
+            )
         return str(home_config)
 
     # Try CWD config.yaml (backward compat)
@@ -205,8 +216,12 @@ async def main(
 
     # ── Graceful shutdown ─────────────────────────────────────────
     stop_event = asyncio.Event()
+    _shutdown_started = False
 
     def _signal_handler() -> None:
+        nonlocal _shutdown_started
+        if _shutdown_started:
+            return  # prevent re-entrant shutdown from multiple Ctrl+C presses
         logger.info("Shutdown signal received")
         stop_event.set()
 
@@ -249,6 +264,7 @@ async def main(
             pass
 
     logger.info("Shutting down...")
+    _shutdown_started = True
 
     # Use individual timeouts so one stuck subsystem can't hang the entire
     # shutdown sequence.
@@ -261,6 +277,10 @@ async def main(
             logger.warning("Shutdown timeout for %s (%.0fs)", label, timeout)
         except asyncio.CancelledError:
             pass  # expected when task was explicitly cancelled
+        except RecursionError:
+            # Python 3.12 bug: deep asyncio task graphs can overflow the
+            # call stack during cancel() propagation.  Log and continue.
+            logger.warning("RecursionError during shutdown of %s (ignored)", label)
         except Exception:
             logger.exception("Error during shutdown of %s", label)
 
@@ -282,7 +302,10 @@ async def main(
         logger.debug("Cancelling %d lingering task(s) before exit", len(pending))
         for t in pending:
             t.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
+        try:
+            await asyncio.gather(*pending, return_exceptions=True)
+        except RecursionError:
+            pass  # deep task graphs on Python 3.12 — safe to ignore here
 
     logger.info("CordBeat stopped")
 

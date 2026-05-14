@@ -275,41 +275,57 @@ def _install_packages(packages: list[str]) -> bool:
 def _select_adapters() -> dict[str, str | None]:
     """Prompt the user to choose one or more platform adapters.
 
+    Uses arrow-key checkbox UI when questionary is available and stdout is a
+    TTY; falls back to numbered text input otherwise.
     Returns a dict mapping adapter key → token (or None for CLI/no token).
-    Multiple adapters can be selected by entering comma-separated numbers
-    (e.g. ``2,3`` to enable both Discord and Telegram).
-    Entering nothing or ``1`` selects CLI only.
     """
-    # Separate CLI from SNS adapters for clearer presentation
     sns_specs = [
         (key, name, pkgs, probe)
         for key, name, pkgs, probe in _ADAPTER_SPECS
         if key != "cli"
     ]
 
-    print("\n  Which platform adapter(s) would you like to enable?")
-    print("    0. CLI only (no extra adapter)")
-    for i, (key, name, _, _) in enumerate(sns_specs, 1):
-        print(f"    {i}. {name}")
-    print("  (Enter comma-separated numbers, e.g. 1,2 for Discord + Telegram)")
+    selected_keys: list[str] = []
 
-    raw = _ask("Choice(s)", "0")
-    selected_indices: list[int] = []
-    for part in raw.replace(" ", "").split(","):
-        try:
-            n = int(part)
-            if 1 <= n <= len(sns_specs):
-                selected_indices.append(n - 1)
-        except ValueError:
-            pass
+    try:
+        import questionary
 
-    if not selected_indices:
-        # CLI-only path
+        if sys.stdout.isatty():
+            choices = [
+                questionary.Choice(name, value=key)
+                for key, name, _, _ in sns_specs
+            ]
+            chosen = questionary.checkbox(
+                "Which platform adapter(s) would you like to enable?",
+                choices=choices,
+                instruction="(Space to select, Enter to confirm; skip for CLI only)",
+            ).ask()
+            selected_keys = list(chosen) if chosen else []
+        else:
+            raise ImportError("not a TTY")
+    except Exception:
+        # Fallback: numbered text input
+        print("\n  Which platform adapter(s) would you like to enable?")
+        print("    0. CLI only (no extra adapter)")
+        for i, (key, name, _, _) in enumerate(sns_specs, 1):
+            print(f"    {i}. {name}")
+        print("  (Enter comma-separated numbers, e.g. 1,2 for Discord + Telegram)")
+        raw = _ask("Choice(s)", "0")
+        for part in raw.replace(" ", "").split(","):
+            try:
+                n = int(part)
+                if 1 <= n <= len(sns_specs):
+                    selected_keys.append(sns_specs[n - 1][0])
+            except ValueError:
+                pass
+
+    if not selected_keys:
         return {"cli": None}
 
     result: dict[str, str | None] = {"cli": None}
-    for idx in selected_indices:
-        key, name, packages, probe = sns_specs[idx]
+    sns_map = {key: (name, pkgs, probe) for key, name, pkgs, probe in sns_specs}
+    for key in selected_keys:
+        name, packages, probe = sns_map[key]
 
         # Check / install dependencies
         if probe and not _is_importable(probe):
@@ -536,7 +552,8 @@ def run_wizard(home: Path | None = None) -> Path:
         try:
             from cordbeat.tools.service import run_service_command
 
-            run_service_command("install")
+            adapter_names = [k for k in selected_adapters if k != "cli"]
+            run_service_command("install", adapters=adapter_names)
         except Exception as _svc_exc:  # pragma: no cover
             _warn(f"Service install failed: {_svc_exc}")
             _warn("You can run it manually later: cordbeat service install")
@@ -546,6 +563,12 @@ def run_wizard(home: Path | None = None) -> Path:
         )
 
     print("  Starting CordBeat...\n")
+    print(f"  {_b('Active config:')} {config_path}")
+    if config_path.parent != Path.cwd():
+        print(
+            f"  Note: CordBeat always reads config from {config_path.parent}/"
+            ", not the repo folder."
+        )
     return config_path
 
 

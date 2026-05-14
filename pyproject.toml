@@ -45,6 +45,8 @@ discord-vc = ["discord.py[voice]>=2.0", "discord-ext-voice-recv>=0.3", "numpy>=1
 rvc = ["torch>=2.1", "transformers>=4.40", "torchaudio>=2.1", "numpy>=1.24", "scipy>=1.11"]
 stt-local = ["faster-whisper>=1.0"]
 tts-edge = ["edge-tts>=6.1"]
+anthropic = ["anthropic>=0.29"]
+openrouter = ["openai>=1.30"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -96,6 +98,10 @@ ignore_errors = true
 
 [[tool.mypy.overrides]]
 module = ["faster_whisper", "edge_tts"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["anthropic"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

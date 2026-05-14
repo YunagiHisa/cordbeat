@@ -285,6 +285,10 @@ class MemoryStore:
             keep = self._config.message_trim_keep
         return await self._conversations.trim_old_messages(user_id, keep)
 
+    async def clear_conversation_history(self, user_id: str) -> int:
+        """Delete all conversation messages for a user."""
+        return await self._conversations.clear_conversation_history(user_id)
+
     # ── Semantic / episodic memory (delegates to VectorMemory) ───
 
     async def add_semantic_memory(self, entry: MemoryEntry) -> str:

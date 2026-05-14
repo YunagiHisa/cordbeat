@@ -521,7 +521,10 @@ def run_wizard(home: Path | None = None) -> Path:
 
     # Offer to install as an auto-start service
     print()
-    _b = lambda s: _c(s, _BOLD)  # noqa: E731
+
+    def _b(s: str) -> str:
+        return _c(s, _BOLD)
+
     print(f"  {_b('Auto-start service')}")
     print("  Register CordBeat as a system service so it starts automatically")
     print(

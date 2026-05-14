@@ -70,6 +70,8 @@ class CoreEngine:
         self._background_tasks: set[asyncio.Task[None]] = set()
         # Skills that the user has approved for this session (no re-confirmation).
         self._session_allowed_skills: set[str] = set()
+        # Per-user stop flags: if user_id is present, abort in-flight processing.
+        self._stop_flags: set[str] = set()
 
     async def handle_message(self, message: GatewayMessage) -> None:
         """Handle a single incoming message from the queue."""
@@ -112,6 +114,11 @@ class CoreEngine:
 
         # Phase 1: Resolve user
         user_id, user = await self._resolve_user(message)
+
+        # Check if a /stop was issued while we were queued
+        if user_id in self._stop_flags:
+            self._stop_flags.discard(user_id)
+            return
 
         # Phase 2: Build prompt and generate response
         response = await self._generate_response(user_id, user, message)
@@ -660,6 +667,11 @@ class CoreEngine:
             "/quiet": lambda: self._cmd_quiet(message, arg),
             "/prefer": lambda: self._cmd_prefer(message, arg),
             "/draw": lambda: self._cmd_draw(message, arg),
+            "/reset": lambda: self._cmd_reset(message),
+            "/new": lambda: self._cmd_reset(message),
+            "/stop": lambda: self._cmd_stop(message),
+            "/skills": lambda: self._cmd_skills(message),
+            "/help": lambda: self._cmd_help(message),
         }
 
         handler = handlers.get(cmd)
@@ -1051,6 +1063,85 @@ class CoreEngine:
             caption += "\n⚠️ " + "; ".join(warnings)
 
         await self._send_reply(message, caption, images=[output_b64])
+
+    async def _cmd_reset(self, message: GatewayMessage) -> None:
+        """Clear conversation history for the current user."""
+        user_id = await self._memory.resolve_user(
+            message.adapter_id, message.platform_user_id
+        )
+        if user_id is None:
+            await self._send_reply(message, "✅ Conversation cleared.")
+            return
+        deleted = await self._memory.clear_conversation_history(user_id)
+        logger.info(
+            "Conversation history cleared for user %s (%d rows)", user_id, deleted
+        )
+        await self._send_reply(
+            message, "✅ Conversation history cleared. Starting fresh!"
+        )
+
+    async def _cmd_stop(self, message: GatewayMessage) -> None:
+        """Request cancellation of any in-flight processing for this user."""
+        user_id = await self._memory.resolve_user(
+            message.adapter_id, message.platform_user_id
+        )
+        key = user_id or message.platform_user_id
+        self._stop_flags.add(key)
+        await self._send_reply(
+            message, "⏹ Stop requested. Current processing will abort."
+        )
+        logger.info("Stop flag set for user key=%s", key)
+
+    async def _cmd_skills(self, message: GatewayMessage) -> None:
+        """List all available skills."""
+        skills = self._skills.available_skills
+        if not skills:
+            await self._send_reply(message, "No skills available.")
+            return
+        lines = ["🛠️ Available skills:\n"]
+        for name, skill in sorted(skills.items()):
+            desc = getattr(skill, "description", "") or ""
+            safety = getattr(skill, "safety_level", "")
+            safety_icons: dict[str, str] = {
+                "safe": "✅",
+                "requires_confirmation": "⚠️",
+                "dangerous": "🔴",
+            }
+            safety_icon = safety_icons.get(str(safety), "❓")
+            lines.append(f"  {safety_icon} **{name}** — {desc}")
+        await self._send_reply(message, "\n".join(lines))
+
+    async def _cmd_help(self, message: GatewayMessage) -> None:
+        """List all available slash commands."""
+        help_text = """\
+📖 Available commands:
+
+**Conversation**
+  /reset, /new        — Clear conversation history
+  /stop               — Cancel in-flight processing
+
+**Skills**
+  /skills             — List available skills
+  /draw <DSL>         — Draw an image using the draw skill
+
+**Proposals & approvals**
+  /proposals          — List pending proposals
+  /approve <id>       — Approve a proposal
+  /approve_session <id> — Approve for this session
+  /reject <id>        — Reject a proposal
+
+**Settings**
+  /name <name>        — Change the AI's name
+  /quiet <start> <end>— Set quiet hours (HH:MM)
+  /prefer <platform>  — Set preferred reply platform
+
+**Account linking**
+  /link               — Generate a cross-platform link token
+  /unlink <platform>  — Remove a platform link
+
+  /help               — Show this help
+"""
+        await self._send_reply(message, help_text)
 
     async def _send_reply(
         self,

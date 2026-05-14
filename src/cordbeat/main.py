@@ -335,12 +335,13 @@ _HELP = """\
 CordBeat — local-first autonomous AI agent
 
 Usage:
-  cordbeat                     Start the CordBeat server
-  cordbeat chat                Start server + interactive CLI chat
+  cordbeat                     Start server + interactive CLI chat (default)
+  cordbeat server              Start the CordBeat server only (headless)
   cordbeat setup               Run the interactive setup wizard
   cordbeat doctor              Check system health
   cordbeat config              Show current configuration summary
   cordbeat config edit         Open config.yaml in $EDITOR
+  cordbeat model               Switch AI provider / model
   cordbeat service install     Register CordBeat as a system service (auto-start)
   cordbeat service start       Start the registered service
   cordbeat service stop        Stop the running service
@@ -349,6 +350,167 @@ Usage:
   cordbeat update              Update CordBeat to the latest version
   cordbeat uninstall           Remove CordBeat service + data directory
 """
+
+
+def _cmd_model() -> None:
+    """Interactive provider/model switcher — updates config.yaml."""
+    config_path = _resolve_config_path()
+
+    try:
+        import yaml  # noqa: PLC0415
+
+        with open(config_path) as f:
+            data = yaml.safe_load(f) or {}
+    except Exception as exc:
+        print(f"Failed to load config: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    ai = data.get("ai_backend", {})
+    current_provider = ai.get("provider", "ollama")
+    current_model = ai.get("model", "")
+    print(f"Current: provider={current_provider}  model={current_model}")
+    print()
+
+    providers = [
+        ("ollama", "Ollama (local, default)"),
+        ("openai_compat", "OpenAI-compat (LM Studio, llama.cpp, vLLM, etc.)"),
+        ("anthropic", "Anthropic Claude (cloud)"),
+        ("openrouter", "OpenRouter (200+ models via cloud)"),
+    ]
+    print("Select provider:")
+    for i, (key, label) in enumerate(providers, 1):
+        marker = " *" if key == current_provider else ""
+        print(f"  {i}. {label}{marker}")
+    choice = input("\nEnter number (Enter = keep current): ").strip()
+
+    if choice:
+        try:
+            idx = int(choice) - 1
+            if not 0 <= idx < len(providers):
+                raise ValueError
+        except ValueError:
+            print("Invalid choice.", file=sys.stderr)
+            raise SystemExit(1)
+        new_provider = providers[idx][0]
+    else:
+        new_provider = current_provider
+
+    # Suggest model based on provider
+    new_model = ""
+    if new_provider == "ollama":
+        # Try to list models from the running Ollama API
+        base_url = ai.get("base_url", "http://localhost:11434")
+        print(f"\nFetching models from {base_url}…")
+        try:
+            import urllib.request  # noqa: PLC0415
+
+            with urllib.request.urlopen(
+                f"{base_url}/api/tags", timeout=5
+            ) as resp:
+                import json as _json  # noqa: PLC0415
+
+                tags = _json.loads(resp.read())
+            models_list: list[str] = [
+                m["name"] for m in tags.get("models", [])
+            ]
+            if models_list:
+                print("\nAvailable Ollama models:")
+                for j, m in enumerate(models_list, 1):
+                    marker = " *" if m == current_model else ""
+                    print(f"  {j}. {m}{marker}")
+                model_choice = input(
+                    "\nEnter number or model name (Enter = keep current): "
+                ).strip()
+                if model_choice:
+                    try:
+                        mi = int(model_choice) - 1
+                        if 0 <= mi < len(models_list):
+                            new_model = models_list[mi]
+                        else:
+                            new_model = model_choice
+                    except ValueError:
+                        new_model = model_choice
+            else:
+                new_model = input(
+                    f"Model name (Enter = keep '{current_model}'): "
+                ).strip()
+        except Exception:
+            new_model = input(
+                f"Model name (Enter = keep '{current_model}'): "
+            ).strip()
+    elif new_provider == "anthropic":
+        defaults = [
+            "claude-opus-4-5",
+            "claude-sonnet-4-5",
+            "claude-haiku-4-5",
+            "claude-3-5-sonnet-20241022",
+        ]
+        print("\nCommon Anthropic models:")
+        for j, m in enumerate(defaults, 1):
+            print(f"  {j}. {m}")
+        model_input = input(
+            f"\nModel (Enter = keep '{current_model or defaults[0]}'): "
+        ).strip()
+        if model_input:
+            try:
+                mi = int(model_input) - 1
+                new_model = defaults[mi] if 0 <= mi < len(defaults) else model_input
+            except ValueError:
+                new_model = model_input
+        else:
+            new_model = current_model or defaults[0]
+    elif new_provider == "openrouter":
+        new_model = input(
+            f"Model slug (e.g. mistralai/mistral-7b-instruct, "
+            f"Enter = keep '{current_model}'): "
+        ).strip()
+    else:
+        new_model = input(
+            f"Model name (Enter = keep '{current_model}'): "
+        ).strip()
+
+    if not new_model:
+        new_model = current_model
+
+    # Apply and persist
+    if "ai_backend" not in data:
+        data["ai_backend"] = {}
+    data["ai_backend"]["provider"] = new_provider
+    data["ai_backend"]["model"] = new_model
+
+    # Prompt for API key when switching to a cloud provider
+    if new_provider in ("anthropic", "openrouter", "openai_compat"):
+        options = data["ai_backend"].get("options", {})
+        existing_key = options.get("api_key", "")
+        prompt_label = (
+            "Anthropic API key"
+            if new_provider == "anthropic"
+            else "OpenRouter API key"
+            if new_provider == "openrouter"
+            else "API key"
+        )
+        key_input = input(
+            f"{prompt_label} (Enter = keep existing): "
+        ).strip()
+        if key_input:
+            options["api_key"] = key_input
+            data["ai_backend"]["options"] = options
+        elif not existing_key and new_provider != "openai_compat":
+            print(
+                "⚠️  No API key set. Add it later via `cordbeat config edit` "
+                "(ai_backend.options.api_key)."
+            )
+
+    try:
+        with open(config_path, "w") as f:
+            yaml.dump(data, f, allow_unicode=True, sort_keys=False)
+        print(
+            f"\n✅ Config updated: provider={new_provider}  model={new_model}"
+        )
+        print(f"   Config file: {config_path}")
+    except Exception as exc:
+        print(f"Failed to write config: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
 
 def _cmd_config(args: list[str]) -> None:
@@ -441,6 +603,19 @@ def cli() -> None:
         cli_chat()
         return
 
+    if sub == "server":
+        # Headless server-only mode (no interactive CLI)
+        config_path = _resolve_config_path()
+        _watchdog = threading.Timer(30.0, lambda: os._exit(1))
+        _watchdog.daemon = True
+        try:
+            asyncio.run(main(config_path))
+        except KeyboardInterrupt:
+            _watchdog.start()
+        finally:
+            _watchdog.cancel()
+        return
+
     if sub in ("setup", "init"):
         from cordbeat.tools.wizard import cordbeat_init_cli
 
@@ -449,6 +624,10 @@ def cli() -> None:
 
     if sub == "config":
         _cmd_config(args[1:])
+        return
+
+    if sub == "model":
+        _cmd_model()
         return
 
     if sub == "service":
@@ -469,19 +648,8 @@ def cli() -> None:
         print(f"Unknown option: {sub}\n{_HELP}", file=sys.stderr)
         raise SystemExit(1)
 
-    # No recognised subcommand → start server
-    config_path = _resolve_config_path()
-    # Safety watchdog: force-exit if the process hangs more than 30 s after
-    # Ctrl+C.  Background threads from ChromaDB / httpx can prevent Python
-    # from exiting even after asyncio cleanup completes.
-    _watchdog = threading.Timer(30.0, lambda: os._exit(1))
-    _watchdog.daemon = True
-    try:
-        asyncio.run(main(config_path))
-    except KeyboardInterrupt:
-        _watchdog.start()
-    finally:
-        _watchdog.cancel()
+    # No recognised subcommand → default: server + interactive CLI chat
+    cli_chat()
 
 
 def cli_chat() -> None:

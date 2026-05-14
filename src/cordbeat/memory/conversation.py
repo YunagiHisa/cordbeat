@@ -92,3 +92,12 @@ class ConversationStore:
         )
         await self._db.commit()
         return cursor.rowcount
+
+    async def clear_conversation_history(self, user_id: str) -> int:
+        """Delete all conversation messages for a user. Returns row count deleted."""
+        cursor = await self._db.execute(
+            "DELETE FROM conversation_messages WHERE user_id = ?",
+            (user_id,),
+        )
+        await self._db.commit()
+        return cursor.rowcount

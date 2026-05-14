@@ -225,7 +225,9 @@ class OllamaBackend(AIBackend):
 class OpenAICompatBackend(AIBackend):
     """OpenAI-compatible API backend (works with vLLM, LM Studio, etc.)."""
 
-    def __init__(self, config: AIBackendConfig) -> None:
+    def __init__(
+        self, config: AIBackendConfig, extra_headers: dict[str, str] | None = None
+    ) -> None:
         self._base_url = config.base_url.rstrip("/")
         self._model = config.model
         self._api_key = config.options.get("api_key", "")
@@ -236,6 +238,8 @@ class OpenAICompatBackend(AIBackend):
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
+        if extra_headers:
+            headers.update(extra_headers)
         self._client = httpx.AsyncClient(timeout=config.timeout, headers=headers)
 
     async def aclose(self) -> None:
@@ -414,8 +418,119 @@ class OpenAICompatBackend(AIBackend):
             raise AIBackendError(msg) from exc
 
 
+class AnthropicBackend(AIBackend):
+    """Anthropic Claude API backend.
+
+    Requires the ``anthropic`` extra: ``uv sync --extra anthropic``.
+    """
+
+    def __init__(self, config: AIBackendConfig) -> None:
+        self._model = config.model or "claude-3-5-sonnet-20241022"
+        self._api_key = config.options.get("api_key", "")
+        self._base_url = config.base_url or ""
+        self._timeout = config.timeout
+        try:
+            import anthropic as _anthropic  # noqa: PLC0415
+
+            kwargs: dict[str, Any] = {
+                "api_key": self._api_key,
+                "timeout": self._timeout,
+            }
+            if self._base_url and self._base_url != "http://localhost:11434":
+                kwargs["base_url"] = self._base_url
+            self._client = _anthropic.AsyncAnthropic(**kwargs)
+        except ImportError as exc:
+            msg = (
+                "anthropic package is required for the Anthropic backend. "
+                "Install it with: uv sync --extra anthropic"
+            )
+            raise ImportError(msg) from exc
+
+    async def aclose(self) -> None:
+        await self._client.close()
+
+    async def generate(
+        self,
+        prompt: str,
+        system: str = "",
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> str:
+        labels = {"backend": "anthropic", "model": self._model}
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if system:
+            kwargs["system"] = system
+        try:
+            async with time_block(LLM_GENERATE_LATENCY, labels):
+                response = await self._client.messages.create(**kwargs)
+        except Exception:
+            inc_counter(
+                LLM_GENERATE_TOTAL, {"backend": "anthropic", "outcome": "error"}
+            )
+            raise
+        inc_counter(LLM_GENERATE_TOTAL, {"backend": "anthropic", "outcome": "ok"})
+        block = response.content[0] if response.content else None
+        if block is None or not hasattr(block, "text"):
+            return ""
+        return str(block.text)
+
+    async def generate_with_vision(
+        self,
+        prompt: str,
+        images: list[str],
+        system: str = "",
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> str:
+        """Generate using Anthropic vision API (base64 image source blocks)."""
+        content: list[Any] = []
+        for b64img in images:
+            mime = _detect_image_mime(b64img)
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": mime,
+                        "data": b64img,
+                    },
+                }
+            )
+        content.append({"type": "text", "text": prompt})
+
+        labels = {"backend": "anthropic", "model": self._model}
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": [{"role": "user", "content": content}],
+        }
+        if system:
+            kwargs["system"] = system
+        try:
+            async with time_block(LLM_GENERATE_LATENCY, labels):
+                response = await self._client.messages.create(**kwargs)
+        except Exception:
+            inc_counter(
+                LLM_GENERATE_TOTAL, {"backend": "anthropic", "outcome": "error"}
+            )
+            raise
+        inc_counter(LLM_GENERATE_TOTAL, {"backend": "anthropic", "outcome": "ok"})
+        block = response.content[0] if response.content else None
+        if block is None or not hasattr(block, "text"):
+            return ""
+        return str(block.text)
+
+
 def create_backend(config: AIBackendConfig) -> AIBackend:
     """Factory function to create the appropriate AI backend."""
+    import dataclasses  # noqa: PLC0415
+
     backend: AIBackend
     backend_name: str
     match config.provider:
@@ -425,6 +540,21 @@ def create_backend(config: AIBackendConfig) -> AIBackend:
         case "openai" | "openai_compat":
             backend = OpenAICompatBackend(config)
             backend_name = "openai_compat"
+        case "openrouter":
+            # OpenRouter is OpenAI-compatible; use its API URL + inject X-Title header.
+            effective_url = (
+                config.base_url
+                if config.base_url and config.base_url != "http://localhost:11434"
+                else "https://openrouter.ai/api/v1"
+            )
+            effective_cfg = dataclasses.replace(config, base_url=effective_url)
+            backend = OpenAICompatBackend(
+                effective_cfg, extra_headers={"X-Title": "CordBeat"}
+            )
+            backend_name = "openrouter"
+        case "anthropic":
+            backend = AnthropicBackend(config)
+            backend_name = "anthropic"
         case _:
             msg = f"Unknown AI backend provider: {config.provider}"
             raise ValueError(msg)

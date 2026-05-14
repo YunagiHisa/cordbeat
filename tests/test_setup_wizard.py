@@ -199,7 +199,7 @@ class TestRunWizard:
         self, tmp_path: Path, ollama_server: str
     ) -> None:
         """When Ollama is detected, wizard asks name then language."""
-        inputs = iter(["TestBot", "en"])
+        inputs = iter(["TestBot", "en", "n"])
         with (
             patch(
                 "cordbeat.tools.wizard._probe_ollama",
@@ -225,7 +225,7 @@ class TestRunWizard:
     def test_ollama_not_found_fallback(self, tmp_path: Path) -> None:
         """When Ollama is not detected, wizard asks provider details."""
         inputs = iter(
-            ["ollama", "http://myhost:11434", "mistral", "テストボット", "ja"]
+            ["ollama", "http://myhost:11434", "mistral", "テストボット", "ja", "n"]
         )
         with (
             patch("cordbeat.tools.wizard._probe_ollama", return_value=None),
@@ -245,7 +245,7 @@ class TestRunWizard:
 
     def test_llama_cpp_detected(self, tmp_path: Path) -> None:
         """When llama.cpp is detected (but not Ollama), wizard auto-configures."""
-        inputs = iter(["TestBot", "en"])
+        inputs = iter(["TestBot", "en", "n"])
         with (
             patch("cordbeat.tools.wizard._probe_ollama", return_value=None),
             patch(
@@ -276,6 +276,7 @@ class TestRunWizard:
                 "sk-test123",
                 "MyBot",
                 "en",
+                "n",
             ]
         )
         with (
@@ -295,7 +296,7 @@ class TestRunWizard:
         assert cfg["ai_backend"]["options"]["api_key"] == "sk-test123"
 
     def test_directory_structure_created(self, tmp_path: Path) -> None:
-        inputs = iter(["Bot", "en"])
+        inputs = iter(["Bot", "en", "n"])
         with (
             patch(
                 "cordbeat.tools.wizard._probe_ollama",

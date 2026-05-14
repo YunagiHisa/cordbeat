@@ -443,7 +443,10 @@ class CoreEngine:
             message.adapter_id, message.platform_user_id
         )
         if user_id is None:
-            logger.debug("Cannot request skill confirmation: user not found for %s", message.platform_user_id)
+            logger.debug(
+                "Cannot request skill confirmation: user not found for %s",
+                message.platform_user_id,
+            )
             return
 
         proposal_content = (
@@ -481,7 +484,9 @@ class CoreEngine:
         )
         await self._gateway.send_to_adapter(message.adapter_id, notification)
         logger.info(
-            "Skill confirmation requested for '%s' (proposal=%s)", skill_name, proposal_id
+            "Skill confirmation requested for '%s' (proposal=%s)",
+            skill_name,
+            proposal_id,
         )
 
     async def _maybe_draw(self, response: str) -> tuple[str, list[str]]:
@@ -705,7 +710,7 @@ class CoreEngine:
     async def _cmd_approve_session(
         self, message: GatewayMessage, proposal_id: str
     ) -> None:
-        """Approve a pending skill proposal AND allow it for the rest of this session."""
+        """Approve a pending skill proposal and allow it for this session."""
         if not proposal_id:
             await self._send_reply(
                 message, "Usage: /approve_session <proposal_id>"
@@ -748,7 +753,8 @@ class CoreEngine:
 
         await self._send_reply(
             message,
-            f"✅ Approved for this session: **{skill_name}** (proposal {proposal_id[:8]}…)\n"
+            f"✅ Approved for this session: **{skill_name}**"
+            f" (proposal {proposal_id[:8]}…)\n"
             "Future invocations of this skill will run automatically until restart.",
         )
         logger.info("Proposal %s approved (session) by user %s", proposal_id, user_id)

@@ -347,6 +347,7 @@ Usage:
   cordbeat service status      Show service status
   cordbeat service uninstall   Remove the service registration
   cordbeat update              Update CordBeat to the latest version
+  cordbeat uninstall           Remove CordBeat service + data directory
 """
 
 
@@ -390,6 +391,37 @@ def _cmd_update() -> None:
     )
 
 
+def _cmd_uninstall() -> None:
+    """Remove the CordBeat service registration and optionally wipe data."""
+    from cordbeat.tools.service import run_service_command
+
+    print("CordBeat Uninstall")
+    print("=" * 40)
+
+    # Step 1: remove the service (ignore errors — may not be installed)
+    print("\n[1/2] Removing service registration…")
+    run_service_command("uninstall")
+
+    # Step 2: optionally delete ~/.cordbeat data directory
+    home_dir = Path.home() / ".cordbeat"
+    if home_dir.exists():
+        print(f"\n[2/2] Data directory: {home_dir}")
+        print("  This contains memories, config, and logs.")
+        answer = input("  Delete data directory? [y/N] ").strip().lower()
+        if answer == "y":
+            import shutil as _shutil
+
+            _shutil.rmtree(home_dir, ignore_errors=True)
+            print(f"  🗑  Deleted {home_dir}")
+        else:
+            print("  ↳  Kept (you can delete it manually later).")
+    else:
+        print(f"\n[2/2] Data directory {home_dir} not found — skipping.")
+
+    print("\n✅ CordBeat uninstalled.")
+    print("   To fully remove the package: uv tool uninstall cordbeat")
+
+
 def cli() -> None:
     args = sys.argv[1:]
 
@@ -427,6 +459,10 @@ def cli() -> None:
 
     if sub == "update":
         _cmd_update()
+        return
+
+    if sub == "uninstall":
+        _cmd_uninstall()
         return
 
     if sub.startswith("-"):

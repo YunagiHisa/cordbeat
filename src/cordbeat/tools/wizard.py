@@ -518,6 +518,30 @@ def run_wizard(home: Path | None = None) -> Path:
 
     # ── Done ──────────────────────────────────────────────────────
     print(f"\n  {_c('✨', _YELLOW)} {name} is ready to come alive!")
+
+    # Offer to install as an auto-start service
+    print()
+    _b = lambda s: _c(s, _BOLD)  # noqa: E731
+    print(f"  {_b('Auto-start service')}")
+    print("  Register CordBeat as a system service so it starts automatically")
+    print(
+        "  when your computer boots "
+        "(can be removed later with `cordbeat service uninstall`)."
+    )
+    _yn = input("  Install service now? [Y/n] ").strip().lower()
+    if _yn in ("", "y"):
+        try:
+            from cordbeat.tools.service import run_service_command
+
+            run_service_command("install")
+        except Exception as _svc_exc:  # pragma: no cover
+            _warn(f"Service install failed: {_svc_exc}")
+            _warn("You can run it manually later: cordbeat service install")
+    else:
+        print(
+            "  Skipped. Run `cordbeat service install` any time to enable auto-start."
+        )
+
     print("  Starting CordBeat...\n")
     return config_path
 

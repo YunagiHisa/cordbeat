@@ -224,11 +224,15 @@ class DiscordAdapter(RetryableConnection):
 
         embed = discord.Embed(
             title="🔧 Skill Execution Required",
-            description=f"**`{skill_name}`** wants to run with the following parameters:",
+            description=(
+                f"**`{skill_name}`** wants to run with the following parameters:"
+            ),
             color=discord.Color.orange(),
         )
         if skill_params:
-            params_text = "\n".join(f"• **{k}**: `{v}`" for k, v in skill_params.items())
+            params_text = "\n".join(
+                f"• **{k}**: `{v}`" for k, v in skill_params.items()
+            )
             embed.add_field(name="Parameters", value=params_text, inline=False)
         embed.set_footer(text=f"Proposal ID: {proposal_id}")
 
@@ -252,7 +256,9 @@ class DiscordAdapter(RetryableConnection):
                 )
                 self.stop()
 
-            @discord.ui.button(label="🔁 Allow Session", style=discord.ButtonStyle.primary)  # type: ignore[misc]
+            @discord.ui.button(  # type: ignore[misc]
+                label="🔁 Allow Session", style=discord.ButtonStyle.primary
+            )
             async def allow_session(
                 self, interaction: discord.Interaction, button: discord.ui.Button[Any]  # type: ignore[type-arg]
             ) -> None:
@@ -289,7 +295,8 @@ class DiscordAdapter(RetryableConnection):
             await channel.send(embed=embed, view=SkillConfirmView())
         except Exception:
             logger.warning(
-                "Failed to send skill-confirm embed; falling back to text", exc_info=True
+                "Failed to send skill-confirm embed; falling back to text",
+                exc_info=True,
             )
             content = data.get("content", "")
             await self._dispatch_core_message(platform_user_id, content, [])

@@ -404,6 +404,14 @@ def _build_config(
             "auth_token": secrets.token_urlsafe(32),
         },
         "log": {"level": "INFO"},
+        "heartbeat": {
+            "default_interval_minutes": 60,
+            "min_interval_minutes": 5,
+            "max_interval_minutes": 1440,
+            "quiet_hours_start": "01:00",
+            "quiet_hours_end": "07:00",
+            "timezone": "UTC",
+        },
         "ai_backend": {
             "provider": provider,
             "base_url": base_url,

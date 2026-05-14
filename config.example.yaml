@@ -53,6 +53,14 @@ ai_backend:
   # options:
   #   api_key: "sk-..."
 
+  vision_enabled: false  # Enable image input for vision-capable models
+
+  cache:
+    enabled: false       # Cache identical LLM requests (deterministic-ish only)
+    max_entries: 256     # Max cached entries (LRU eviction)
+    ttl_seconds: 3600    # Cache entry lifetime (seconds)
+    max_temperature: 0.2 # Only cache calls at or below this temperature
+
 heartbeat:
   default_interval_minutes: 60
   min_interval_minutes: 5
@@ -89,7 +97,9 @@ memory:
   recall_hints_retention_days: 2       # days to keep recall hints before cleanup
   chain_links_retention_days: 2        # days to keep chain links before cleanup
   proposal_expiry_days: 7              # days before pending proposals expire
-  chain_recall_depth_penalty: 0.5      # distance penalty per chain hop depth
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"  # Sentence embedding model
+  embedding_dim: 384               # Must match embedding model output dimension
+  dedup_distance_threshold: 0.0    # Skip storing memories closer than this (0.0 = off)
 
 soul:
   soul_dir: "data/soul"
@@ -100,6 +110,7 @@ skills_dir: "skills"
 data_dir: "data"
 
 skills:
+  default_rate_limit_per_minute: 0  # 0 = unlimited; per-skill rate limit (calls/min)
   sandbox:
     timeout_seconds: 30            # hard timeout per skill invocation
     memory_limit_mb: 256           # address-space cap (Unix: RLIMIT_AS)
@@ -178,3 +189,36 @@ adapters:
     #   user_blocklist: []             # never respond to these Signal numbers
     #   rpc_url: "http://localhost:7583"  # signal-cli JSON-RPC URL
     #   poll_interval: 1.0             # seconds between receive polls
+
+# --- STT: Speech-to-text (requires uv sync --extra stt-local or stt-openai) ---
+stt:
+  enabled: false
+  backend: "whisper_openai"   # whisper_local | whisper_openai | openai_compat
+  model: "base"               # tiny | base | small | medium | large (whisper_local)
+  language: ""                # language hint, e.g. "ja" (empty = auto-detect)
+  api_url: ""                 # openai_compat endpoint
+  api_key: ""                 # API key for whisper_openai / openai_compat
+
+# --- TTS: Text-to-speech (requires uv sync --extra tts-edge or tts-openai) ---
+tts:
+  enabled: false
+  backend: "edge_tts"         # edge_tts | openai | openai_compat
+  voice: "ja-JP-NanamiNeural" # edge_tts voice name (see edge-tts --list-voices)
+  speed: 1.0                  # playback speed multiplier
+  model: "tts-1"              # OpenAI TTS model (openai / openai_compat)
+  api_url: ""                 # openai_compat endpoint
+  api_key: ""                 # API key for openai / openai_compat
+
+# --- RVC: Voice conversion post-processor (requires uv sync --extra rvc) ---
+rvc:
+  enabled: false
+  model_path: ""              # path to .pth RVC checkpoint
+  index_path: ""              # path to .index file (optional, improves quality)
+  f0_up_key: 0                # pitch shift in semitones (0 = no shift)
+  device: ""                  # "cuda" | "cpu" | "" (auto)
+
+# --- Metrics ---
+metrics:
+  enabled: true
+  prometheus_host: "127.0.0.1"
+  prometheus_port: 0          # 0 = HTTP endpoint disabled; set e.g. 9090 to enable

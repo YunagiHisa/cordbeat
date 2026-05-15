@@ -34,17 +34,22 @@ ai_backend:
   base_url: "http://localhost:11434"
   model: "llama3"
   timeout: 120.0             # request timeout in seconds
-  max_tokens: 1024           # max tokens per generation
+  max_tokens: 4096           # max tokens per generation
+                             # ⚠ thinking models (Qwen3/DeepSeek-R1) consume 1000-3000
+                             #   tokens in the <think> phase — use 4096+ to avoid
+                             #   content=null responses
   # options:                 # provider-specific options
   #   api_key: ""           # required for openai/openai_compat
 
-  # --- Alternative: llama.cpp server ---
+  # --- Alternative: llama.cpp server (e.g. Qwen3 thinking model) ---
   # provider: openai_compat
   # base_url: "http://localhost:8080/v1"
   # model: "default"
+  # max_tokens: 8192         # Qwen3 thinking needs headroom; 8192 recommended
   # options:
-  #   enable_thinking: false  # Qwen3/DeepSeek-R1 thinking models: disable <think> phase
-  #                           # for JSON-mode heartbeat requests (prevents empty responses)
+  #   enable_thinking: true  # set to false to skip <think> phase entirely
+  #                          # (faster, less tokens; use when thinking model causes
+  #                          #  empty responses even at high max_tokens)
 
   # --- Alternative: OpenAI API ---
   # provider: openai

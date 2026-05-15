@@ -235,6 +235,21 @@ class OpenAICompatBackend(AIBackend):
         # ai.options to skip the <think> phase for JSON-mode requests.
         # Defaults to None (not sent) to avoid breaking non-thinking models.
         self._enable_thinking: bool | None = config.options.get("enable_thinking")
+        # None = don't include max_tokens in requests (server uses its own default)
+        self._max_tokens: int | None = config.max_tokens
+        if (
+            self._enable_thinking is True
+            and self._max_tokens is not None
+            and self._max_tokens < 2048
+        ):
+            logger.warning(
+                "ai_backend.max_tokens=%d is very low for a thinking model. "
+                "Qwen3/DeepSeek-R1 can consume 2000+ tokens in the thinking phase "
+                "alone, leaving no budget for the actual response. "
+                "Recommend setting 'ai_backend.max_tokens: 4096' or higher "
+                "in config.yaml (or remove max_tokens to use the server default).",
+                self._max_tokens,
+            )
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
@@ -252,6 +267,10 @@ class OpenAICompatBackend(AIBackend):
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ) -> str:
+        # config.max_tokens overrides the caller-supplied default if set
+        effective_max_tokens: int | None = (
+            self._max_tokens if self._max_tokens is not None else max_tokens
+        )
         messages: list[dict[str, str]] = []
         effective_system = system
         if self._enable_thinking is False:
@@ -277,8 +296,9 @@ class OpenAICompatBackend(AIBackend):
                 "model": self._model,
                 "messages": messages,
                 "temperature": temperature,
-                "max_tokens": max_tokens,
             }
+            if effective_max_tokens is not None:
+                payload["max_tokens"] = effective_max_tokens
             if self._enable_thinking is not None:
                 # llama.cpp passes template kwargs via chat_template_kwargs;
                 # keep the legacy top-level field for other servers (vLLM etc.)
@@ -319,27 +339,32 @@ class OpenAICompatBackend(AIBackend):
                 # reasoning_content with content=null or content="".
                 # reasoning_content is internal chain-of-thought, NOT user-facing
                 # output — using it as the response would leak raw thinking text.
-                if reasoning_content and self._enable_thinking is not False:
-                    # The model completed its thinking phase but ran out of tokens
-                    # before producing the final response (content=null).  Retry
-                    # once with 2× max_tokens so there is budget for both thinking
-                    # and the answer.  Thinking stays enabled so reasoning quality
-                    # is preserved.
+                if reasoning_content:
+                    # The model exhausted max_tokens during its thinking phase and
+                    # produced no actual response (content=null).  Retry once with
+                    # 2× the effective max_tokens to give the model budget for both
+                    # thinking and the actual answer.
+                    retry_mt: int | None = (
+                        effective_max_tokens * 2
+                        if effective_max_tokens is not None
+                        else None
+                    )
                     logger.warning(
                         "openai_compat: content=null with reasoning_content=%d chars. "
-                        "Model likely exhausted max_tokens during thinking. "
-                        "Retrying with max_tokens=%d. "
-                        "Increase 'ai_backend.max_tokens' in config.yaml "
-                        "to avoid this retry.",
+                        "Model exhausted max_tokens in thinking phase. "
+                        "Retrying with max_tokens=%s. "
+                        "Set 'ai_backend.max_tokens: 4096' (or higher) in config.yaml "
+                        "or increase your llama.cpp server's --n-predict.",
                         len(reasoning_content),
-                        max_tokens * 2,
+                        retry_mt if retry_mt is not None else "server-default×2 N/A",
                     )
                     retry_payload: dict[str, Any] = {
                         "model": self._model,
                         "messages": messages,
                         "temperature": temperature,
-                        "max_tokens": max_tokens * 2,
                     }
+                    if retry_mt is not None:
+                        retry_payload["max_tokens"] = retry_mt
                     if self._enable_thinking is not None:
                         retry_payload["chat_template_kwargs"] = {
                             "enable_thinking": self._enable_thinking
@@ -369,20 +394,14 @@ class OpenAICompatBackend(AIBackend):
                             )
                             return result
                         logger.warning(
-                            "openai_compat retry also returned empty content; "
-                            "increase 'ai_backend.max_tokens' in config.yaml"
+                            "openai_compat retry also returned empty content. "
+                            "Increase your llama.cpp server's --n-predict, or set "
+                            "'ai_backend.max_tokens: 4096' in config.yaml."
                         )
                     except Exception:
                         logger.warning(
                             "openai_compat retry request failed", exc_info=True
                         )
-                    result = ""
-                elif reasoning_content:
-                    logger.warning(
-                        "openai_compat: content=null with reasoning_content=%d chars "
-                        "and enable_thinking=False; model may need higher max_tokens.",
-                        len(reasoning_content),
-                    )
                     result = ""
                 else:
                     logger.warning(

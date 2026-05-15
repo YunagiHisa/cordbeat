@@ -119,76 +119,99 @@ skills:
 
 adapters:
   # Secrets (tokens, keys) → .env file.  See .env.example.
+  #
+  # ── E-4 Response Filtering ───────────────────────────────────────────────
+  # Each adapter supports respond_mode and blocklist/whitelist filters.
+  #
+  #   respond_mode: "all"           → respond to every message
+  #   respond_mode: "mention_only"  → respond only when @mentioned or in DM
+  #   respond_mode: "ai_decision"   → respond when a keyword appears in text
+  #                                   (defaults to the AI's soul name if no
+  #                                   keywords are configured)
+  #
+  # DMs always bypass channel filters and respond_mode restrictions.
+  # user_blocklist takes priority over everything (even DMs).
+  # ─────────────────────────────────────────────────────────────────────────
   discord:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60  # max seconds between reconnection attempts
+    options:
+      respond_mode: "all"          # all | mention_only | ai_decision
+      channel_whitelist: []        # only respond in these channel IDs (empty = all channels; DMs always bypass)
+      channel_blacklist: []        # never respond in these channel IDs
+      user_blocklist: []           # never respond to these user IDs
+      ai_decision_keywords: []     # keywords for ai_decision mode (default: soul name)
+      # guild_id: 123456789012345678 # set for instant slash-command sync (dev/single-server).
+      #                              # leave unset for global sync (up to 1 hour to propagate)
+    # -- Example: mention-only bot in a busy server --
     # options:
-    #   respond_mode: "all"          # all | mention_only | ai_decision
-    #   channel_whitelist: []        # only respond in these channel IDs (server channels only; DMs always bypass)
-    #   channel_blacklist: []        # never respond in these channel IDs (server channels only)
-    #   user_blocklist: []           # never respond to these user IDs
-    #   ai_decision_keywords: []     # keywords for ai_decision mode (default: soul name)
-    #   guild_id: 123456789012345678 # set for instant slash-command sync (dev/single-server).
-    #                                # leave unset for global sync (up to 1 hour to propagate)
+    #   respond_mode: "mention_only"
+    #   channel_blacklist: [123456789, 987654321]  # mute in #announcements, #rules
+    #   user_blocklist: []
+    # -- Example: keyword-based auto-reply --
+    # options:
+    #   respond_mode: "ai_decision"
+    #   ai_decision_keywords: ["cordbeat", "ai", "bot"]
+    #   channel_whitelist: [111222333444555666]  # only in #ai-chat
   telegram:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60
-    # options:
-    #   respond_mode: "all"          # all | mention_only | ai_decision  (groups only; DMs always respond)
-    #   channel_whitelist: []        # only respond in these chat IDs (groups only; DMs always bypass)
-    #   channel_blacklist: []        # never respond in these chat IDs (groups only)
-    #   user_blocklist: []           # never respond to these Telegram user IDs
-    #   ai_decision_keywords: []     # keywords for ai_decision mode (default: soul name)
+    options:
+      respond_mode: "all"          # all | mention_only | ai_decision  (groups only; DMs always respond)
+      channel_whitelist: []        # only respond in these chat IDs (groups only; DMs always bypass)
+      channel_blacklist: []        # never respond in these chat IDs (groups only)
+      user_blocklist: []           # never respond to these Telegram user IDs
+      ai_decision_keywords: []     # keywords for ai_decision mode (default: soul name)
 
   # --- v1.0+ scaffolds (uv sync --extra <name> to install SDKs) -----------
   slack:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60
-    # options:
-    #   bot_token: "xoxb-..."          # Bot User OAuth Token
-    #   app_token: "xapp-..."          # App-Level Token (connections:write)
-    #   respond_mode: "all"            # all | mention_only | ai_decision
-    #   channel_whitelist: []          # only respond in these channel IDs (DMs always bypass)
-    #   channel_blacklist: []          # never respond in these channel IDs
-    #   user_blocklist: []             # never respond to these Slack user IDs
-    #   ai_decision_keywords: []       # keywords for ai_decision mode (default: soul name)
+    options:
+      respond_mode: "all"            # all | mention_only | ai_decision
+      channel_whitelist: []          # only respond in these channel IDs (DMs always bypass)
+      channel_blacklist: []          # never respond in these channel IDs
+      user_blocklist: []             # never respond to these Slack user IDs
+      ai_decision_keywords: []       # keywords for ai_decision mode (default: soul name)
+      # bot_token: "xoxb-..."        # Bot User OAuth Token (use .env)
+      # app_token: "xapp-..."        # App-Level Token (connections:write) (use .env)
   line:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60
-    # options:
-    #   channel_access_token: "..."    # LINE Channel Access Token
-    #   channel_secret: "..."          # LINE Channel Secret
-    #   respond_mode: "all"            # all | mention_only | ai_decision (groups only)
-    #   user_blocklist: []             # never respond to these LINE user IDs
-    #   ai_decision_keywords: []       # keywords for ai_decision/mention_only (default: soul name)
-    #   webhook_host: "0.0.0.0"
-    #   webhook_port: 8080
-    #   webhook_path: "/webhook"
+    options:
+      respond_mode: "all"            # all | mention_only | ai_decision (groups only)
+      user_blocklist: []             # never respond to these LINE user IDs
+      ai_decision_keywords: []       # keywords for ai_decision/mention_only (default: soul name)
+      webhook_host: "0.0.0.0"
+      webhook_port: 8080
+      webhook_path: "/webhook"
+      # channel_access_token: "..."  # LINE Channel Access Token (use .env)
+      # channel_secret: "..."        # LINE Channel Secret (use .env)
   whatsapp:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60
-    # options:
-    #   phone_number_id: "..."         # WhatsApp Business phone number ID
-    #   access_token: "..."            # Meta Cloud API access token
-    #   app_secret: "..."              # Webhook signature secret
-    #   user_blocklist: []             # never respond to these WhatsApp phone numbers
-    #   webhook_host: "0.0.0.0"
-    #   webhook_port: 8081
-    #   webhook_path: "/webhook"
+    options:
+      user_blocklist: []             # never respond to these WhatsApp phone numbers
+      webhook_host: "0.0.0.0"
+      webhook_port: 8081
+      webhook_path: "/webhook"
+      # phone_number_id: "..."       # WhatsApp Business phone number ID (use .env)
+      # access_token: "..."          # Meta Cloud API access token (use .env)
+      # app_secret: "..."            # Webhook signature secret (use .env)
   signal:
     core_ws_url: "ws://localhost:8765"
     enabled: false
     reconnect_max_backoff: 60
-    # options:
-    #   phone_number: "+1234567890"    # Signal phone number registered with signal-cli
-    #   user_blocklist: []             # never respond to these Signal numbers
-    #   rpc_url: "http://localhost:7583"  # signal-cli JSON-RPC URL
-    #   poll_interval: 1.0             # seconds between receive polls
+    options:
+      user_blocklist: []             # never respond to these Signal numbers
+      rpc_url: "http://localhost:7583"  # signal-cli JSON-RPC URL
+      poll_interval: 1.0             # seconds between receive polls
+      # phone_number: "+1234567890"  # Signal phone number registered with signal-cli (use .env)
 
 # --- STT: Speech-to-text (requires uv sync --extra stt-local or stt-openai) ---
 stt:

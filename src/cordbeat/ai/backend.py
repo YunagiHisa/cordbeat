@@ -319,21 +319,83 @@ class OpenAICompatBackend(AIBackend):
                 # reasoning_content with content=null or content="".
                 # reasoning_content is internal chain-of-thought, NOT user-facing
                 # output — using it as the response would leak raw thinking text.
-                # Return empty string; callers (engine, generate_json) handle empty.
-                if reasoning_content:
+                if reasoning_content and self._enable_thinking is not False:
+                    # Auto-retry once with enable_thinking=False so the model is
+                    # forced to emit a direct reply.  This handles the common case
+                    # where the model only produced a thinking phase and no content,
+                    # without requiring the user to manually set enable_thinking in
+                    # config.yaml.  If they set enable_thinking: false explicitly,
+                    # we skip the retry (they've already opted out of thinking).
                     logger.warning(
-                        "openai_compat: content=null but reasoning_content=%d chars. "
-                        "Model produced only thinking tokens with no actual response. "
-                        "Set ai.options.enable_thinking: false in config.yaml "
-                        "to force the model to generate a direct reply.",
+                        "openai_compat: content=null with reasoning_content=%d chars. "
+                        "Auto-retrying with enable_thinking=False. "
+                        "Add 'ai: options: enable_thinking: false' to config.yaml "
+                        "to skip this retry.",
                         len(reasoning_content),
                     )
+                    retry_system = (
+                        (system + "\n/no_think").lstrip() if system else "/no_think"
+                    )
+                    retry_messages: list[dict[str, str]] = []
+                    if retry_system:
+                        retry_messages.append(
+                            {"role": "system", "content": retry_system}
+                        )
+                    retry_messages.append({"role": "user", "content": prompt})
+                    retry_payload: dict[str, Any] = {
+                        "model": self._model,
+                        "messages": retry_messages,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                        "chat_template_kwargs": {"enable_thinking": False},
+                        "enable_thinking": False,
+                    }
+                    try:
+                        async with time_block(LLM_GENERATE_LATENCY, labels):
+                            retry_resp = await self._client.post(
+                                f"{self._base_url}/chat/completions",
+                                json=retry_payload,
+                            )
+                            retry_resp.raise_for_status()
+                            retry_data = retry_resp.json()
+                        retry_message = retry_data["choices"][0]["message"]
+                        retry_content = retry_message.get("content") or ""
+                        if retry_content:
+                            result = re.sub(
+                                r"<think>.*?</think>",
+                                "",
+                                str(retry_content),
+                                flags=re.DOTALL,
+                            ).strip() or str(retry_content)
+                            logger.debug(
+                                "openai_compat retry response: %d chars: %.300s",
+                                len(result),
+                                result,
+                            )
+                            return result
+                        logger.warning(
+                            "openai_compat retry also returned empty content; "
+                            "add 'ai: options: enable_thinking: false' to config.yaml"
+                        )
+                    except Exception:
+                        logger.warning(
+                            "openai_compat retry request failed", exc_info=True
+                        )
+                    result = ""
+                elif reasoning_content:
+                    logger.warning(
+                        "openai_compat: content=null with reasoning_content=%d chars "
+                        "but enable_thinking is already False; model may need a "
+                        "different prompt or temperature setting.",
+                        len(reasoning_content),
+                    )
+                    result = ""
                 else:
                     logger.warning(
                         "OpenAI-compat backend returned empty content and no "
                         "reasoning_content; model may have emitted nothing"
                     )
-                result = ""
+                    result = ""
             else:
                 raw_content = str(content)
                 # Extract and log any inline <think>...</think> blocks before stripping.

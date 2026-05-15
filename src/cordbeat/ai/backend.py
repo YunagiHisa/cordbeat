@@ -90,7 +90,7 @@ class AIBackend(ABC):
                 "generate_json: empty raw response (prompt=%d chars) — "
                 "model may have hit context limit or returned only thinking tokens. "
                 "For Qwen3/DeepSeek thinking models set "
-                "ai.options.enable_thinking: false in config.yaml.",
+                "ai_backend.enable_thinking: false in config.yaml.",
                 len(prompt),
             )
         logger.debug("generate_json raw(%d chars): %.500s", len(raw), raw)
@@ -114,7 +114,7 @@ class AIBackend(ABC):
             msg = (
                 f"generate_json: no JSON content extracted from model response "
                 f"(raw={len(raw)} chars). "
-                "If using a thinking model, set ai.options.enable_thinking: false"
+                "If using a thinking model, set ai_backend.enable_thinking: false"
             )
             raise json.JSONDecodeError(msg, "", 0)
         return dict(json.loads(text))
@@ -428,7 +428,7 @@ class OpenAICompatBackend(AIBackend):
                 if not stripped:
                     logger.warning(
                         "openai_compat: content was entirely <think> blocks; "
-                        "set ai.options.enable_thinking: false in config.yaml"
+                        "set ai_backend.enable_thinking: false in config.yaml"
                     )
                     result = raw_content
                 else:

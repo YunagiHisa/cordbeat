@@ -320,36 +320,31 @@ class OpenAICompatBackend(AIBackend):
                 # reasoning_content is internal chain-of-thought, NOT user-facing
                 # output — using it as the response would leak raw thinking text.
                 if reasoning_content and self._enable_thinking is not False:
-                    # Auto-retry once with enable_thinking=False so the model is
-                    # forced to emit a direct reply.  This handles the common case
-                    # where the model only produced a thinking phase and no content,
-                    # without requiring the user to manually set enable_thinking in
-                    # config.yaml.  If they set enable_thinking: false explicitly,
-                    # we skip the retry (they've already opted out of thinking).
+                    # The model completed its thinking phase but ran out of tokens
+                    # before producing the final response (content=null).  Retry
+                    # once with 2× max_tokens so there is budget for both thinking
+                    # and the answer.  Thinking stays enabled so reasoning quality
+                    # is preserved.
                     logger.warning(
                         "openai_compat: content=null with reasoning_content=%d chars. "
-                        "Auto-retrying with enable_thinking=False. "
-                        "Add 'ai: options: enable_thinking: false' to config.yaml "
-                        "to skip this retry.",
+                        "Model likely exhausted max_tokens during thinking. "
+                        "Retrying with max_tokens=%d. "
+                        "Increase 'ai_backend.max_tokens' in config.yaml "
+                        "to avoid this retry.",
                         len(reasoning_content),
+                        max_tokens * 2,
                     )
-                    retry_system = (
-                        (system + "\n/no_think").lstrip() if system else "/no_think"
-                    )
-                    retry_messages: list[dict[str, str]] = []
-                    if retry_system:
-                        retry_messages.append(
-                            {"role": "system", "content": retry_system}
-                        )
-                    retry_messages.append({"role": "user", "content": prompt})
                     retry_payload: dict[str, Any] = {
                         "model": self._model,
-                        "messages": retry_messages,
+                        "messages": messages,
                         "temperature": temperature,
-                        "max_tokens": max_tokens,
-                        "chat_template_kwargs": {"enable_thinking": False},
-                        "enable_thinking": False,
+                        "max_tokens": max_tokens * 2,
                     }
+                    if self._enable_thinking is not None:
+                        retry_payload["chat_template_kwargs"] = {
+                            "enable_thinking": self._enable_thinking
+                        }
+                        retry_payload["enable_thinking"] = self._enable_thinking
                     try:
                         async with time_block(LLM_GENERATE_LATENCY, labels):
                             retry_resp = await self._client.post(
@@ -375,7 +370,7 @@ class OpenAICompatBackend(AIBackend):
                             return result
                         logger.warning(
                             "openai_compat retry also returned empty content; "
-                            "add 'ai: options: enable_thinking: false' to config.yaml"
+                            "increase 'ai_backend.max_tokens' in config.yaml"
                         )
                     except Exception:
                         logger.warning(
@@ -385,8 +380,7 @@ class OpenAICompatBackend(AIBackend):
                 elif reasoning_content:
                     logger.warning(
                         "openai_compat: content=null with reasoning_content=%d chars "
-                        "but enable_thinking is already False; model may need a "
-                        "different prompt or temperature setting.",
+                        "and enable_thinking=False; model may need higher max_tokens.",
                         len(reasoning_content),
                     )
                     result = ""

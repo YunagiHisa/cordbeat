@@ -187,11 +187,68 @@ class TelegramAdapter(RetryableConnection):
                 images=images,
             )
 
+        from telegram.ext import CallbackQueryHandler  # noqa: PLC0415
+
         self._app.add_handler(
             MessageHandler(
                 (filters.TEXT | filters.PHOTO | filters.Document.IMAGE | filters.VOICE)
                 & ~filters.COMMAND,
                 handle_message,
+            )
+        )
+
+        async def handle_skill_confirm_callback(
+            update: Update,
+            context: Any,
+        ) -> None:
+            """Process ✅/🔁/❌ inline button presses for skill confirmation."""
+            query = update.callback_query
+            if query is None:
+                return
+            data = query.data or ""
+            # data format: "skill_confirm:<action>:<proposal_id>"
+            if not data.startswith("skill_confirm:"):
+                await query.answer()
+                return
+
+            parts = data.split(":", 2)
+            if len(parts) != 3:
+                await query.answer()
+                return
+
+            action, proposal_id = parts[1], parts[2]
+            cmd_map = {
+                "approve": f"/approve {proposal_id}",
+                "approve_session": f"/approve_session {proposal_id}",
+                "reject": f"/reject {proposal_id}",
+            }
+            cmd = cmd_map.get(action)
+            if cmd is None:
+                await query.answer("Unknown action")
+                return
+
+            if self._ws is not None:
+                try:
+                    await self._ws.send(json.dumps({"type": "message", "content": cmd}))
+                except Exception:
+                    logger.warning("Failed to forward skill confirm to Core")
+
+            label_map = {
+                "approve": "✅ Approved once",
+                "approve_session": "🔁 Approved for this session",
+                "reject": "❌ Denied",
+            }
+            await query.answer()
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+                await query.message.reply_text(f"{label_map[action]}")
+            except Exception:
+                pass
+
+        self._app.add_handler(
+            CallbackQueryHandler(
+                handle_skill_confirm_callback,
+                pattern=r"^skill_confirm:",
             )
         )
 
@@ -212,6 +269,77 @@ class TelegramAdapter(RetryableConnection):
             await self._app.updater.stop()
             await self._app.stop()
             await self._app.shutdown()
+
+    async def _dispatch_skill_confirm(
+        self, platform_user_id: str, data: dict[str, Any]
+    ) -> None:
+        """Send Telegram inline keyboard for skill confirmation."""
+        if not self._app:
+            await super()._dispatch_skill_confirm(platform_user_id, data)
+            return
+
+        meta = data.get("metadata") or {}
+        proposal_id: str = str(meta.get("proposal_id", ""))
+        skill_name: str = str(meta.get("skill_name", "unknown"))
+        skill_params: dict[str, Any] = meta.get("skill_params") or {}
+
+        chat_id = self._chat_map.get(platform_user_id)
+        if chat_id is None:
+            try:
+                chat_id = int(platform_user_id)
+            except ValueError:
+                await super()._dispatch_skill_confirm(platform_user_id, data)
+                return
+
+        try:
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup  # noqa: I001,PLC0415
+
+            params_text = ""
+            if skill_params:
+                params_text = "\n".join(
+                    f"  • {k}: {v}" for k, v in skill_params.items()
+                )
+                params_text = f"\n\n*Parameters:*\n{params_text}"
+
+            text = (
+                f"🔧 *Skill Execution Required*\n"
+                f"Skill: `{skill_name}`{params_text}\n\n"
+                f"Allow `{skill_name}` to run?"
+            )
+
+            keyboard = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "✅ Allow Once",
+                            callback_data=f"skill_confirm:approve:{proposal_id}",
+                        ),
+                        InlineKeyboardButton(
+                            "🔁 Allow Session",
+                            callback_data=f"skill_confirm:approve_session:{proposal_id}",
+                        ),
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "❌ Deny",
+                            callback_data=f"skill_confirm:reject:{proposal_id}",
+                        ),
+                    ],
+                ]
+            )
+
+            self._stop_typing(chat_id)
+            await self._app.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=keyboard,
+            )
+        except ImportError:
+            await super()._dispatch_skill_confirm(platform_user_id, data)
+        except Exception:
+            logger.exception("Failed to send Telegram skill confirm keyboard")
+            await super()._dispatch_skill_confirm(platform_user_id, data)
 
     async def _dispatch_core_message(
         self, platform_user_id: str, content: str, images: list[str]

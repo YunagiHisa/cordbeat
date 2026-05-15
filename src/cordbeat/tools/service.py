@@ -94,7 +94,14 @@ def _systemd_install(adapters: list[str] | None = None) -> None:
     # Restart to pick up any ExecStart changes (enable --now is a no-op if running)
     subprocess.run(["systemctl", "--user", "restart", "cordbeat"], check=False)
     print("✅ CordBeat service installed and started (systemd user service).")
-    print("   Logs: journalctl --user -u cordbeat -f")
+    print()
+    print("   Manage with:")
+    print("     systemctl --user status  cordbeat")
+    print("     systemctl --user restart cordbeat")
+    print("     systemctl --user stop    cordbeat")
+    print("     journalctl --user -u cordbeat -f   # live logs")
+    print()
+    print("   Note: always use --user flag (this is a user-level service, not system-wide).")
 
     for adapter in adapters or []:
         unit_name = f"cordbeat-{adapter}.service"

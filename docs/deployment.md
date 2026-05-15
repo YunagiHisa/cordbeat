@@ -78,6 +78,70 @@ python -m cordbeat.adapter_runner telegram config.yaml
 
 ---
 
+## Auto-start as a Service
+
+CordBeat can register itself as a system service so it starts automatically.
+
+```bash
+# Install and start the service
+cordbeat service install
+
+# Optional: also register adapters (Discord, Telegram, ...)
+cordbeat service install --adapter discord --adapter telegram
+```
+
+### Linux (systemd user service)
+
+`cordbeat service install` creates a **user-level** systemd unit at
+`~/.config/systemd/user/cordbeat.service`.
+
+> ⚠️ **Important**: Always use the `--user` flag when managing this service.
+> Without it, `systemctl` looks for a system-level service and will report
+> "Unit cordbeat.service could not be found."
+
+```bash
+# Status / restart / stop
+systemctl --user status  cordbeat
+systemctl --user restart cordbeat
+systemctl --user stop    cordbeat
+
+# Live logs
+journalctl --user -u cordbeat -f
+
+# Enable autostart on login (done automatically by `service install`)
+systemctl --user enable cordbeat
+
+# Uninstall
+cordbeat service uninstall
+```
+
+### macOS (launchd user agent)
+
+`cordbeat service install` loads a launchd plist at
+`~/Library/LaunchAgents/com.cordbeat.agent.plist`.
+
+```bash
+# Logs
+tail -f ~/.cordbeat/cordbeat.log
+
+# Uninstall
+cordbeat service uninstall
+```
+
+### Windows (Task Scheduler)
+
+`cordbeat service install` registers a Task Scheduler task that runs at login.
+
+```powershell
+# Check task
+schtasks /Query /TN CordBeat /FO LIST
+
+# Uninstall
+cordbeat service uninstall
+```
+
+---
+
 ## Docker Deployment
 
 ### Core Only

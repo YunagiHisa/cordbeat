@@ -445,6 +445,45 @@ def _build_config(
 # -- File writers ──────────────────────────────────────────────────────
 
 
+def _write_env_file(home: Path, env_vars: dict[str, str]) -> None:
+    """Write or update ``~/.cordbeat/.env`` with the given key=value pairs.
+
+    Preserves existing entries that are not being overwritten.  Creates the
+    file with 0o600 permissions (owner read/write only) so secrets stay
+    private.
+    """
+    import stat
+
+    env_path = home / ".env"
+    existing: dict[str, str] = {}
+
+    if env_path.is_file():
+        with env_path.open(encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                k, _, v = stripped.partition("=")
+                key = k.strip()
+                if key:
+                    existing[key] = v.strip()
+
+    # New values override existing (wizard always wins on re-run)
+    existing.update(env_vars)
+
+    with env_path.open("w", encoding="utf-8") as f:
+        f.write("# CordBeat secrets — managed by `cordbeat setup`\n")
+        f.write("# Do not commit this file to version control.\n\n")
+        for k, v in sorted(existing.items()):
+            f.write(f"{k}={v}\n")
+
+    # Secure permissions: owner read/write only (no-op on Windows)
+    try:
+        env_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
+
+
 def _write_soul_files(soul_dir: Path, name: str, language: str) -> None:
     soul_dir.mkdir(parents=True, exist_ok=True)
 
@@ -560,6 +599,24 @@ def run_wizard(home: Path | None = None) -> tuple[Path, bool]:
         encoding="utf-8",
     )
     _ok(str(config_path))
+
+    # ── Write .env with secrets ───────────────────────────────────
+    # Centralise all secrets in ~/.cordbeat/.env so they never need to
+    # be entered manually and `_apply_env_overrides` always wins.
+    env_secrets: dict[str, str] = {}
+    _gw_token: str = cfg["gateway"]["auth_token"]
+    if _gw_token:
+        env_secrets["CORDBEAT_GATEWAY__AUTH_TOKEN"] = _gw_token
+    for _adapter_key, _adapter_token in selected_adapters.items():
+        if _adapter_key != "cli" and _adapter_token:
+            env_secrets[
+                f"CORDBEAT_ADAPTERS__{_adapter_key.upper()}__OPTIONS__TOKEN"
+            ] = _adapter_token
+    if api_key:
+        env_secrets["CORDBEAT_AI_BACKEND__OPTIONS__API_KEY"] = api_key
+    if env_secrets:
+        _write_env_file(home, env_secrets)
+        _ok(str(home / ".env"))
 
     # ── Connection test ───────────────────────────────────────────
     print(f"\n  Testing {provider} at {base_url}...")

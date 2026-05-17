@@ -298,8 +298,9 @@ def _warn_secrets_in_yaml(raw: dict[str, Any], path: Path) -> None:
             full = f"{key_path}.{k}" if key_path else k
             if k in _SECRET_YAML_ADAPTER_KEYS and isinstance(v, str) and v:
                 _log.warning(
-                    "Secret key '%s' found in %s — move it to .env: "
-                    "CORDBEAT_%s=<value>",
+                    "Secret key '%s' found in %s — "
+                    "prefer env var CORDBEAT_%s "
+                    "(or run `cordbeat setup` to auto-manage).",
                     full,
                     path.name,
                     full.upper().replace(".", "__"),

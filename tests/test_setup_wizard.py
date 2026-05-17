@@ -7,7 +7,7 @@ from collections.abc import Generator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -18,6 +18,7 @@ from cordbeat.tools.wizard import (
     _probe_llama_cpp,
     _probe_ollama,
     _probe_provider,
+    _write_env_file,
     _write_soul_files,
     cordbeat_init_cli,
     run_wizard,
@@ -366,3 +367,75 @@ def test_cordbeat_init_cli_skips_chat_when_declined(tmp_path: Path) -> None:
         cordbeat_init_cli()
         mock_rw.assert_called_once()
         mock_cli_chat.assert_not_called()
+
+
+# -- _write_env_file tests ────────────────────────────────────────────
+
+
+class TestWriteEnvFile:
+    """Tests for _write_env_file helper."""
+
+    def test_creates_env_file(self, tmp_path: Path) -> None:
+        """Creates .env with given secrets."""
+        _write_env_file(tmp_path, {"KEY_A": "value1", "KEY_B": "value2"})
+        env = (tmp_path / ".env").read_text(encoding="utf-8")
+        assert "KEY_A=value1" in env
+        assert "KEY_B=value2" in env
+
+    def test_preserves_existing_unrelated_keys(self, tmp_path: Path) -> None:
+        """Existing entries not in new dict are preserved."""
+        (tmp_path / ".env").write_text("UNRELATED_KEY=keep_me\n", encoding="utf-8")
+        _write_env_file(tmp_path, {"NEW_KEY": "new_value"})
+        env = (tmp_path / ".env").read_text(encoding="utf-8")
+        assert "UNRELATED_KEY=keep_me" in env
+        assert "NEW_KEY=new_value" in env
+
+    def test_new_values_override_existing(self, tmp_path: Path) -> None:
+        """Re-running wizard updates existing keys to new values."""
+        (tmp_path / ".env").write_text(
+            "CORDBEAT_GATEWAY__AUTH_TOKEN=old_token\n", encoding="utf-8"
+        )
+        _write_env_file(tmp_path, {"CORDBEAT_GATEWAY__AUTH_TOKEN": "new_token"})
+        env = (tmp_path / ".env").read_text(encoding="utf-8")
+        assert "new_token" in env
+        assert "old_token" not in env
+
+    def test_run_wizard_creates_env_file_with_discord_token(
+        self, tmp_path: Path
+    ) -> None:
+        """run_wizard writes adapter tokens to ~/.cordbeat/.env."""
+        inputs = iter(["Bot", "en", "n"])
+        with (
+            patch("cordbeat.tools.wizard._probe_ollama", return_value="llama3"),
+            patch("builtins.input", side_effect=inputs),
+            patch("cordbeat.tools.wizard._probe_provider", return_value=True),
+            patch(
+                "cordbeat.tools.wizard._select_adapters",
+                return_value={"discord": "real_discord_token_xyz"},
+            ),
+        ):
+            run_wizard(tmp_path)
+
+        env_path = tmp_path / ".env"
+        assert env_path.is_file()
+        env = env_path.read_text(encoding="utf-8")
+        assert "CORDBEAT_ADAPTERS__DISCORD__OPTIONS__TOKEN=real_discord_token_xyz" in (
+            env
+        )
+
+    def test_run_wizard_no_env_file_when_only_cli(self, tmp_path: Path) -> None:
+        """run_wizard writes .env even for CLI-only (gateway auth_token is a secret)."""
+        inputs = iter(["Bot", "en", "n"])
+        with (
+            patch("cordbeat.tools.wizard._probe_ollama", return_value="llama3"),
+            patch("builtins.input", side_effect=inputs),
+            patch("cordbeat.tools.wizard._probe_provider", return_value=True),
+            patch("cordbeat.tools.wizard._select_adapters", return_value={"cli": None}),
+        ):
+            run_wizard(tmp_path)
+
+        # gateway auth_token IS written even for CLI-only setups
+        env_path = tmp_path / ".env"
+        assert env_path.is_file()
+        env = env_path.read_text(encoding="utf-8")
+        assert "CORDBEAT_GATEWAY__AUTH_TOKEN=" in env

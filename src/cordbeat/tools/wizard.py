@@ -478,7 +478,9 @@ def run_wizard(home: Path | None = None) -> tuple[Path, bool]:
     Returns the path to the created ``config.yaml``.
     """
     home = home or cordbeat_home()
-    print(_BANNER_ART + _BANNER_SUBTITLE)
+    # Skip banner when launched from install.sh (it already showed one)
+    if not os.environ.get("CORDBEAT_FROM_INSTALLER"):
+        print(_BANNER_ART + _BANNER_SUBTITLE)
 
     # ── Auto-detect AI backend ───────────────────────────────────
     print("  Detecting AI backend...")
@@ -626,6 +628,23 @@ def cordbeat_init_cli() -> None:
         print()
         print("  You're all set!  Run 'cordbeat-chat' any time to start chatting.")
         print()
+        print("  Quick reference:")
+        print("    cordbeat-chat              # interactive chat")
+        print("    cordbeat service install   # run as background service")
+        print("    cordbeat service status    # check service status")
+        print()
+        print("  To update later:")
+        print(
+            "    curl -fsSL https://raw.githubusercontent.com/"
+            "YunagiHisa/cordbeat/main/install.sh | bash"
+        )
+        print()
+        if os.environ.get("CORDBEAT_FROM_INSTALLER"):
+            print(
+                "  ⚠ Open a new terminal (or: source ~/.bashrc)"
+                " for commands to be available."
+            )
+            print()
         return
 
     print("  Starting CordBeat chat...\n")

@@ -25,8 +25,6 @@ echo -e "${PINK}   ╚═════╝ ╚═════╝ ╚═╝  ╚═
 echo ""
 echo "  A local-first autonomous AI agent that stays by your side."
 echo ""
-
-# ── Check git ─────────────────────────────────────────────────────────────────
 if ! command -v git &>/dev/null; then
     echo -e "${RED}✗ git is required. Please install git first.${NC}"
     exit 1
@@ -83,21 +81,10 @@ export PATH="$BIN_DIR:$PATH"
 
 # ── Run setup wizard ──────────────────────────────────────────────────────────
 echo ""
+# CORDBEAT_FROM_INSTALLER suppresses the duplicate banner inside the wizard.
+export CORDBEAT_FROM_INSTALLER=1
 cordbeat-init
 
-echo ""
-echo -e "${GREEN}  ✨ CordBeat is ready!${NC}"
-echo ""
-echo "  Quick start:"
-echo -e "    ${CYAN}cordbeat-chat${NC}              # chat in terminal"
-echo -e "    ${CYAN}cordbeat service install${NC}   # run as background service"
-echo -e "    ${CYAN}cordbeat service status${NC}    # check service status"
-echo ""
-echo "  Adapters (after setting token in config):"
-echo -e "    ${CYAN}cordbeat-discord${NC}  /  ${CYAN}cordbeat-telegram${NC}"
-echo ""
-echo "  To update later:"
-echo -e "    ${CYAN}curl -fsSL https://raw.githubusercontent.com/YunagiHisa/cordbeat/main/install.sh | bash${NC}"
-echo ""
-echo -e "${YELLOW}  ⚠ Open a new terminal (or run: source ~/.bashrc) for commands to be available.${NC}"
-echo ""
+# Restore any terminal state that may have been altered by the wizard
+stty sane 2>/dev/null || true
+

@@ -472,7 +472,7 @@ def _write_soul_files(soul_dir: Path, name: str, language: str) -> None:
 # -- Main wizard ───────────────────────────────────────────────────────
 
 
-def run_wizard(home: Path | None = None) -> Path:
+def run_wizard(home: Path | None = None) -> tuple[Path, bool]:
     """Run the interactive setup wizard.
 
     Returns the path to the created ``config.yaml``.
@@ -566,6 +566,7 @@ def run_wizard(home: Path | None = None) -> Path:
         "  when your computer boots "
         "(can be removed later with `cordbeat service uninstall`)."
     )
+    service_installed = False
     _yn = input("  Install service now? [Y/n] ").strip().lower()
     if _yn in ("", "y"):
         try:
@@ -573,6 +574,7 @@ def run_wizard(home: Path | None = None) -> Path:
 
             adapter_names = [k for k in selected_adapters if k != "cli"]
             run_service_command("install", adapters=adapter_names)
+            service_installed = True
         except Exception as _svc_exc:  # pragma: no cover
             _warn(f"Service install failed: {_svc_exc}")
             _warn("You can run it manually later: cordbeat service install")
@@ -581,22 +583,23 @@ def run_wizard(home: Path | None = None) -> Path:
             "  Skipped. Run `cordbeat service install` any time to enable auto-start."
         )
 
-    print("  Starting CordBeat...\n")
+    print()
     print(f"  {_b('Active config:')} {config_path}")
     if config_path.parent != Path.cwd():
         print(
             f"  Note: CordBeat always reads config from {config_path.parent}/"
             ", not the repo folder."
         )
-    return config_path
+    return config_path, service_installed
 
 
 def cordbeat_init_cli() -> None:
     """CLI entry point for ``cordbeat-init``.
 
     Checks for required heavy dependencies first (before asking the user
-    anything), then runs the setup wizard and starts CordBeat in
-    combined server + interactive CLI chat mode.
+    anything), then runs the setup wizard.  After setup, asks whether to
+    start CLI chat now (instead of auto-starting, so the terminal isn't
+    flooded with server logs when a background service was installed).
     """
     import asyncio
 
@@ -610,7 +613,22 @@ def cordbeat_init_cli() -> None:
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-    config_path = run_wizard()
+    config_path, service_installed = run_wizard()
+
+    print()
+    if service_installed:
+        print(
+            "  CordBeat is now running as a background service. "
+            "Logs: cordbeat service logs"
+        )
+    _yn_chat = input("  Start CLI chat now? [y/N] ").strip().lower()
+    if _yn_chat not in ("y", "yes"):
+        print()
+        print("  You're all set!  Run 'cordbeat-chat' any time to start chatting.")
+        print()
+        return
+
+    print("  Starting CordBeat chat...\n")
     try:
         asyncio.run(main_with_cli(str(config_path)))
     except KeyboardInterrupt:

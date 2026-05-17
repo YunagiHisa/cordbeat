@@ -212,7 +212,7 @@ class TestRunWizard:
             ),
             patch("cordbeat.tools.wizard._select_adapters", return_value={"cli": None}),
         ):
-            config_path = run_wizard(tmp_path)
+            config_path, _ = run_wizard(tmp_path)
 
         assert config_path == tmp_path / "config.yaml"
         assert config_path.is_file()
@@ -237,7 +237,7 @@ class TestRunWizard:
             ),
             patch("cordbeat.tools.wizard._select_adapters", return_value={"cli": None}),
         ):
-            config_path = run_wizard(tmp_path)
+            config_path, _ = run_wizard(tmp_path)
 
         cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         assert cfg["ai_backend"]["base_url"] == "http://myhost:11434"
@@ -259,7 +259,7 @@ class TestRunWizard:
             ),
             patch("cordbeat.tools.wizard._select_adapters", return_value={"cli": None}),
         ):
-            config_path = run_wizard(tmp_path)
+            config_path, _ = run_wizard(tmp_path)
 
         cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         assert cfg["ai_backend"]["provider"] == "openai_compat"
@@ -289,7 +289,7 @@ class TestRunWizard:
             ),
             patch("cordbeat.tools.wizard._select_adapters", return_value={"cli": None}),
         ):
-            config_path = run_wizard(tmp_path)
+            config_path, _ = run_wizard(tmp_path)
 
         cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         assert cfg["ai_backend"]["provider"] == "openai"
@@ -320,15 +320,32 @@ class TestRunWizard:
 
 
 def test_cordbeat_init_cli_delegates_to_run_wizard(tmp_path: Path) -> None:
-    """``cordbeat_init_cli`` runs wizard then starts CordBeat."""
+    """``cordbeat_init_cli`` runs wizard, asks to chat, then starts CordBeat."""
     config_file = tmp_path / "config.yaml"
     with (
         patch("cordbeat.tools.wizard.run_wizard") as mock_rw,
         patch("cordbeat.main.main_with_cli", new_callable=MagicMock) as mock_main,
         patch("asyncio.run") as mock_run,
+        patch("builtins.input", return_value="y"),
     ):
-        mock_rw.return_value = config_file
+        mock_rw.return_value = (config_file, False)
         cordbeat_init_cli()
         mock_rw.assert_called_once()
         mock_main.assert_called_once_with(str(config_file))
         mock_run.assert_called_once_with(mock_main.return_value)
+
+
+def test_cordbeat_init_cli_skips_chat_when_declined(tmp_path: Path) -> None:
+    """``cordbeat_init_cli`` exits cleanly when user declines CLI chat."""
+    config_file = tmp_path / "config.yaml"
+    with (
+        patch("cordbeat.tools.wizard.run_wizard") as mock_rw,
+        patch("cordbeat.main.main_with_cli", new_callable=MagicMock) as mock_main,
+        patch("asyncio.run") as mock_run,
+        patch("builtins.input", return_value="n"),
+    ):
+        mock_rw.return_value = (config_file, True)
+        cordbeat_init_cli()
+        mock_rw.assert_called_once()
+        mock_main.assert_not_called()
+        mock_run.assert_not_called()

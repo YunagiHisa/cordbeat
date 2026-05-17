@@ -93,7 +93,11 @@ class TestWizardKeyboardInterrupt:
         # asyncio is imported locally inside cordbeat_init_cli, so patch at the source
         with (
             patch("cordbeat.tools.wizard._check_required_deps"),
-            patch("cordbeat.tools.wizard.run_wizard", return_value="/tmp/config.yaml"),
+            patch(
+                "cordbeat.tools.wizard.run_wizard",
+                return_value=("/tmp/config.yaml", False),
+            ),
+            patch("builtins.input", return_value="y"),
             patch("asyncio.run", side_effect=KeyboardInterrupt),
         ):
             cordbeat_init_cli()  # Must not raise

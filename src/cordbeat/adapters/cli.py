@@ -118,15 +118,21 @@ if __name__ == "__main__":
     asyncio.run(main(_ws_url, auth_token=_config.gateway.auth_token))
 
 
-def cli_main() -> None:
-    """Entry point: connect CLI to a running CordBeat server (no server started)."""
+def cli_main(config_path: str | None = None) -> None:
+    """Entry point: connect CLI to a running CordBeat server (no server started).
+
+    *config_path* may be provided by callers that have already resolved the
+    config (e.g. cli_chat()).  When omitted, it falls back to sys.argv[1] or
+    ``~/.cordbeat/config.yaml`` as before.
+    """
     from cordbeat.config import cordbeat_home, load_config
 
-    config_path = (
-        sys.argv[1]
-        if len(sys.argv) > 1 and not sys.argv[1].startswith("-")
-        else str(cordbeat_home() / "config.yaml")
-    )
+    if config_path is None:
+        config_path = (
+            sys.argv[1]
+            if len(sys.argv) > 1 and not sys.argv[1].startswith("-")
+            else str(cordbeat_home() / "config.yaml")
+        )
     _config = load_config(config_path)
     ws_url = f"ws://{_config.gateway.host}:{_config.gateway.port}"
     try:

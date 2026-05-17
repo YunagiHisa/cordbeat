@@ -745,7 +745,7 @@ def cli_chat() -> None:
         print("[CordBeat] Starting server in background...")
         _start_server_background(config_path, ws_url)
 
-    cli_main()
+    cli_main(config_path)
 
 
 def _probe_ws(url: str, timeout: float = 0.5) -> bool:

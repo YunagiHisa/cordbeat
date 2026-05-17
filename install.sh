@@ -58,20 +58,46 @@ echo -e "${YELLOW}  Installing dependencies (this may take several minutes on fi
 uv sync
 echo -e "${GREEN}  ✓ Dependencies installed${NC}"
 
+# ── Install CLI shims to ~/.local/bin ─────────────────────────────────────────
+BIN_DIR="$HOME/.local/bin"
+mkdir -p "$BIN_DIR"
+
+VENV_BIN="$INSTALL_DIR/.venv/bin"
+
+# Create shims for all cordbeat entry points
+for cmd in cordbeat cordbeat-chat cordbeat-init cordbeat-discord cordbeat-telegram \
+           cordbeat-slack cordbeat-line cordbeat-whatsapp cordbeat-signal; do
+    if [ -f "$VENV_BIN/$cmd" ]; then
+        ln -sf "$VENV_BIN/$cmd" "$BIN_DIR/$cmd"
+    fi
+done
+echo -e "${GREEN}  ✓ CLI commands linked to $BIN_DIR${NC}"
+
+# Ensure ~/.local/bin is in PATH (append to shell rc if missing)
+for RC in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+    if [ -f "$RC" ] && ! grep -q 'LOCAL_BIN_ADDED_BY_CORDBEAT' "$RC"; then
+        printf '\n# Added by CordBeat installer (LOCAL_BIN_ADDED_BY_CORDBEAT)\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$RC"
+    fi
+done
+export PATH="$BIN_DIR:$PATH"
+
 # ── Run setup wizard ──────────────────────────────────────────────────────────
 echo ""
-uv run cordbeat-init
+cordbeat-init
 
 echo ""
 echo -e "${GREEN}  ✨ CordBeat is ready!${NC}"
 echo ""
-echo "  To chat again:"
-echo -e "    ${CYAN}cd $INSTALL_DIR${NC}"
-echo -e "    ${CYAN}uv run cordbeat-chat${NC}"
+echo "  Quick start:"
+echo -e "    ${CYAN}cordbeat-chat${NC}              # chat in terminal"
+echo -e "    ${CYAN}cordbeat service install${NC}   # run as background service"
+echo -e "    ${CYAN}cordbeat service status${NC}    # check service status"
 echo ""
-echo "  To run as headless server (Discord / Telegram):"
-echo -e "    ${CYAN}uv run cordbeat${NC}"
+echo "  Adapters (after setting token in config):"
+echo -e "    ${CYAN}cordbeat-discord${NC}  /  ${CYAN}cordbeat-telegram${NC}"
 echo ""
 echo "  To update later:"
 echo -e "    ${CYAN}curl -fsSL https://raw.githubusercontent.com/YunagiHisa/cordbeat/main/install.sh | bash${NC}"
+echo ""
+echo -e "${YELLOW}  ⚠ Open a new terminal (or run: source ~/.bashrc) for commands to be available.${NC}"
 echo ""

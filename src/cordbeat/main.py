@@ -35,9 +35,18 @@ if sys.platform == "win32":
 
 def _resolve_config_path() -> str:
     """Find the config file, or run the setup wizard if none exists."""
-    # Explicit argument overrides everything
+    # Explicit argument overrides everything, but only if it looks like a file
+    # path (not a subcommand like "config", "service", "chat", etc.).
     if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
-        return sys.argv[1]
+        candidate = sys.argv[1]
+        p = Path(candidate)
+        if (
+            p.is_file()
+            or os.sep in candidate
+            or "/" in candidate
+            or candidate.endswith(".yaml")
+        ):
+            return candidate
 
     # Try ~/.cordbeat/config.yaml
     home_config = cordbeat_home() / "config.yaml"

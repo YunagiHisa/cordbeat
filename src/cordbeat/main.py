@@ -690,7 +690,25 @@ def cli() -> None:
         action = args[1] if len(args) > 1 else "status"
         from cordbeat.tools.service import run_service_command
 
-        raise SystemExit(run_service_command(action))
+        adapters: list[str] | None = None
+        if action == "install":
+            # Auto-detect enabled non-CLI adapters from the config so that
+            # `cordbeat service install` registers adapter services too.
+            try:
+                _cfg_path = cordbeat_home() / "config.yaml"
+                if not _cfg_path.is_file():
+                    _cfg_path = Path("config.yaml")
+                if _cfg_path.is_file():
+                    _cfg = load_config(str(_cfg_path))
+                    adapters = [
+                        k
+                        for k, v in _cfg.adapters.items()
+                        if k != "cli" and v.enabled
+                    ]
+            except Exception:
+                pass  # best-effort; fall through to core-only install
+
+        raise SystemExit(run_service_command(action, adapters=adapters))
 
     if sub == "update":
         _cmd_update()

@@ -58,7 +58,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart={exe} {config_path}
+ExecStart={exe} server {config_path}
 Restart=on-failure
 RestartSec=5
 
@@ -101,7 +101,8 @@ def _systemd_install(adapters: list[str] | None = None) -> None:
     print("     systemctl --user stop    cordbeat")
     print("     journalctl --user -u cordbeat -f   # live logs")
     print()
-    print("   Note: always use --user flag (this is a user-level service, not system-wide).")
+    print("   Note: always use --user flag")
+    print("         (this is a user-level service, not system-wide).")
 
     for adapter in adapters or []:
         unit_name = f"cordbeat-{adapter}.service"
@@ -171,6 +172,7 @@ _LAUNCHD_TEMPLATE = """\
   <key>ProgramArguments</key>
   <array>
     <string>{exe}</string>
+    <string>server</string>
     <string>{config_path}</string>
   </array>
   <key>RunAtLoad</key>
@@ -285,7 +287,7 @@ def _windows_install(adapters: list[str] | None = None) -> None:
             "/TN",
             _TASK_NAME,
             "/TR",
-            f'"{exe}" "{config_path}"',
+            f'"{exe}" server "{config_path}"',
             "/SC",
             "ONLOGON",
             "/RL",

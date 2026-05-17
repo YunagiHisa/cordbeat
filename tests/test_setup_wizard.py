@@ -324,15 +324,13 @@ def test_cordbeat_init_cli_delegates_to_run_wizard(tmp_path: Path) -> None:
     config_file = tmp_path / "config.yaml"
     with (
         patch("cordbeat.tools.wizard.run_wizard") as mock_rw,
-        patch("cordbeat.main.main_with_cli", new_callable=MagicMock) as mock_main,
-        patch("asyncio.run") as mock_run,
+        patch("cordbeat.main.cli_chat") as mock_cli_chat,
         patch("builtins.input", return_value="y"),
     ):
         mock_rw.return_value = (config_file, False)
         cordbeat_init_cli()
         mock_rw.assert_called_once()
-        mock_main.assert_called_once_with(str(config_file))
-        mock_run.assert_called_once_with(mock_main.return_value)
+        mock_cli_chat.assert_called_once_with()
 
 
 def test_cordbeat_init_cli_skips_chat_when_declined(tmp_path: Path) -> None:
@@ -340,12 +338,10 @@ def test_cordbeat_init_cli_skips_chat_when_declined(tmp_path: Path) -> None:
     config_file = tmp_path / "config.yaml"
     with (
         patch("cordbeat.tools.wizard.run_wizard") as mock_rw,
-        patch("cordbeat.main.main_with_cli", new_callable=MagicMock) as mock_main,
-        patch("asyncio.run") as mock_run,
+        patch("cordbeat.main.cli_chat") as mock_cli_chat,
         patch("builtins.input", return_value="n"),
     ):
         mock_rw.return_value = (config_file, True)
         cordbeat_init_cli()
         mock_rw.assert_called_once()
-        mock_main.assert_not_called()
-        mock_run.assert_not_called()
+        mock_cli_chat.assert_not_called()

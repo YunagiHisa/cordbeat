@@ -606,7 +606,6 @@ def cordbeat_init_cli() -> None:
     import asyncio
 
     from cordbeat.exceptions import MemorySubsystemError
-    from cordbeat.main import main_with_cli
 
     _check_required_deps()  # exits with friendly message if deps are missing
 
@@ -649,7 +648,12 @@ def cordbeat_init_cli() -> None:
 
     print("  Starting CordBeat chat...\n")
     try:
-        asyncio.run(main_with_cli(str(config_path)))
+        # Use cli_chat() which probes the port first: if a service is already
+        # running (e.g. just installed by the wizard), it connects directly
+        # instead of failing with "address already in use".
+        from cordbeat.main import cli_chat
+
+        cli_chat()
     except KeyboardInterrupt:
         pass  # Clean Ctrl+C exit — asyncio re-raises on Windows
     except MemorySubsystemError as exc:

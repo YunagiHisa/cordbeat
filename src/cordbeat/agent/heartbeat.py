@@ -408,7 +408,9 @@ class HeartbeatLoop:
             skill_params=decision_data.get("skill_params", {}),
             trait_add=decision_data.get("trait_add", []),
             trait_remove=decision_data.get("trait_remove", []),
-            target_user_id=decision_data.get("target_user_id", user.user_id),
+            # Always use the code-level user_id — the AI sometimes echoes the
+            # platform user ID (e.g. Discord snowflake) instead of the internal UUID.
+            target_user_id=user.user_id,
             target_adapter_id=decision_data.get(
                 "target_adapter_id", user.last_platform
             ),

@@ -164,10 +164,10 @@ class CoreEngine:
         user_id = await self._memory.resolve_user(adapter_id, platform_user_id)
         if user_id is None:
             user_id = uuid.uuid4().hex
-            user = await self._memory.get_or_create_user(user_id, platform_user_id)
-            await self._memory.link_platform(user_id, adapter_id, platform_user_id)
-        else:
-            user = await self._memory.get_or_create_user(user_id, platform_user_id)
+        user = await self._memory.get_or_create_user(user_id, platform_user_id)
+        # Always upsert the link so heartbeat can reverse-resolve even if the
+        # user record was created via another code path.
+        await self._memory.link_platform(user_id, adapter_id, platform_user_id)
 
         user.last_talked_at = datetime.now(tz=UTC)
         user.last_platform = adapter_id

@@ -390,8 +390,13 @@ def _build_config(
     model: str,
     api_key: str = "",
     adapters: dict[str, str | None] | None = None,
+    auth_token: str | None = None,
 ) -> dict[str, Any]:
-    """Build a config dict with paths anchored to *home*."""
+    """Build a config dict with paths anchored to *home*.
+
+    If *auth_token* is provided it is reused as-is (avoids mismatch with a
+    running service when the wizard is re-run after initial setup).
+    """
     import secrets
 
     if adapters is None:
@@ -401,7 +406,7 @@ def _build_config(
         "gateway": {
             "host": "127.0.0.1",
             "port": 8765,
-            "auth_token": secrets.token_urlsafe(32),
+            "auth_token": auth_token or secrets.token_urlsafe(32),
         },
         "log": {"level": "INFO"},
         "heartbeat": {
@@ -532,6 +537,15 @@ def run_wizard(home: Path | None = None) -> tuple[Path, bool]:
 
     # ── Write config.yaml ─────────────────────────────────────────
     config_path = home / "config.yaml"
+    # Preserve auth_token across re-runs so a running service keeps working.
+    _existing_auth_token: str | None = None
+    if config_path.exists():
+        try:
+            _existing = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            if isinstance(_existing, dict):
+                _existing_auth_token = _existing.get("gateway", {}).get("auth_token")
+        except Exception:
+            pass
     cfg = _build_config(
         home,
         provider=provider,
@@ -539,6 +553,7 @@ def run_wizard(home: Path | None = None) -> tuple[Path, bool]:
         model=model,
         api_key=api_key,
         adapters=selected_adapters,
+        auth_token=_existing_auth_token,
     )
     config_path.write_text(
         yaml.dump(cfg, default_flow_style=False, sort_keys=False),

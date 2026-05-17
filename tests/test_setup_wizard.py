@@ -164,6 +164,27 @@ class TestBuildConfig:
         )
         assert "options" not in cfg["ai_backend"]
 
+    def test_auth_token_preserved_when_provided(self, tmp_path: Path) -> None:
+        existing_token = "my-existing-stable-token"
+        cfg = _build_config(
+            tmp_path,
+            provider="ollama",
+            base_url="http://localhost:11434",
+            model="llama3",
+            auth_token=existing_token,
+        )
+        assert cfg["gateway"]["auth_token"] == existing_token
+
+    def test_auth_token_generated_when_not_provided(self, tmp_path: Path) -> None:
+        cfg = _build_config(
+            tmp_path,
+            provider="ollama",
+            base_url="http://localhost:11434",
+            model="llama3",
+        )
+        token = cfg["gateway"]["auth_token"]
+        assert isinstance(token, str) and len(token) >= 32
+
 
 # -- _write_soul_files ─────────────────────────────────────────────────
 

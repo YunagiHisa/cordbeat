@@ -125,7 +125,10 @@ class AIBackendConfig:
     provider: str = "ollama"
     base_url: str = "http://localhost:11434"
     model: str = "llama3"
-    timeout: float = 120.0
+    # Read timeout for LLM HTTP requests.  Increase this on slow hardware or
+    # when using thinking models (Qwen3/DeepSeek-R1) that spend several minutes
+    # in their chain-of-thought phase before producing a response.
+    timeout: float = 300.0
     # Max tokens per generation request.
     # None (default) = let the server decide (uses the server's --n-predict / default).
     # Set explicitly (e.g. 4096) to override the server default.

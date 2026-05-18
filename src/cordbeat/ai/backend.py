@@ -344,27 +344,31 @@ class OpenAICompatBackend(AIBackend):
                     # produced no actual response (content=null).  Retry once with
                     # 2× the effective max_tokens to give the model budget for both
                     # thinking and the actual answer.
-                    retry_mt: int | None = (
+                    # When max_tokens was not set (server default), the server's
+                    # --n-predict limit caused the exhaustion, so we must explicitly
+                    # override it in the retry — fall back to 4096 as a safe minimum.
+                    _thinking_retry_fallback = 4096
+                    retry_mt: int = (
                         effective_max_tokens * 2
                         if effective_max_tokens is not None
-                        else None
+                        else _thinking_retry_fallback
                     )
                     logger.warning(
                         "openai_compat: content=null with reasoning_content=%d chars. "
                         "Model exhausted max_tokens in thinking phase. "
-                        "Retrying with max_tokens=%s. "
-                        "Set 'ai_backend.max_tokens: 4096' (or higher) in config.yaml "
-                        "or increase your llama.cpp server's --n-predict.",
+                        "Retrying with max_tokens=%d. "
+                        "To avoid this retry, set 'ai_backend.max_tokens: 4096'"
+                        " in config.yaml or increase --n-predict on your server.",
                         len(reasoning_content),
-                        retry_mt if retry_mt is not None else "server-default×2 N/A",
+                        retry_mt,
                     )
                     retry_payload: dict[str, Any] = {
                         "model": self._model,
                         "messages": messages,
                         "temperature": temperature,
+                        # Always set — avoids hitting the server default again.
+                        "max_tokens": retry_mt,
                     }
-                    if retry_mt is not None:
-                        retry_payload["max_tokens"] = retry_mt
                     if self._enable_thinking is not None:
                         retry_payload["chat_template_kwargs"] = {
                             "enable_thinking": self._enable_thinking
@@ -398,9 +402,13 @@ class OpenAICompatBackend(AIBackend):
                             "Increase your llama.cpp server's --n-predict, or set "
                             "'ai_backend.max_tokens: 4096' in config.yaml."
                         )
-                    except Exception:
+                    except Exception as _retry_err:
                         logger.warning(
-                            "openai_compat retry request failed", exc_info=True
+                            "openai_compat retry request failed (%s). "
+                            "If this is a ReadTimeout, increase 'ai_backend.timeout' "
+                            "(default 300 s) or your llama.cpp server's --n-predict.",
+                            type(_retry_err).__name__,
+                            exc_info=True,
                         )
                     result = ""
                 else:

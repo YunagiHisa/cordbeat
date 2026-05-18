@@ -427,9 +427,14 @@ class CoreEngine:
 
         try:
             result = await skill.execute(params, memory=self._memory)
-            output = str(result.get("output", result.get("result", ""))).strip()
+            # Prefer explicit output/result key; fall back to compact JSON of
+            # the whole result dict (preserves information, no whitespace waste).
+            output = result.get("output") or result.get("result") or ""
+            if not output:
+                output = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+            output = str(output).strip()
             if output:
-                inline = f"\n[{skill_name}: {output[:800]}]"
+                inline = f"\n[{skill_name}: {output[:2000]}]"
                 response = _SKILL_TAG_RE.sub(inline, response, count=1)
             else:
                 response = _SKILL_TAG_RE.sub("", response, count=1)

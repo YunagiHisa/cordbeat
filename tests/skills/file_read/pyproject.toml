@@ -1,0 +1,6 @@
+[project]
+name = "cordbeat-skill-file-read"
+version = "0.1.0"
+description = "CordBeat builtin skill: read a file from the workspace"
+requires-python = ">=3.11"
+dependencies = []

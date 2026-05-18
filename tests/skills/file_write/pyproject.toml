@@ -1,0 +1,6 @@
+[project]
+name = "cordbeat-skill-file-write"
+version = "0.1.0"
+description = "CordBeat builtin skill: write a file to the workspace"
+requires-python = ">=3.11"
+dependencies = []

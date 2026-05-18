@@ -180,8 +180,16 @@ async def execute(
     except (ValueError, TypeError):
         response_data = raw_body
 
+    # Retain only informative headers; strip noise (cookies, cache-control, etc.)
+    _keep_headers = frozenset(
+        {"content-type", "content-length", "x-request-id", "x-error"}
+    )
+    filtered_headers = {
+        k: v for k, v in resp.headers.items() if k.lower() in _keep_headers
+    }
+
     return {
         "status_code": resp.status_code,
-        "headers": dict(resp.headers),
+        "headers": filtered_headers,
         "body": response_data,
     }

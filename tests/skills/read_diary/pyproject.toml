@@ -1,0 +1,6 @@
+[project]
+name = "cordbeat-skill-read-diary"
+version = "0.1.0"
+description = "CordBeat builtin skill: surface today's diary entries"
+requires-python = ">=3.11"
+dependencies = []

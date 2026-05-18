@@ -267,10 +267,15 @@ class OpenAICompatBackend(AIBackend):
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ) -> str:
-        # config.max_tokens overrides the caller-supplied default if set
-        effective_max_tokens: int | None = (
-            self._max_tokens if self._max_tokens is not None else max_tokens
-        )
+        # When config.max_tokens is unset (None), we deliberately do NOT include
+        # max_tokens in the request payload, letting the server's own default
+        # (e.g. llama.cpp --n-predict) decide. Sending the caller's small default
+        # (1024) would cap thinking models mid-reasoning and force the retry
+        # path. Callers that genuinely need a tight cap should set
+        # ai_backend.max_tokens explicitly in config.yaml.
+        # NOTE: the `max_tokens` parameter is intentionally ignored here.
+        _ = max_tokens
+        effective_max_tokens: int | None = self._max_tokens
         messages: list[dict[str, str]] = []
         effective_system = system
         if self._enable_thinking is False:
@@ -475,6 +480,9 @@ class OpenAICompatBackend(AIBackend):
         max_tokens: int = 1024,
     ) -> str:
         """Generate using OpenAI vision API (content array with image_url blocks)."""
+        # Same max_tokens policy as generate(): only send if config explicitly set it.
+        _ = max_tokens
+        effective_max_tokens: int | None = self._max_tokens
         messages: list[dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -492,15 +500,17 @@ class OpenAICompatBackend(AIBackend):
 
         labels = {"backend": "openai_compat", "model": self._model}
         try:
+            payload: dict[str, Any] = {
+                "model": self._model,
+                "messages": messages,
+                "temperature": temperature,
+            }
+            if effective_max_tokens is not None:
+                payload["max_tokens"] = effective_max_tokens
             async with time_block(LLM_GENERATE_LATENCY, labels):
                 resp = await self._client.post(
                     f"{self._base_url}/chat/completions",
-                    json={
-                        "model": self._model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                    },
+                    json=payload,
                 )
                 resp.raise_for_status()
                 data = resp.json()

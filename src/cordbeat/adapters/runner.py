@@ -34,6 +34,25 @@ async def _run_adapter(adapter_name: str, config_path: str) -> None:
         format=config.log.format,
     )
 
+    # Optional file logging with rotation (per-adapter log file)
+    if config.log.file:
+        from logging.handlers import RotatingFileHandler
+
+        core_log_path = Path(config.log.file)
+        adapter_log_path = core_log_path.with_name(
+            f"{core_log_path.stem}-{adapter_name}{core_log_path.suffix}"
+        )
+        adapter_log_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            adapter_log_path,
+            maxBytes=config.log.max_bytes,
+            backupCount=config.log.backup_count,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(logging.Formatter(config.log.format))
+        logging.getLogger().addHandler(file_handler)
+        logger.info("Adapter '%s' logging to %s", adapter_name, adapter_log_path)
+
     logger.debug("Loaded config from: %s", config_path)
 
     adapter_cfg = config.adapters.get(adapter_name)

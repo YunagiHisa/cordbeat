@@ -181,6 +181,47 @@ class TestOpenAICompatBackend:
         with pytest.raises(AIBackendError, match="Unexpected response format"):
             await backend.generate("test")
 
+    async def test_reasoning_content_retry_uses_min_4096_tokens(self) -> None:
+        """Thinking retry should ensure max_tokens>=4096 even when doubling.
+
+        If caller uses default max_tokens=1024, doubling to 2048 is still too
+        small for many thinking models that produce 3000+ chars in reasoning.
+        The retry should bump to at least 4096.
+        """
+        cfg = AIBackendConfig(provider="openai_compat")
+        backend = OpenAICompatBackend(cfg)
+
+        first_response = MagicMock()
+        first_response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "reasoning_content": "x" * 3000,
+                    }
+                }
+            ]
+        }
+        first_response.raise_for_status = MagicMock()
+
+        retry_response = MagicMock()
+        retry_response.json.return_value = {
+            "choices": [{"message": {"content": "answer"}}]
+        }
+        retry_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(
+            side_effect=[first_response, retry_response]
+        )
+
+        result = await backend.generate("test", max_tokens=1024)
+        assert result == "answer"
+
+        # Inspect the retry call payload — must use >=8192
+        retry_call_payload = backend._client.post.call_args_list[1][1]["json"]
+        assert retry_call_payload["max_tokens"] >= 8192
+
     async def test_reasoning_content_only_returns_empty(self) -> None:
         """When content=null but reasoning_content is present, return empty string.
 

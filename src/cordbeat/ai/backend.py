@@ -346,13 +346,17 @@ class OpenAICompatBackend(AIBackend):
                     # thinking and the actual answer.
                     # When max_tokens was not set (server default), the server's
                     # --n-predict limit caused the exhaustion, so we must explicitly
-                    # override it in the retry — fall back to 4096 as a safe minimum.
-                    _thinking_retry_fallback = 4096
-                    retry_mt: int = (
-                        effective_max_tokens * 2
-                        if effective_max_tokens is not None
-                        else _thinking_retry_fallback
-                    )
+                    # override it in the retry — fall back to 8192 as a safe minimum.
+                    # Heavy-thinking models (Qwen3, DeepSeek) routinely use
+                    # 3000-5000 chars in reasoning_content alone (~1000-1500 tokens),
+                    # plus the actual answer — 8192 gives ample headroom.
+                    _thinking_retry_fallback = 8192
+                    if effective_max_tokens is not None:
+                        retry_mt: int = max(
+                            effective_max_tokens * 2, _thinking_retry_fallback
+                        )
+                    else:
+                        retry_mt = _thinking_retry_fallback
                     logger.warning(
                         "openai_compat: content=null with reasoning_content=%d chars. "
                         "Model exhausted max_tokens in thinking phase. "
@@ -401,6 +405,19 @@ class OpenAICompatBackend(AIBackend):
                             "openai_compat retry also returned empty content. "
                             "Increase your llama.cpp server's --n-predict, or set "
                             "'ai_backend.max_tokens: 4096' in config.yaml."
+                        )
+                    except httpx.ReadTimeout:
+                        # ReadTimeout on retry is expected when the model
+                        # genuinely cannot finish in the configured timeout.
+                        # Suppress the noisy traceback — the warning text is
+                        # enough actionable signal for the user.
+                        logger.warning(
+                            "openai_compat retry timed out after %.0fs. "
+                            "Increase 'ai_backend.timeout' in config.yaml "
+                            "(currently %.0fs) or your llama.cpp server's "
+                            "--n-predict.",
+                            self._client.timeout.read or 0.0,
+                            self._client.timeout.read or 0.0,
                         )
                     except Exception as _retry_err:
                         logger.warning(

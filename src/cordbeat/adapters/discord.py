@@ -125,6 +125,11 @@ class DiscordAdapter(RetryableConnection):
                         guild_id,
                         len(synced),
                     )
+                    # Clear any previously registered global commands to avoid
+                    # duplicate slash commands when switching from global → guild sync
+                    self._tree.clear_commands(guild=None)
+                    await self._tree.sync()
+                    logger.debug("Cleared global slash commands (guild_id is set)")
                 else:
                     synced = await self._tree.sync()
                     logger.info(
@@ -621,7 +626,7 @@ class DiscordAdapter(RetryableConnection):
         except ImportError:
             await interaction.response.send_message(
                 "❌ Voice receive support is not installed "
-                "(run `uv sync --extra discord-vc`).",
+                "(run `uv sync --extra discord` to reinstall with voice support).",
                 ephemeral=True,
             )
             return

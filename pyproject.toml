@@ -36,13 +36,13 @@ cordbeat-doctor = "cordbeat.tools.doctor:main"
 cordbeat-add = "cordbeat.tools.add_cmd:cordbeat_add_cli"
 
 [project.optional-dependencies]
-discord = ["discord.py>=2.0"]
+discord = ["discord.py[voice]>=2.0", "discord-ext-voice-recv>=0.3", "numpy>=1.24", "scipy>=1.11"]
 telegram = ["python-telegram-bot>=21.0"]
 slack = ["slack-sdk>=3.27", "aiohttp>=3.9"]
 line = ["line-bot-sdk>=3.11", "aiohttp>=3.9"]
 whatsapp = ["aiohttp>=3.9"]
 signal = []
-discord-vc = ["discord.py[voice]>=2.0", "discord-ext-voice-recv>=0.3", "numpy>=1.24", "scipy>=1.11"]
+discord-vc = ["discord.py[voice]>=2.0", "discord-ext-voice-recv>=0.3", "numpy>=1.24", "scipy>=1.11"]  # kept for backward compat
 rvc = ["torch>=2.1", "transformers>=4.40", "torchaudio>=2.1", "numpy>=1.24", "scipy>=1.11"]
 stt-local = ["faster-whisper>=1.0"]
 tts-edge = ["edge-tts>=6.1"]

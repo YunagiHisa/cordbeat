@@ -121,9 +121,24 @@ async def test_prepare_raises_when_uv_missing(
     cache_root: Path, skill_dir_with_deps: Path
 ) -> None:
     mgr = SkillEnvManager(cache_root=cache_root)
-    with patch("cordbeat.skills.env.shutil.which", return_value=None):
+    with patch("cordbeat.skills.env._find_uv", return_value=None):
         with pytest.raises(SkillEnvError, match="uv is not available"):
             await mgr.prepare(skill_dir_with_deps, "myskill")
+
+
+async def test_find_uv_falls_back_to_local_bin(tmp_path: Path) -> None:
+    """When ``shutil.which`` fails (e.g. minimal systemd PATH), uv should
+    still be discovered at ``~/.local/bin/uv``."""
+    from cordbeat.skills import env as env_mod
+
+    fake_uv = tmp_path / ".local" / "bin" / "uv"
+    fake_uv.parent.mkdir(parents=True)
+    fake_uv.write_text("#!/bin/sh\n")
+    with (
+        patch("cordbeat.skills.env.shutil.which", return_value=None),
+        patch("cordbeat.skills.env.Path.home", return_value=tmp_path),
+    ):
+        assert env_mod._find_uv() == str(fake_uv)
 
 
 async def test_prepare_raises_when_uv_fails(

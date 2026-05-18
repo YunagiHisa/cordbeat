@@ -39,6 +39,36 @@ class SkillEnvError(SkillError):
 _DEFAULT_CACHE_ROOT = Path.home() / ".cordbeat" / "skill-envs"
 
 
+def _find_uv() -> str | None:
+    """Locate the ``uv`` executable.
+
+    Falls back to common install locations when ``PATH`` is minimal
+    (e.g. under systemd unit files where the user's shell PATH is not
+    inherited). Returns the absolute path, or ``None`` if not found.
+    """
+    found = shutil.which("uv")
+    if found:
+        return found
+    candidates = [
+        Path.home() / ".local" / "bin" / "uv",
+        Path.home() / ".cargo" / "bin" / "uv",
+        Path("/usr/local/bin/uv"),
+        Path("/opt/homebrew/bin/uv"),
+        Path("/snap/bin/uv"),
+    ]
+    if sys.platform == "win32":
+        candidates.extend(
+            [
+                Path.home() / ".local" / "bin" / "uv.exe",
+                Path.home() / ".cargo" / "bin" / "uv.exe",
+            ]
+        )
+    for path in candidates:
+        if path.exists() and path.is_file():
+            return str(path)
+    return None
+
+
 def _python_in(env_dir: Path) -> Path:
     if sys.platform == "win32":
         return env_dir / "Scripts" / "python.exe"
@@ -106,15 +136,22 @@ class SkillEnvManager:
         return str(python_exe)
 
     async def _build(self, env_dir: Path, python_exe: Path, deps: list[str]) -> None:
-        if shutil.which("uv") is None:
-            raise SkillEnvError("uv is not available on PATH; cannot build skill env")
+        uv_exe = _find_uv()
+        if uv_exe is None:
+            raise SkillEnvError(
+                "uv is not available on PATH; cannot build skill env. "
+                "Install uv (https://docs.astral.sh/uv/) and ensure it is on "
+                "PATH, or place it at ~/.local/bin/uv / ~/.cargo/bin/uv / "
+                "/usr/local/bin/uv."
+            )
         env_dir.parent.mkdir(parents=True, exist_ok=True)
         if env_dir.exists():
             shutil.rmtree(env_dir, ignore_errors=True)
 
-        await self._run_uv("venv", str(env_dir), "--quiet")
+        await self._run_uv(uv_exe, "venv", str(env_dir), "--quiet")
         if deps:
             await self._run_uv(
+                uv_exe,
                 "pip",
                 "install",
                 "--python",
@@ -124,9 +161,9 @@ class SkillEnvManager:
             )
 
     @staticmethod
-    async def _run_uv(*args: str) -> None:
+    async def _run_uv(uv_exe: str, *args: str) -> None:
         proc = await asyncio.create_subprocess_exec(
-            "uv",
+            uv_exe,
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

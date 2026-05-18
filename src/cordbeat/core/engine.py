@@ -13,6 +13,7 @@ from typing import Any
 
 from cordbeat.agent.soul import Soul
 from cordbeat.ai.backend import AIBackend
+from cordbeat.ai.compression import ConversationCompressor
 from cordbeat.ai.extraction import MemoryExtractor
 from cordbeat.ai.prompt import build_context, build_soul_system_prompt, sanitize
 from cordbeat.config import MemoryConfig
@@ -67,6 +68,7 @@ class CoreEngine:
         self._vision_enabled = vision_enabled
         self._timezone_name = timezone_name
         self._extractor = MemoryExtractor(ai, soul, memory, self._memory_config)
+        self._compressor = ConversationCompressor(ai)
         self._background_tasks: set[asyncio.Task[None]] = set()
         # Skills that the user has approved for this session (no re-confirmation).
         self._session_allowed_skills: set[str] = set()
@@ -186,6 +188,14 @@ class CoreEngine:
         history = await self._memory.get_recent_messages(
             user_id, limit=self._memory_config.conversation_history_limit
         )
+
+        # Compress in-memory if history is too large
+        if self._memory_config.context_compression_enabled and history:
+            history = await self._compressor.compress_in_memory(
+                history,
+                chars_threshold=self._memory_config.context_compression_chars_threshold,
+                soul_name=soul_snap["name"],
+            )
 
         system_prompt = build_soul_system_prompt(
             soul_snap, timezone_name=self._timezone_name

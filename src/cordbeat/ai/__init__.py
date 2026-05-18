@@ -11,6 +11,7 @@ from typing import Any
 
 _EXPORTS: dict[str, tuple[str, str]] = {
     "AIBackend": ("cordbeat.ai.backend", "AIBackend"),
+    "ConversationCompressor": ("cordbeat.ai.compression", "ConversationCompressor"),
     "create_backend": ("cordbeat.ai.backend", "create_backend"),
     "CachingBackend": ("cordbeat.ai.cache", "CachingBackend"),
     "MemoryExtractor": ("cordbeat.ai.extraction", "MemoryExtractor"),

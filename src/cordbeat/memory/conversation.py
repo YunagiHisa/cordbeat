@@ -93,6 +93,51 @@ class ConversationStore:
         await self._db.commit()
         return cursor.rowcount
 
+    async def count_messages(self, user_id: str) -> int:
+        """Return the total number of stored messages for *user_id*."""
+        cursor = await self._db.execute(
+            "SELECT COUNT(*) FROM conversation_messages WHERE user_id = ?",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
+    async def get_oldest_messages(
+        self,
+        user_id: str,
+        limit: int,
+    ) -> list[dict[str, str]]:
+        """Return the *limit* oldest messages for *user_id* (ascending)."""
+        cursor = await self._db.execute(
+            "SELECT id, role, content, created_at "
+            "FROM conversation_messages "
+            "WHERE user_id = ? "
+            "ORDER BY created_at ASC LIMIT ?",
+            (user_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": str(row["id"]),
+                "role": row["role"],
+                "content": row["content"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    async def delete_messages_with_ids(self, ids: list[str]) -> int:
+        """Delete messages by primary-key IDs.  Returns deleted count."""
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        cursor = await self._db.execute(
+            f"DELETE FROM conversation_messages WHERE id IN ({placeholders})",
+            ids,
+        )
+        await self._db.commit()
+        return cursor.rowcount
+
     async def clear_conversation_history(self, user_id: str) -> int:
         """Delete all conversation messages for a user. Returns row count deleted."""
         cursor = await self._db.execute(

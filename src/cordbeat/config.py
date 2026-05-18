@@ -94,6 +94,15 @@ class MemoryConfig:
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dim: int = 384
     dedup_distance_threshold: float = 0.0
+    # Context compression: summarise old conversation chunks with LLM
+    # instead of silently dropping them.  Runs during the sleep phase.
+    context_compression_enabled: bool = True
+    # Real-time: summarise in-memory if conversation history exceeds this many chars.
+    context_compression_chars_threshold: int = 4000
+    # Sleep: summarise when a user has more messages than this.
+    context_compression_threshold: int = 60
+    # Number of oldest messages to summarise per compression pass.
+    context_compression_chunk: int = 20
 
 
 @dataclass

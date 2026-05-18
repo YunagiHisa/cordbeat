@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cordbeat.ai.backend import AIBackend
+from cordbeat.ai.compression import ConversationCompressor
 from cordbeat.config import MemoryConfig
 from cordbeat.memory.core import MemoryStore
 from cordbeat.models import MemoryEntry, MemoryLayer, UserSummary
@@ -87,6 +88,11 @@ class SleepPhase:
         for user in users:
             await self._promote_episodic_memories(user.user_id)
 
+        # 2b. Compress old conversation messages → episodic memory
+        if self._memory_config.context_compression_enabled:
+            for user in users:
+                await self._compress_old_messages(user, soul_snap)
+
         # 3. Phase4: Temporal recall (check multiple lookback windows)
         for user in users:
             await self._precompute_temporal_recall(user)
@@ -136,6 +142,55 @@ class SleepPhase:
             logger.exception("Failed to expire old proposals")
 
         logger.info("Sleep phase completed")
+
+    async def _compress_old_messages(
+        self,
+        user: UserSummary,
+        soul_snap: dict[str, Any],
+    ) -> None:
+        """Summarise oldest messages and store as episodic memory."""
+        try:
+            total = await self._memory.count_messages(user.user_id)
+            if total <= self._memory_config.context_compression_threshold:
+                return
+
+            chunk_size = self._memory_config.context_compression_chunk
+            oldest = await self._memory.get_oldest_messages(
+                user.user_id, chunk_size
+            )
+            if not oldest:
+                return
+
+            compressor = ConversationCompressor(self._ai)
+            summary = await compressor.compress_chunk_to_text(
+                oldest, soul_name=soul_snap["name"]
+            )
+            if not summary:
+                logger.warning(
+                    "Compression LLM returned nothing for user %s", user.user_id
+                )
+                return
+
+            entry = MemoryEntry(
+                id=uuid.uuid4().hex,
+                user_id=user.user_id,
+                layer=MemoryLayer.EPISODIC,
+                content=summary,
+            )
+            await self._memory.add_episodic_memory(entry)
+
+            ids = [m["id"] for m in oldest]
+            deleted = await self._memory.delete_messages_with_ids(ids)
+            logger.info(
+                "Compressed %d msgs → episodic for user %s (deleted %d rows)",
+                len(oldest),
+                user.user_id,
+                deleted,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to compress old messages for user %s", user.user_id
+            )
 
     async def _write_diary(
         self,

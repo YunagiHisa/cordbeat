@@ -289,6 +289,20 @@ class MemoryStore:
         """Delete all conversation messages for a user."""
         return await self._conversations.clear_conversation_history(user_id)
 
+    async def count_messages(self, user_id: str) -> int:
+        """Return total number of stored conversation messages for *user_id*."""
+        return await self._conversations.count_messages(user_id)
+
+    async def get_oldest_messages(
+        self, user_id: str, limit: int
+    ) -> list[dict[str, str]]:
+        """Return the *limit* oldest conversation messages (ascending)."""
+        return await self._conversations.get_oldest_messages(user_id, limit)
+
+    async def delete_messages_with_ids(self, ids: list[str]) -> int:
+        """Delete conversation messages by ID.  Returns deleted count."""
+        return await self._conversations.delete_messages_with_ids(ids)
+
     # ── Semantic / episodic memory (delegates to VectorMemory) ───
 
     async def add_semantic_memory(self, entry: MemoryEntry) -> str:

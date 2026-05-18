@@ -142,12 +142,9 @@ class DiscordAdapter(RetryableConnection):
                 logger.exception("Failed to sync slash commands")
             asyncio.create_task(self._connect_to_core())
 
-        @self._bot.event
-        async def on_interaction(interaction: Any) -> None:
-            try:
-                await self._tree.on_interaction(interaction)
-            except Exception:
-                logger.exception("Interaction handling error")
+        # CommandTree is auto-registered with the Client in discord.py 2.x.
+        # No manual on_interaction handler is needed — the tree processes slash
+        # commands internally via Client._handle_interaction.
 
         @self._bot.event
         async def on_message(message: discord.Message) -> None:

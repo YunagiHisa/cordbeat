@@ -17,6 +17,7 @@ from cordbeat.ai.validation import (
 )
 from cordbeat.config import HeartbeatConfig, MemoryConfig
 from cordbeat.core.gateway import GatewayServer, MessageQueueProtocol
+from cordbeat.exceptions import AIBackendError
 from cordbeat.memory.core import MemoryStore
 from cordbeat.models import (
     GatewayMessage,
@@ -180,6 +181,10 @@ class HeartbeatLoop:
                 async with time_block(HEARTBEAT_TICK_LATENCY):
                     interval_minutes = await self._tick()
                 inc_counter(HEARTBEAT_TICK_TOTAL, {"outcome": "ok"})
+            except AIBackendError as exc:
+                logger.warning("HEARTBEAT tick AI error: %s", exc)
+                inc_counter(HEARTBEAT_TICK_TOTAL, {"outcome": "error"})
+                interval_minutes = self._config.default_interval_minutes
             except Exception:
                 logger.exception("HEARTBEAT tick error")
                 inc_counter(HEARTBEAT_TICK_TOTAL, {"outcome": "error"})

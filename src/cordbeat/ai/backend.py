@@ -167,6 +167,21 @@ class OllamaBackend(AIBackend):
                 )
                 resp.raise_for_status()
                 data = resp.json()
+        except httpx.ReadTimeout as exc:
+            inc_counter(
+                LLM_GENERATE_TOTAL, {"backend": "ollama", "outcome": "timeout"}
+            )
+            logger.warning(
+                "ollama request timed out after %.0fs (model=%s prompt=%d chars). "
+                "Increase 'ai_backend.timeout' in config.yaml or use a faster model.",
+                self._client.timeout.read or 0.0,
+                self._model,
+                len(prompt),
+            )
+            raise AIBackendError(
+                f"Ollama request timed out after "
+                f"{self._client.timeout.read or 0.0:.0f}s"
+            ) from exc
         except Exception:
             inc_counter(LLM_GENERATE_TOTAL, {"backend": "ollama", "outcome": "error"})
             raise
@@ -215,6 +230,22 @@ class OllamaBackend(AIBackend):
                 )
                 resp.raise_for_status()
                 data = resp.json()
+        except httpx.ReadTimeout as exc:
+            inc_counter(
+                LLM_GENERATE_TOTAL, {"backend": "ollama", "outcome": "timeout"}
+            )
+            logger.warning(
+                "ollama vision request timed out after %.0fs "
+                "(model=%s prompt=%d chars images=%d).",
+                self._client.timeout.read or 0.0,
+                self._model,
+                len(prompt),
+                len(images),
+            )
+            raise AIBackendError(
+                f"Ollama vision request timed out after "
+                f"{self._client.timeout.read or 0.0:.0f}s"
+            ) from exc
         except Exception:
             inc_counter(LLM_GENERATE_TOTAL, {"backend": "ollama", "outcome": "error"})
             raise
@@ -318,6 +349,23 @@ class OpenAICompatBackend(AIBackend):
                 )
                 resp.raise_for_status()
                 data = resp.json()
+        except httpx.ReadTimeout as exc:
+            inc_counter(
+                LLM_GENERATE_TOTAL,
+                {"backend": "openai_compat", "outcome": "timeout"},
+            )
+            logger.warning(
+                "openai_compat request timed out after %.0fs "
+                "(model=%s prompt=%d chars). Increase 'ai_backend.timeout' "
+                "in config.yaml or use a faster model / smaller context.",
+                self._client.timeout.read or 0.0,
+                self._model,
+                len(prompt),
+            )
+            raise AIBackendError(
+                f"LLM request timed out after "
+                f"{self._client.timeout.read or 0.0:.0f}s"
+            ) from exc
         except Exception:
             inc_counter(
                 LLM_GENERATE_TOTAL,
@@ -514,6 +562,24 @@ class OpenAICompatBackend(AIBackend):
                 )
                 resp.raise_for_status()
                 data = resp.json()
+        except httpx.ReadTimeout as exc:
+            inc_counter(
+                LLM_GENERATE_TOTAL,
+                {"backend": "openai_compat", "outcome": "timeout"},
+            )
+            logger.warning(
+                "openai_compat vision request timed out after %.0fs "
+                "(model=%s prompt=%d chars images=%d). Increase "
+                "'ai_backend.timeout' in config.yaml or use a faster model.",
+                self._client.timeout.read or 0.0,
+                self._model,
+                len(prompt),
+                len(images),
+            )
+            raise AIBackendError(
+                f"LLM vision request timed out after "
+                f"{self._client.timeout.read or 0.0:.0f}s"
+            ) from exc
         except Exception:
             inc_counter(
                 LLM_GENERATE_TOTAL,

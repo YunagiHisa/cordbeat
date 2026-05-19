@@ -17,6 +17,7 @@ from cordbeat.ai.compression import ConversationCompressor
 from cordbeat.ai.extraction import MemoryExtractor
 from cordbeat.ai.prompt import build_context, build_soul_system_prompt, sanitize
 from cordbeat.config import MemoryConfig
+from cordbeat.exceptions import AIBackendError
 from cordbeat.memory.core import MemoryStore
 from cordbeat.models import (
     GatewayMessage,
@@ -360,6 +361,16 @@ class CoreEngine:
                 await self._gateway.send_to_adapter(message.adapter_id, error_reply)
                 return None
             return cleaned
+        except AIBackendError as exc:
+            logger.warning("AI generation failed: %s", exc)
+            error_reply = GatewayMessage(
+                type=MessageType.ERROR,
+                adapter_id=message.adapter_id,
+                platform_user_id=message.platform_user_id,
+                content="AI generation failed. Please try again later.",
+            )
+            await self._gateway.send_to_adapter(message.adapter_id, error_reply)
+            return None
         except Exception:
             logger.exception("AI generation failed")
             error_reply = GatewayMessage(

@@ -9,6 +9,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`fetch_url` skill.** New builtin skill for reading a specific URL when the
+  AI knows the exact page it wants (e.g. summarising an article the user
+  shared). Strips HTML to text, decodes common entities, normalises
+  whitespace, and truncates to a configurable `max_length` (default 8000,
+  hard cap 64000). Reuses the same SSRF defenses as `api_call`: scheme
+  allow-list (http/https), DNS resolution + private/loopback/link-local/
+  multicast/metadata IP blocking, redirect disabling, and Host-header pinning
+  to prevent DNS rebinding. Safety level `safe`. The `web_search` skill
+  description was also clarified to tell the AI to use `fetch_url` for direct
+  URL access (previously the AI sometimes passed URLs to `web_search`, which
+  silently treated them as query strings).
 - **Draw DSL skill — E-3.** New builtin skill `skills/draw/` implements a
   domain-specific language for programmatic image generation with Pillow. Supported
   commands: `SIZE`, `CANVAS`, `CIRCLE`, `RECT`, `LINE`, `TRIANGLE`, `STAR`,
@@ -67,6 +78,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `_detect_image_mime()` helper infers JPEG/PNG/GIF/WebP from magic bytes.
 
 ### Fixed
+- **HEARTBEAT self-heals platform link for legacy users.** Heartbeats
+  targeted at users created before commit `310deb4` (which lacked
+  `platform_links` rows because the internal `user_id` was set to the
+  platform identifier itself, e.g. a Discord snowflake or `cli_user`) now
+  fall back to using `target_user_id` directly as the platform id and
+  backfill the missing link row so subsequent resolves succeed. Previously
+  these heartbeats logged `Cannot resolve platform_user_id` forever and were
+  never delivered.
 - **Path traversal in Draw skill `SAVE` command.** `SAVE <path>` previously
   accepted arbitrary filenames including `../../evil` and absolute paths. The fix
   strips all directory components with `Path(arg).name`, always writes into the

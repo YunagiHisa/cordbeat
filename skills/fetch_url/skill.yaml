@@ -1,0 +1,26 @@
+name: fetch_url
+description: "指定URLのWebページを取得し、本文テキストを返す（記事の閲覧・要約用）"
+description_en: "Fetch a URL and return its readable text content (for reading or summarizing articles)"
+version: "1.0.0"
+author: "cordbeat"
+
+usage: |
+  ユーザーから渡されたURLや、web_searchの結果のURLを実際に開いて
+  本文を読みたいときに使う。HTMLタグは除去され、本文テキストのみが返る。
+  検索エンジンへのクエリには使えない — クエリ検索には web_search を使うこと。
+
+parameters:
+  - name: url
+    type: string
+    required: true
+    description: "取得したいページの完全なURL（http:// または https://）"
+  - name: max_length
+    type: integer
+    required: false
+    description: "返却する本文の最大文字数（デフォルト: 8000）"
+
+safety:
+  level: safe
+  sandbox: false
+  network: true
+  filesystem: false

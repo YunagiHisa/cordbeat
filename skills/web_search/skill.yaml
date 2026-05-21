@@ -1,18 +1,20 @@
 name: web_search
-description: "Web検索を行い結果を返す"
-description_en: "Perform a web search and return results"
+description: "検索キーワードを渡してWeb検索を行い、関連ページのタイトル・URL・要約のリストを返す（URLを直接開く用途には fetch_url を使うこと）"
+description_en: "Search the web by keyword and return a list of related pages (title/URL/snippet). To open a specific URL, use fetch_url instead."
 version: "1.0.0"
 author: "cordbeat"
 
 usage: |
-  ウェブ上の情報を検索したいときに使う。
+  ウェブ上の情報をキーワードで検索したいときに使う。
   最新情報・ニュース・一般的な知識の確認に有効。
+  注意: queryには「検索キーワード」を渡すこと。URLを直接開きたい場合は
+  fetch_url スキルを使うこと（web_searchにURLを渡しても何も返らない）。
 
 parameters:
   - name: query
     type: string
     required: true
-    description: "検索クエリ"
+    description: "検索キーワード（URLではなく自然言語の検索語を渡すこと）"
   - name: max_results
     type: integer
     required: false

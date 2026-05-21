@@ -17,7 +17,7 @@ from cordbeat.ai.validation import (
 )
 from cordbeat.config import HeartbeatConfig, MemoryConfig
 from cordbeat.core.gateway import GatewayServer, MessageQueueProtocol
-from cordbeat.exceptions import AIBackendError
+from cordbeat.exceptions import AIBackendError, MemorySubsystemError
 from cordbeat.memory.core import MemoryStore
 from cordbeat.models import (
     GatewayMessage,
@@ -479,12 +479,33 @@ class HeartbeatLoop:
             decision.target_adapter_id,
         )
         if not platform_user_id:
-            logger.warning(
-                "Cannot resolve platform_user_id for user=%s adapter=%s",
-                decision.target_user_id,
-                decision.target_adapter_id,
-            )
-            return
+            # Self-heal for legacy users (pre-#310deb4): historically the
+            # internal user_id was set to the platform_user_id itself
+            # (e.g. a Discord snowflake or "cli_user") and no platform_link
+            # row was ever created. If we know nothing about this user via
+            # platform_links, treat target_user_id as the platform identifier
+            # and backfill the link so future heartbeats resolve cleanly.
+            platform_user_id = decision.target_user_id
+            try:
+                await self._memory.link_platform(
+                    decision.target_user_id,
+                    decision.target_adapter_id,
+                    platform_user_id,
+                )
+                logger.info(
+                    "Backfilled platform_link for legacy user=%s adapter=%s",
+                    decision.target_user_id,
+                    decision.target_adapter_id,
+                )
+            except MemorySubsystemError as exc:
+                logger.warning(
+                    "Cannot resolve or backfill platform_user_id "
+                    "for user=%s adapter=%s: %s",
+                    decision.target_user_id,
+                    decision.target_adapter_id,
+                    exc,
+                )
+                return
 
         message = GatewayMessage(
             type=MessageType.HEARTBEAT_MESSAGE,

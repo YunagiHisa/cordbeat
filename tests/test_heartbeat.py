@@ -248,7 +248,8 @@ class TestExecuteDecision:
         heartbeat: HeartbeatLoop,
         mock_gateway: AsyncMock,
     ) -> None:
-        """No platform link → warning, no send."""
+        """No platform link → self-heal by treating target_user_id as the
+        platform id (legacy users pre-310deb4 lacked platform_link rows)."""
         decision = HeartbeatDecision(
             action=HeartbeatAction.MESSAGE,
             content="Hello!",
@@ -256,7 +257,7 @@ class TestExecuteDecision:
             target_adapter_id="discord",
         )
         await heartbeat._execute_decision(decision)
-        mock_gateway.send_to_adapter.assert_not_called()
+        mock_gateway.send_to_adapter.assert_called_once()
 
     async def test_action_message_missing_target(
         self,
@@ -2415,3 +2416,64 @@ class TestSkillCreationProposal:
         assert "requires_confirmation" in yaml_content
         # AI cannot set dangerous level
         assert "dangerous" not in yaml_content
+
+
+# ── Heartbeat message send: platform_user_id self-heal ───────────────
+
+
+class TestSendHeartbeatMessagePlatformLink:
+    async def test_resolves_existing_platform_link(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.link_platform("uid-1", "discord", "snowflake-123")
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.MESSAGE,
+            content="hi",
+            target_user_id="uid-1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._send_heartbeat_message(decision)
+        mock_gateway.send_to_adapter.assert_awaited_once()
+        _, sent_msg = mock_gateway.send_to_adapter.await_args.args
+        assert sent_msg.platform_user_id == "snowflake-123"
+
+    async def test_self_heals_legacy_user_without_link(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Legacy users (pre-310deb4) lack platform_link rows; the loop
+        should treat target_user_id as the platform id and backfill."""
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.MESSAGE,
+            content="hello legacy",
+            target_user_id="294731191007969280",
+            target_adapter_id="discord",
+        )
+        await heartbeat._send_heartbeat_message(decision)
+        mock_gateway.send_to_adapter.assert_awaited_once()
+        _, sent_msg = mock_gateway.send_to_adapter.await_args.args
+        assert sent_msg.platform_user_id == "294731191007969280"
+
+        resolved = await memory.resolve_platform_user(
+            "294731191007969280", "discord"
+        )
+        assert resolved == "294731191007969280"
+
+    async def test_missing_target_skips_send(
+        self,
+        heartbeat: HeartbeatLoop,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.MESSAGE,
+            content="orphan",
+            target_user_id=None,
+            target_adapter_id=None,
+        )
+        await heartbeat._send_heartbeat_message(decision)
+        mock_gateway.send_to_adapter.assert_not_awaited()

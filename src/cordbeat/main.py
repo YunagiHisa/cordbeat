@@ -9,7 +9,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import threading
 from pathlib import Path
 from typing import Any
 
@@ -35,33 +34,13 @@ if sys.platform == "win32":
 
 def _resolve_config_path() -> str:
     """Find the config file, or run the setup wizard if none exists."""
-    # Explicit argument overrides everything, but only if it looks like a file
-    # path (not a subcommand like "config", "service", "chat", etc.).
+    # Explicit argument overrides everything
     if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
-        candidate = sys.argv[1]
-        p = Path(candidate)
-        if (
-            p.is_file()
-            or os.sep in candidate
-            or "/" in candidate
-            or candidate.endswith(".yaml")
-        ):
-            return candidate
+        return sys.argv[1]
 
     # Try ~/.cordbeat/config.yaml
     home_config = cordbeat_home() / "config.yaml"
     if home_config.is_file():
-        cwd_config = Path("config.yaml")
-        if cwd_config.is_file():
-            # Both exist — warn so users aren't confused about which is active
-            import warnings
-
-            warnings.warn(
-                f"Two config files found: {home_config} (active) and {cwd_config} "
-                f"(ignored). CordBeat always uses ~/.cordbeat/config.yaml. "
-                f"You can safely delete {cwd_config} to avoid confusion.",
-                stacklevel=1,
-            )
         return str(home_config)
 
     # Try CWD config.yaml (backward compat)
@@ -191,6 +170,7 @@ async def main(
         skills=skills,
         gateway=gateway,
         memory_config=config.memory,
+        react_config=config.react,
         vision_enabled=config.ai_backend.vision_enabled,
         timezone_name=config.heartbeat.timezone,
     )
@@ -225,43 +205,12 @@ async def main(
 
     # ── Graceful shutdown ─────────────────────────────────────────
     stop_event = asyncio.Event()
-    _shutdown_started = False
 
     def _signal_handler() -> None:
-        nonlocal _shutdown_started
-        if _shutdown_started:
-            # Second Ctrl+C during graceful shutdown → force-quit immediately.
-            # This matches the standard Unix convention where a second SIGINT
-            # means "I really want out now".
-            logger.warning("Forced exit (second interrupt during shutdown)")
-            os._exit(130)  # 130 = 128 + SIGINT, conventional exit code
         logger.info("Shutdown signal received")
-        _shutdown_started = True
         stop_event.set()
 
     loop = asyncio.get_running_loop()
-
-    # Suppress RecursionError from asyncio internal callbacks (Python 3.12 bug:
-    # Task.cancel() recursion in deep task trees printed as "Exception in callback").
-    _orig_exc_handler = loop.get_exception_handler()
-
-    def _loop_exc_handler(
-        lp: asyncio.AbstractEventLoop, context: dict[str, Any]
-    ) -> None:
-        exc = context.get("exception")
-        if isinstance(exc, RecursionError):
-            logger.warning(
-                "RecursionError in asyncio callback suppressed "
-                "(Python 3.12 task-cancel depth bug)"
-            )
-            return
-        if _orig_exc_handler is not None:
-            _orig_exc_handler(lp, context)
-        else:
-            lp.default_exception_handler(context)
-
-    loop.set_exception_handler(_loop_exc_handler)
-
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, _signal_handler)
@@ -308,14 +257,8 @@ async def main(
     ) -> None:
         try:
             await asyncio.wait_for(coro_or_task, timeout=timeout)
-        except TimeoutError:
+        except (TimeoutError, asyncio.CancelledError):
             logger.warning("Shutdown timeout for %s (%.0fs)", label, timeout)
-        except asyncio.CancelledError:
-            pass  # expected when task was explicitly cancelled
-        except RecursionError:
-            # Python 3.12 bug: deep asyncio task graphs can overflow the
-            # call stack during cancel() propagation.  Log and continue.
-            logger.warning("RecursionError during shutdown of %s (ignored)", label)
         except Exception:
             logger.exception("Error during shutdown of %s", label)
 
@@ -327,21 +270,6 @@ async def main(
         await _cancel_with_timeout(metrics_server.stop(), "metrics_server")
     await ai.aclose()
     await memory.close()
-
-    # Cancel any tasks that outlived explicit shutdown to unblock asyncio.run()
-    # cleanup (e.g. loop.shutdown_default_executor).  ChromaDB, aiosqlite, and
-    # httpx may leave background tasks that would otherwise hang the process.
-    current = asyncio.current_task()
-    pending = {t for t in asyncio.all_tasks() if t is not current}
-    if pending:
-        logger.debug("Cancelling %d lingering task(s) before exit", len(pending))
-        for t in pending:
-            t.cancel()
-        try:
-            await asyncio.gather(*pending, return_exceptions=True)
-        except RecursionError:
-            pass  # deep task graphs on Python 3.12 — safe to ignore here
-
     logger.info("CordBeat stopped")
 
 
@@ -389,350 +317,18 @@ async def main_with_cli(config_path: str) -> None:
             pass
 
 
-_HELP = """\
-CordBeat — local-first autonomous AI agent
-
-Usage:
-  cordbeat                     Start server + interactive CLI chat (default)
-  cordbeat server              Start the CordBeat server only (headless)
-  cordbeat setup               Run the interactive setup wizard
-  cordbeat doctor              Check system health
-  cordbeat config              Show current configuration summary
-  cordbeat config edit         Open config.yaml in $EDITOR
-  cordbeat model               Switch AI provider / model
-  cordbeat service install     Register CordBeat as a system service (auto-start)
-  cordbeat service start       Start the registered service
-  cordbeat service stop        Stop the running service
-  cordbeat service status      Show service status
-  cordbeat service uninstall   Remove the service registration
-  cordbeat update              Update CordBeat to the latest version
-  cordbeat uninstall           Remove CordBeat service + data directory
-
-Separate commands:
-  cordbeat-cli                 Connect CLI chat to a running CordBeat server
-  cordbeat-discord             Start the Discord adapter (connects to running server)
-  cordbeat-telegram            Start the Telegram adapter
-"""
-
-
-def _cmd_model() -> None:
-    """Interactive provider/model switcher — updates config.yaml."""
-    config_path = _resolve_config_path()
-
-    try:
-        import yaml  # noqa: PLC0415
-
-        with open(config_path) as f:
-            data = yaml.safe_load(f) or {}
-    except Exception as exc:
-        print(f"Failed to load config: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
-
-    ai = data.get("ai_backend", {})
-    current_provider = ai.get("provider", "ollama")
-    current_model = ai.get("model", "")
-    print(f"Current: provider={current_provider}  model={current_model}")
-    print()
-
-    providers = [
-        ("ollama", "Ollama (local, default)"),
-        ("openai_compat", "OpenAI-compat (LM Studio, llama.cpp, vLLM, etc.)"),
-        ("anthropic", "Anthropic Claude (cloud)"),
-        ("openrouter", "OpenRouter (200+ models via cloud)"),
-    ]
-    print("Select provider:")
-    for i, (key, label) in enumerate(providers, 1):
-        marker = " *" if key == current_provider else ""
-        print(f"  {i}. {label}{marker}")
-    choice = input("\nEnter number (Enter = keep current): ").strip()
-
-    if choice:
-        try:
-            idx = int(choice) - 1
-            if not 0 <= idx < len(providers):
-                raise ValueError
-        except ValueError:
-            print("Invalid choice.", file=sys.stderr)
-            raise SystemExit(1)
-        new_provider = providers[idx][0]
-    else:
-        new_provider = current_provider
-
-    # Suggest model based on provider
-    new_model = ""
-    if new_provider == "ollama":
-        # Try to list models from the running Ollama API
-        base_url = ai.get("base_url", "http://localhost:11434")
-        print(f"\nFetching models from {base_url}…")
-        try:
-            import urllib.request  # noqa: PLC0415
-
-            with urllib.request.urlopen(
-                f"{base_url}/api/tags", timeout=5
-            ) as resp:
-                import json as _json  # noqa: PLC0415
-
-                tags = _json.loads(resp.read())
-            models_list: list[str] = [
-                m["name"] for m in tags.get("models", [])
-            ]
-            if models_list:
-                print("\nAvailable Ollama models:")
-                for j, m in enumerate(models_list, 1):
-                    marker = " *" if m == current_model else ""
-                    print(f"  {j}. {m}{marker}")
-                model_choice = input(
-                    "\nEnter number or model name (Enter = keep current): "
-                ).strip()
-                if model_choice:
-                    try:
-                        mi = int(model_choice) - 1
-                        if 0 <= mi < len(models_list):
-                            new_model = models_list[mi]
-                        else:
-                            new_model = model_choice
-                    except ValueError:
-                        new_model = model_choice
-            else:
-                new_model = input(
-                    f"Model name (Enter = keep '{current_model}'): "
-                ).strip()
-        except Exception:
-            new_model = input(
-                f"Model name (Enter = keep '{current_model}'): "
-            ).strip()
-    elif new_provider == "anthropic":
-        defaults = [
-            "claude-opus-4-5",
-            "claude-sonnet-4-5",
-            "claude-haiku-4-5",
-            "claude-3-5-sonnet-20241022",
-        ]
-        print("\nCommon Anthropic models:")
-        for j, m in enumerate(defaults, 1):
-            print(f"  {j}. {m}")
-        model_input = input(
-            f"\nModel (Enter = keep '{current_model or defaults[0]}'): "
-        ).strip()
-        if model_input:
-            try:
-                mi = int(model_input) - 1
-                new_model = defaults[mi] if 0 <= mi < len(defaults) else model_input
-            except ValueError:
-                new_model = model_input
-        else:
-            new_model = current_model or defaults[0]
-    elif new_provider == "openrouter":
-        new_model = input(
-            f"Model slug (e.g. mistralai/mistral-7b-instruct, "
-            f"Enter = keep '{current_model}'): "
-        ).strip()
-    else:
-        new_model = input(
-            f"Model name (Enter = keep '{current_model}'): "
-        ).strip()
-
-    if not new_model:
-        new_model = current_model
-
-    # Apply and persist
-    if "ai_backend" not in data:
-        data["ai_backend"] = {}
-    data["ai_backend"]["provider"] = new_provider
-    data["ai_backend"]["model"] = new_model
-
-    # Prompt for API key when switching to a cloud provider
-    if new_provider in ("anthropic", "openrouter", "openai_compat"):
-        options = data["ai_backend"].get("options", {})
-        existing_key = options.get("api_key", "")
-        prompt_label = (
-            "Anthropic API key"
-            if new_provider == "anthropic"
-            else "OpenRouter API key"
-            if new_provider == "openrouter"
-            else "API key"
-        )
-        key_input = input(
-            f"{prompt_label} (Enter = keep existing): "
-        ).strip()
-        if key_input:
-            options["api_key"] = key_input
-            data["ai_backend"]["options"] = options
-        elif not existing_key and new_provider != "openai_compat":
-            print(
-                "⚠️  No API key set. Add it later via `cordbeat config edit` "
-                "(ai_backend.options.api_key)."
-            )
-
-    try:
-        with open(config_path, "w") as f:
-            yaml.dump(data, f, allow_unicode=True, sort_keys=False)
-        print(
-            f"\n✅ Config updated: provider={new_provider}  model={new_model}"
-        )
-        print(f"   Config file: {config_path}")
-    except Exception as exc:
-        print(f"Failed to write config: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
-
-
-def _cmd_config(args: list[str]) -> None:
-    config_path = _resolve_config_path()
-    if args and args[0] == "edit":
-        editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
-        if not editor:
-            editor = "notepad" if sys.platform == "win32" else "nano"
-        os.execvp(editor, [editor, config_path])
-        return  # unreachable after exec
-    print(f"Config: {config_path}")
-    try:
-        import yaml
-
-        with open(config_path) as f:
-            data = yaml.safe_load(f)
-        ai_cfg = data.get("ai_backend", {})
-        gw_cfg = data.get("gateway", {})
-        print(f"  Backend : {ai_cfg.get('backend', '?')}")
-        print(f"  Model   : {ai_cfg.get('model', '?')}")
-        print(
-            f"  Gateway : {gw_cfg.get('host', '127.0.0.1')}:{gw_cfg.get('port', 8765)}"
-        )
-    except Exception:
-        pass
-
-
-def _cmd_update() -> None:
-    uv = shutil.which("uv") or str(Path.home() / ".local" / "bin" / "uv")
-    if Path(uv).exists() or shutil.which("uv"):
-        print("Updating CordBeat via uv…")
-        raise SystemExit(
-            subprocess.run([uv, "tool", "upgrade", "cordbeat"]).returncode
-        )
-    print("Updating CordBeat via pip…")
-    raise SystemExit(
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "cordbeat"]
-        ).returncode
-    )
-
-
-def _cmd_uninstall() -> None:
-    """Remove the CordBeat service registration and optionally wipe data."""
-    from cordbeat.tools.service import run_service_command
-
-    print("CordBeat Uninstall")
-    print("=" * 40)
-
-    # Step 1: remove the service (ignore errors — may not be installed)
-    print("\n[1/2] Removing service registration…")
-    run_service_command("uninstall")
-
-    # Step 2: optionally delete ~/.cordbeat data directory
-    home_dir = Path.home() / ".cordbeat"
-    if home_dir.exists():
-        print(f"\n[2/2] Data directory: {home_dir}")
-        print("  This contains memories, config, and logs.")
-        answer = input("  Delete data directory? [y/N] ").strip().lower()
-        if answer == "y":
-            import shutil as _shutil
-
-            _shutil.rmtree(home_dir, ignore_errors=True)
-            print(f"  🗑  Deleted {home_dir}")
-        else:
-            print("  ↳  Kept (you can delete it manually later).")
-    else:
-        print(f"\n[2/2] Data directory {home_dir} not found — skipping.")
-
-    print("\n✅ CordBeat uninstalled.")
-    print("   To fully remove the package: uv tool uninstall cordbeat")
-
-
 def cli() -> None:
-    args = sys.argv[1:]
-
-    if not args or args[0] in ("-h", "--help"):
-        print(_HELP)
-        return
-
-    sub = args[0]
-
-    if sub == "doctor":
+    # Handle subcommands
+    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
         from cordbeat.tools.doctor import run_doctor
 
         raise SystemExit(run_doctor())
 
-    if sub in ("chat", "--chat"):
-        sys.argv = [sys.argv[0]] + args[1:]
-        cli_chat()
-        return
-
-    if sub == "server":
-        # Headless server-only mode (no interactive CLI).
-        # Strip "server" from argv so _resolve_config_path sees the right arg.
-        sys.argv = [sys.argv[0]] + args[1:]
-        config_path = _resolve_config_path()
-        _watchdog = threading.Timer(30.0, lambda: os._exit(1))
-        _watchdog.daemon = True
-        try:
-            asyncio.run(main(config_path))
-        except KeyboardInterrupt:
-            _watchdog.start()
-        finally:
-            _watchdog.cancel()
-        return
-
-    if sub in ("setup", "init"):
-        from cordbeat.tools.wizard import cordbeat_init_cli
-
-        cordbeat_init_cli()
-        return
-
-    if sub == "config":
-        _cmd_config(args[1:])
-        return
-
-    if sub == "model":
-        _cmd_model()
-        return
-
-    if sub == "service":
-        action = args[1] if len(args) > 1 else "status"
-        from cordbeat.tools.service import run_service_command
-
-        adapters: list[str] | None = None
-        if action == "install":
-            # Auto-detect enabled non-CLI adapters from the config so that
-            # `cordbeat service install` registers adapter services too.
-            try:
-                _cfg_path = cordbeat_home() / "config.yaml"
-                if not _cfg_path.is_file():
-                    _cfg_path = Path("config.yaml")
-                if _cfg_path.is_file():
-                    _cfg = load_config(str(_cfg_path))
-                    adapters = [
-                        k
-                        for k, v in _cfg.adapters.items()
-                        if k != "cli" and v.enabled
-                    ]
-            except Exception:
-                pass  # best-effort; fall through to core-only install
-
-        raise SystemExit(run_service_command(action, adapters=adapters))
-
-    if sub == "update":
-        _cmd_update()
-        return
-
-    if sub == "uninstall":
-        _cmd_uninstall()
-        return
-
-    if sub.startswith("-"):
-        print(f"Unknown option: {sub}\n{_HELP}", file=sys.stderr)
-        raise SystemExit(1)
-
-    # No recognised subcommand → default: server + interactive CLI chat
-    cli_chat()
+    config_path = _resolve_config_path()
+    try:
+        asyncio.run(main(config_path))
+    except KeyboardInterrupt:
+        pass
 
 
 def cli_chat() -> None:
@@ -754,7 +350,10 @@ def cli_chat() -> None:
         print("[CordBeat] Starting server in background...")
         _start_server_background(config_path, ws_url)
 
-    cli_main(config_path)
+    try:
+        cli_main(config_path)
+    except KeyboardInterrupt:
+        pass
 
 
 def _probe_ws(url: str, timeout: float = 0.5) -> bool:
@@ -783,7 +382,6 @@ def _start_server_background(config_path: str, ws_url: str) -> None:
     if exe is not None:
         cmd: list[str] = [exe, "server", config_path]
     else:
-        # Fallback: invoke via the current interpreter
         cmd = [sys.executable, __file__, "server", config_path]
 
     popen_kwargs: dict[str, Any] = {

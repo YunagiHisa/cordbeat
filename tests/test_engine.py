@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from cordbeat.agent.soul import Soul
-from cordbeat.config import MemoryConfig
+from cordbeat.config import MemoryConfig, ReActConfig
 from cordbeat.core.engine import CoreEngine
 from cordbeat.memory import MemoryStore
 from cordbeat.models import (
@@ -19,9 +19,11 @@ from cordbeat.models import (
     MemoryLayer,
     MessageType,
     ProposalStatus,
+    SafetyLevel,
+    SkillMeta,
     SoulCaller,
 )
-from cordbeat.skills import SkillRegistry
+from cordbeat.skills import Skill, SkillRegistry
 
 
 @pytest.fixture
@@ -58,6 +60,7 @@ def mock_ai() -> AsyncMock:
         return "Hello there!"
 
     ai.generate = AsyncMock(side_effect=_generate)
+    ai.generate_chat = AsyncMock(return_value="")
     return ai
 
 
@@ -2111,3 +2114,242 @@ class TestAutoDraw:
         )
         dsl = await eng._generate_draw_dsl("a star")
         assert dsl == ""
+
+
+class TestReActLoop:
+    """Tests for the ReAct multi-step skill execution loop."""
+
+    def _make_safe_skill(self, output: str = "tool output") -> Skill:
+        meta = SkillMeta(
+            name="test_tool",
+            description="A test tool",
+            usage="",
+            safety_level=SafetyLevel.SAFE,
+        )
+
+        def execute(**kwargs: object) -> dict[str, str]:
+            return {"output": output}
+
+        class _Mod:
+            pass
+
+        mod = _Mod()
+        mod.execute = execute  # type: ignore[attr-defined]
+        return Skill(meta=meta, _test_callable=mod.execute)
+
+    def _make_engine(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+        react_enabled: bool = True,
+    ) -> CoreEngine:
+        react = ReActConfig(
+            enabled=react_enabled, max_iterations=3, max_tool_output_chars=4000
+        )
+        skills = SkillRegistry(tmp_path / "react_skills")
+        return CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=skills,
+            gateway=mock_gateway,
+            react_config=react,
+        )
+
+    async def test_no_skill_tags_passthrough(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Response with no skill tags should not call generate_chat."""
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Hello",
+        )
+        await eng.handle_message(msg)
+        mock_ai.generate_chat.assert_not_awaited()
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "Hello there!" in reply.content
+
+    async def test_single_safe_skill_calls_generate_chat(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """A [SKILL: test_tool] tag executes the tool and calls generate_chat."""
+        call_count = 0
+
+        async def _generate(**kw: object) -> str:
+            nonlocal call_count
+            call_count += 1
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "Here you go! [SKILL: test_tool | q=hello]"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(return_value="The answer is 42")
+
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        eng._skills._skills["test_tool"] = self._make_safe_skill("tool output")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Run the tool",
+        )
+        await eng.handle_message(msg)
+
+        mock_ai.generate_chat.assert_awaited_once()
+        calls = mock_gateway.send_to_adapter.call_args_list
+        contents = [c[0][1].content for c in calls]
+        assert any("The answer is 42" in c for c in contents)
+
+    async def test_non_safe_skill_skipped(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Non-safe skills are skipped; generate_chat is not called."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "[SKILL: risky_tool]"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        risky_meta = SkillMeta(
+            name="risky_tool",
+            description="Risky",
+            usage="",
+            safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
+        )
+        eng._skills._skills["risky_tool"] = Skill(meta=risky_meta)
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Do risky thing",
+        )
+        await eng.handle_message(msg)
+
+        mock_ai.generate_chat.assert_not_awaited()
+
+    async def test_react_disabled_strips_tags(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """With react disabled, skill tags are stripped from the response."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "Here is the result [SKILL: test_tool | x=1]"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+
+        eng = self._make_engine(
+            mock_ai, soul, memory, mock_gateway, tmp_path, react_enabled=False
+        )
+        eng._skills._skills["test_tool"] = self._make_safe_skill()
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Test",
+        )
+        await eng.handle_message(msg)
+
+        mock_ai.generate_chat.assert_not_awaited()
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "[SKILL:" not in reply.content
+        assert "Here is the result" in reply.content
+
+    async def test_pre_tag_text_flushed(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Text before first skill tag is sent to adapter immediately (D13)."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "Let me check. [SKILL: test_tool]"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(return_value="Done!")
+
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        eng._skills._skills["test_tool"] = self._make_safe_skill("data")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Check it",
+        )
+        await eng.handle_message(msg)
+
+        all_calls = mock_gateway.send_to_adapter.call_args_list
+        all_contents = [c[0][1].content for c in all_calls]
+        # "Let me check." should be flushed before the final reply
+        assert any("Let me check." in c for c in all_contents)

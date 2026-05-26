@@ -137,3 +137,30 @@ def build_context(
             parts.append(f"  {prefix}: {sanitized}")
 
     return "\n".join(parts)
+
+
+def _escape_tool_response(text: str) -> str:
+    """Escape </tool_response> tags in tool output to prevent prompt injection."""
+    return text.replace("</tool_response>", "<\\/tool_response>")
+
+
+def build_react_continuation_prompt(
+    results: list[Any],
+    max_tool_output_chars: int = 4000,
+) -> str:
+    """Build the continuation user message containing tool results.
+
+    Each result is wrapped in <tool_response name="..."> tags.
+    Errors are reported as {"error": "..."} JSON.
+    Output is truncated to max_tool_output_chars per result.
+    """
+    parts: list[str] = []
+    for r in results:
+        if r.is_error:
+            safe_err = _escape_tool_response(r.output)
+            body = f'{{"error": "{safe_err}"}}'
+        else:
+            safe_out = _escape_tool_response(r.output[:max_tool_output_chars])
+            body = safe_out
+        parts.append(f'<tool_response name="{r.skill_name}">\n{body}\n</tool_response>')
+    return "\n\n".join(parts) + "\n\nPlease continue."

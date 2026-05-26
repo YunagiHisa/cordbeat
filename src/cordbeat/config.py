@@ -243,6 +243,16 @@ class MetricsConfig:
 
 
 @dataclass
+class ReActConfig:
+    """Configuration for the ReAct multi-step skill execution loop."""
+
+    enabled: bool = True
+    max_iterations: int = 3
+    max_tool_output_chars: int = 4000
+    expose_trace_to_user: bool = False
+
+
+@dataclass
 class Config:
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
     adapters: dict[str, AdapterConfig] = field(default_factory=dict)
@@ -256,6 +266,7 @@ class Config:
     stt: STTConfig = field(default_factory=STTConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
     rvc: RVCConfig = field(default_factory=RVCConfig)
+    react: ReActConfig = field(default_factory=ReActConfig)
     skills_dir: str = "skills"
     data_dir: str = "data"
 
@@ -548,6 +559,11 @@ def load_config(path: str | Path) -> Config:
         rvc_raw = {}
     rvc = _build_dataclass(RVCConfig, rvc_raw)
 
+    react_raw = raw.get("react", {})
+    if not isinstance(react_raw, dict):
+        react_raw = {}
+    react = _build_dataclass(ReActConfig, react_raw)
+
     cfg = Config(
         gateway=gateway,
         adapters=adapters,
@@ -561,6 +577,7 @@ def load_config(path: str | Path) -> Config:
         stt=stt,
         tts=tts,
         rvc=rvc,
+        react=react,
         skills_dir=raw.get("skills_dir", "skills"),
         data_dir=raw.get("data_dir", "data"),
     )

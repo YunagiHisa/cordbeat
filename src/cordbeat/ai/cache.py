@@ -136,3 +136,12 @@ class CachingBackend(AIBackend):
         return await self._inner.generate_with_vision(
             prompt, images, system, temperature, max_tokens
         )
+
+    async def generate_chat(
+        self,
+        messages: list[dict[str, Any]],
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> str:
+        """Multi-turn chat calls are not cached (complex key, low hit rate)."""
+        return await self._inner.generate_chat(messages, temperature, max_tokens)

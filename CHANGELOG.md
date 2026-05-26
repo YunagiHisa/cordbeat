@@ -9,6 +9,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **ReAct multi-step skill execution loop.** Replaces the single-pass
+  `_dispatch_skill_tags` with a full ReAct loop (`_react_loop`). The AI can now
+  call multiple `[SKILL: name | key=value]` tags per response; results are fed
+  back as `<tool_response>` blocks and the AI generates a fresh reply. Controlled
+  by the new `react:` config section (`enabled`, `max_iterations`, `max_tool_output_chars`).
+  Pre-tag text is flushed to the adapter immediately (D13); non-safe skills are
+  skipped unchanged (D15); errors are returned as `{"error": "..."}` (D6);
+  `</tool_response>` in tool output is escaped to prevent prompt injection (OQ2).
+  A new `generate_chat()` method was added to all AI backends for multi-turn
+  message-list generation.
 - **`fetch_url` skill.** New builtin skill for reading a specific URL when the
   AI knows the exact page it wants (e.g. summarising an article the user
   shared). Strips HTML to text, decodes common entities, normalises

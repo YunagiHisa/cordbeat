@@ -26,6 +26,24 @@ class FakeBackend(AIBackend):
         self.calls.append((prompt, system, temperature, max_tokens))
         return f"RESP[{len(self.calls)}]:{prompt}"
 
+    async def generate_with_vision(
+        self,
+        prompt: str,
+        images: list[str],
+        system: str = "",
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> str:
+        return f"VISION:{prompt}"
+
+    async def generate_chat(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> str:
+        return "CHAT"
+
 
 @pytest.fixture(autouse=True)
 def _reset_registry() -> None:

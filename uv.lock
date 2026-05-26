@@ -536,7 +536,10 @@ dev = [
     { name = "types-pyyaml" },
 ]
 discord = [
-    { name = "discord-py" },
+    { name = "discord-ext-voice-recv" },
+    { name = "discord-py", extra = ["voice"] },
+    { name = "numpy" },
+    { name = "scipy" },
 ]
 discord-vc = [
     { name = "discord-ext-voice-recv" },
@@ -587,8 +590,9 @@ requires-dist = [
     { name = "aiohttp", marker = "extra == 'whatsapp'", specifier = ">=3.9" },
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.29" },
+    { name = "discord-ext-voice-recv", marker = "extra == 'discord'", specifier = ">=0.3" },
     { name = "discord-ext-voice-recv", marker = "extra == 'discord-vc'", specifier = ">=0.3" },
-    { name = "discord-py", marker = "extra == 'discord'", specifier = ">=2.0" },
+    { name = "discord-py", extras = ["voice"], marker = "extra == 'discord'", specifier = ">=2.0" },
     { name = "discord-py", extras = ["voice"], marker = "extra == 'discord-vc'", specifier = ">=2.0" },
     { name = "edge-tts", marker = "extra == 'tts-edge'", specifier = ">=6.1" },
     { name = "fastapi", specifier = ">=0.100" },
@@ -596,6 +600,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "line-bot-sdk", marker = "extra == 'line'", specifier = ">=3.11" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "numpy", marker = "extra == 'discord'", specifier = ">=1.24" },
     { name = "numpy", marker = "extra == 'discord-vc'", specifier = ">=1.24" },
     { name = "numpy", marker = "extra == 'rvc'", specifier = ">=1.24" },
     { name = "openai", marker = "extra == 'openrouter'", specifier = ">=1.30" },
@@ -608,6 +613,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "questionary", specifier = ">=2.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
+    { name = "scipy", marker = "extra == 'discord'", specifier = ">=1.11" },
     { name = "scipy", marker = "extra == 'discord-vc'", specifier = ">=1.11" },
     { name = "scipy", marker = "extra == 'rvc'", specifier = ">=1.11" },
     { name = "sentence-transformers", specifier = ">=3.0" },

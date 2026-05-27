@@ -88,6 +88,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `_detect_image_mime()` helper infers JPEG/PNG/GIF/WebP from magic bytes.
 
 ### Fixed
+- **Heartbeat no longer sends unintended DMs (production incident fix).**
+  Previously the Heartbeat loop's outbound path went `Heartbeat → Gateway →
+  Discord adapter → DM fallback`: if the Discord adapter had no cached
+  `channel_id` for the target user (cache cold-start, restart, or user never
+  messaged via channel), `_send_to_discord` silently fell back to opening a
+  DM. Combined with the Heartbeat having no notion of "which channel did this
+  user last speak in", autonomous beats could surface as DMs to users who had
+  only ever interacted in a guild channel — exactly what was observed in
+  production for user `syach0323`. Fix:
+  - New `user_channels` table (memory schema v3, auto-migrated) records
+    `(user_id, adapter_id, channel_id, is_dm, last_seen_at)` on every inbound
+    message; the engine writes this in `_resolve_user`.
+  - Outbound `GatewayMessage.metadata` now carries `channel_id`, `is_dm`, and
+    `allow_dm_fallback`. The Discord adapter prefers
+    `metadata.channel_id` over its in-memory cache and only opens a DM when
+    `allow_dm_fallback=True` (default true for normal replies, **false** for
+    Heartbeat-initiated messages).
+  - New `dm_policy` adapter option gates proactive sends from the Heartbeat:
+    - `reply_only` (**new default**, *BREAKING*): only beat if we have a
+      remembered non-DM channel; otherwise skip silently.
+    - `allow_proactive`: send even with no history; allow DM fallback.
+    - `never`: never beat at all.
+  - The Heartbeat now also records its own outbound message as an `assistant`
+    turn in conversation memory (previously it disappeared from history).
+  - Deployments that *want* the old behaviour (proactive DMs) must explicitly
+    set `adapters.<id>.options.dm_policy: allow_proactive` in `config.yaml`.
+
 - **HEARTBEAT self-heals platform link for legacy users.** Heartbeats
   targeted at users created before commit `310deb4` (which lacked
   `platform_links` rows because the internal `user_id` was set to the

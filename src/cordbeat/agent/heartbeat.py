@@ -133,6 +133,7 @@ class HeartbeatLoop:
         gateway: GatewayServer,
         queue: MessageQueueProtocol,
         memory_config: MemoryConfig | None = None,
+        adapters_options: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self._config = config
         self._ai = ai
@@ -142,6 +143,7 @@ class HeartbeatLoop:
         self._gateway = gateway
         self._queue = queue
         self._memory_config = memory_config or MemoryConfig()
+        self._adapters_options = adapters_options or {}
         self._running = False
         self._sleep_done_today = False
         self._task: asyncio.Task[None] | None = None
@@ -474,6 +476,59 @@ class HeartbeatLoop:
             logger.warning("HEARTBEAT message missing target")
             return
 
+        # ── dm_policy: gate proactive sends based on last known channel ──
+        opts = self._adapters_options.get(decision.target_adapter_id, {})
+        dm_policy = str(opts.get("dm_policy", "reply_only")).lower()
+        if dm_policy not in {"reply_only", "allow_proactive", "never"}:
+            logger.warning(
+                "Unknown dm_policy=%r for adapter=%s, defaulting to reply_only",
+                dm_policy,
+                decision.target_adapter_id,
+            )
+            dm_policy = "reply_only"
+
+        if dm_policy == "never":
+            logger.info(
+                "HEARTBEAT skipped (dm_policy=never) user=%s adapter=%s",
+                decision.target_user_id,
+                decision.target_adapter_id,
+            )
+            return
+
+        try:
+            last_seen = await self._memory.get_last_seen_channel(
+                decision.target_user_id, decision.target_adapter_id
+            )
+        except Exception:
+            logger.exception("get_last_seen_channel failed")
+            last_seen = None
+
+        metadata: dict[str, Any] = {"allow_dm_fallback": False}
+        if last_seen is not None:
+            last_channel_id, last_is_dm = last_seen
+            metadata["channel_id"] = last_channel_id
+            metadata["is_dm"] = last_is_dm
+            if dm_policy == "reply_only" and last_is_dm:
+                logger.info(
+                    "HEARTBEAT skipped (dm_policy=reply_only, last channel was DM) "
+                    "user=%s adapter=%s",
+                    decision.target_user_id,
+                    decision.target_adapter_id,
+                )
+                return
+        else:
+            # No history at all: under reply_only we must not initiate.
+            if dm_policy == "reply_only":
+                logger.info(
+                    "HEARTBEAT skipped (dm_policy=reply_only, no last_seen channel) "
+                    "user=%s adapter=%s",
+                    decision.target_user_id,
+                    decision.target_adapter_id,
+                )
+                return
+            # allow_proactive with no last_seen: permit DM fallback as last resort.
+            metadata["allow_dm_fallback"] = True
+
         platform_user_id = await self._memory.resolve_platform_user(
             decision.target_user_id,
             decision.target_adapter_id,
@@ -512,16 +567,35 @@ class HeartbeatLoop:
             adapter_id=decision.target_adapter_id,
             platform_user_id=platform_user_id,
             content=decision.content,
+            metadata=metadata,
         )
         await self._gateway.send_to_adapter(
             decision.target_adapter_id,
             message,
         )
         logger.info(
-            "HEARTBEAT sent message to %s via %s",
+            "HEARTBEAT sent message to %s via %s (channel=%s, is_dm=%s)",
             decision.target_user_id,
             decision.target_adapter_id,
+            metadata.get("channel_id"),
+            metadata.get("is_dm"),
         )
+
+        # Record the proactive utterance in conversation memory so the next
+        # user message has full context that "the assistant spoke first".
+        try:
+            await self._memory.add_message(
+                decision.target_user_id,
+                "assistant",
+                decision.content,
+                decision.target_adapter_id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record heartbeat message as assistant turn "
+                "for user=%s",
+                decision.target_user_id,
+            )
 
     async def _execute_skill(self, decision: HeartbeatDecision) -> None:
         if not decision.skill_name:

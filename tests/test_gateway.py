@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 from cordbeat.config import GatewayConfig
@@ -286,7 +287,12 @@ class _ConcreteConnection(RetryableConnection):
     """Concrete subclass for testing the ABC."""
 
     async def _dispatch_core_message(
-        self, platform_user_id: str, content: str, images: list[str]
+        self,
+        platform_user_id: str,
+        content: str,
+        images: list[str],
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         raise NotImplementedError
 
@@ -305,7 +311,13 @@ class TestRetryableConnection:
         conn = _ConcreteConnection()
         dispatched: list[tuple[str, str]] = []
 
-        async def fake_dispatch(uid: str, content: str, images: list[str]) -> None:
+        async def fake_dispatch(
+            uid: str,
+            content: str,
+            images: list[str],
+            *,
+            metadata: dict[str, Any] | None = None,
+        ) -> None:
             dispatched.append((uid, content))
 
         conn._dispatch_core_message = fake_dispatch  # type: ignore[assignment]
@@ -329,7 +341,13 @@ class TestRetryableConnection:
         conn = _ConcreteConnection()
         dispatched: list[tuple[str, str]] = []
 
-        async def fake_dispatch(uid: str, content: str, images: list[str]) -> None:
+        async def fake_dispatch(
+            uid: str,
+            content: str,
+            images: list[str],
+            *,
+            metadata: dict[str, Any] | None = None,
+        ) -> None:
             dispatched.append((uid, content))
 
         conn._dispatch_core_message = fake_dispatch  # type: ignore[assignment]

@@ -185,6 +185,7 @@ async def main(
         gateway=gateway,
         queue=queue,
         memory_config=config.memory,
+        adapters_options={name: dict(a.options) for name, a in config.adapters.items()},
     )
 
     # ── Start services ────────────────────────────────────────────

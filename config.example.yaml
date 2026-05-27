@@ -153,6 +153,15 @@ adapters:
       channel_blacklist: []        # never respond in these channel IDs
       user_blocklist: []           # never respond to these user IDs
       ai_decision_keywords: []     # keywords for ai_decision mode (default: soul name)
+      # dm_policy controls whether autonomous HEARTBEAT messages may DM users
+      # who have only ever talked to the bot in a channel.
+      #   reply_only      (default, recommended): only send proactive messages
+      #                   when we have a remembered non-DM channel for the user;
+      #                   otherwise skip silently.  Prevents unintended DMs.
+      #   allow_proactive : send even without history; allow DM as last resort
+      #                    (pre-1.0 behaviour — opt back in here).
+      #   never           : never send proactive Heartbeat messages at all.
+      dm_policy: "reply_only"
       # guild_id: 123456789012345678 # set for instant slash-command sync (dev/single-server).
       #                              # leave unset for global sync (up to 1 hour to propagate)
     # -- Example: mention-only bot in a busy server --

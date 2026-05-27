@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 import aiosqlite
 
-from .common import SCHEMA, VECTOR_SCHEMA
+from .common import CHANNEL_SCHEMA, SCHEMA, VECTOR_SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,13 @@ MIGRATIONS: list[Migration] = [
         "that predate the sqlite-vec migration (ChromaDB-era fast-forwards "
         "skipped VECTOR_SCHEMA; CREATE VIRTUAL TABLE IF NOT EXISTS is idempotent)",
         sql=VECTOR_SCHEMA,
+    ),
+    Migration(
+        version=3,
+        description="user_channels table for last-seen channel per "
+        "(user, adapter); enables Heartbeat to route messages to the "
+        "channel the user actually used instead of falling back to DM",
+        sql=CHANNEL_SCHEMA,
     ),
 ]
 

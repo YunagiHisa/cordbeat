@@ -342,7 +342,12 @@ class TelegramAdapter(RetryableConnection):
             await super()._dispatch_skill_confirm(platform_user_id, data)
 
     async def _dispatch_core_message(
-        self, platform_user_id: str, content: str, images: list[str]
+        self,
+        platform_user_id: str,
+        content: str,
+        images: list[str],
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         if self._tts is not None and platform_user_id in self._voice_users:
             await self._send_voice_to_telegram(platform_user_id, content)

@@ -171,6 +171,24 @@ class MemoryStore:
     ) -> str | None:
         return await self._users.resolve_platform_user(user_id, adapter_id)
 
+    async def record_last_seen_channel(
+        self,
+        user_id: str,
+        adapter_id: str,
+        channel_id: str,
+        is_dm: bool,
+    ) -> None:
+        await self._users.record_last_seen_channel(
+            user_id, adapter_id, channel_id, is_dm
+        )
+
+    async def get_last_seen_channel(
+        self,
+        user_id: str,
+        adapter_id: str,
+    ) -> tuple[str, bool] | None:
+        return await self._users.get_last_seen_channel(user_id, adapter_id)
+
     # ── Link tokens (delegates to RecordStore) ──────────────────
 
     async def store_link_token(

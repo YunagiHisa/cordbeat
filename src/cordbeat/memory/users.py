@@ -159,3 +159,53 @@ class UserStore:
         )
         row = await cursor.fetchone()
         return row["platform_user_id"] if row else None
+
+    async def record_last_seen_channel(
+        self,
+        user_id: str,
+        adapter_id: str,
+        channel_id: str,
+        is_dm: bool,
+    ) -> None:
+        """Persist the channel a user most recently messaged us from.
+
+        Used by Heartbeat to route proactive messages back to the same
+        channel rather than falling back to DM. Silently no-ops when
+        ``channel_id`` is empty (some adapters don't expose one).
+        """
+        if not channel_id:
+            return
+        await self._db.execute(
+            "INSERT INTO user_channels "
+            "(user_id, adapter_id, channel_id, is_dm, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id, adapter_id) DO UPDATE SET "
+            "channel_id=excluded.channel_id, "
+            "is_dm=excluded.is_dm, "
+            "updated_at=excluded.updated_at",
+            (
+                user_id,
+                adapter_id,
+                channel_id,
+                1 if is_dm else 0,
+                datetime.now(tz=UTC).isoformat(),
+            ),
+        )
+        await self._db.commit()
+
+    async def get_last_seen_channel(
+        self,
+        user_id: str,
+        adapter_id: str,
+    ) -> tuple[str, bool] | None:
+        """Return (channel_id, is_dm) for the user's most recent channel,
+        or None if no channel has ever been recorded for this pair."""
+        cursor = await self._db.execute(
+            "SELECT channel_id, is_dm FROM user_channels "
+            "WHERE user_id = ? AND adapter_id = ?",
+            (user_id, adapter_id),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return row["channel_id"], bool(row["is_dm"])

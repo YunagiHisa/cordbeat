@@ -65,9 +65,7 @@ class AdapterFilter:
             channel_blacklist=frozenset(
                 str(c) for c in options.get("channel_blacklist", [])
             ),
-            user_blocklist=frozenset(
-                str(u) for u in options.get("user_blocklist", [])
-            ),
+            user_blocklist=frozenset(str(u) for u in options.get("user_blocklist", [])),
             ai_keywords=[str(k) for k in options.get("ai_decision_keywords", [])],
         )
 

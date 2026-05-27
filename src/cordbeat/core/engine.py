@@ -469,9 +469,7 @@ class CoreEngine:
 
                 try:
                     result = await skill.execute(params, memory=self._memory)
-                    output = str(
-                        result.get("output", result.get("result", ""))
-                    ).strip()
+                    output = str(result.get("output", result.get("result", ""))).strip()
                     results.append(
                         ToolCallResult(
                             skill_name=skill_name, params=params, output=output
@@ -484,9 +482,7 @@ class CoreEngine:
                         len(output),
                     )
                 except Exception:
-                    logger.warning(
-                        "ReAct: skill %r failed", skill_name, exc_info=True
-                    )
+                    logger.warning("ReAct: skill %r failed", skill_name, exc_info=True)
                     results.append(
                         ToolCallResult(
                             skill_name=skill_name,

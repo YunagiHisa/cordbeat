@@ -211,9 +211,7 @@ class TestOpenAICompatBackend:
         retry_response.raise_for_status = MagicMock()
 
         backend._client = AsyncMock()
-        backend._client.post = AsyncMock(
-            side_effect=[first_response, retry_response]
-        )
+        backend._client.post = AsyncMock(side_effect=[first_response, retry_response])
 
         result = await backend.generate("test", max_tokens=1024)
         assert result == "answer"

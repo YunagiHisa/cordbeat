@@ -227,7 +227,9 @@ class DiscordAdapter(RetryableConnection):
 
             @discord.ui.button(label="✅ Allow Once", style=discord.ButtonStyle.success)  # type: ignore[misc]
             async def allow_once(
-                self, interaction: discord.Interaction, button: discord.ui.Button[Any]  # type: ignore[type-arg]
+                self,
+                interaction: discord.Interaction,
+                button: discord.ui.Button[Any],  # type: ignore[type-arg]
             ) -> None:
                 if ws_ref is not None:
                     payload = json.dumps(
@@ -243,7 +245,9 @@ class DiscordAdapter(RetryableConnection):
                 label="🔁 Allow Session", style=discord.ButtonStyle.primary
             )
             async def allow_session(
-                self, interaction: discord.Interaction, button: discord.ui.Button[Any]  # type: ignore[type-arg]
+                self,
+                interaction: discord.Interaction,
+                button: discord.ui.Button[Any],  # type: ignore[type-arg]
             ) -> None:
                 if ws_ref is not None:
                     payload = json.dumps(
@@ -262,7 +266,9 @@ class DiscordAdapter(RetryableConnection):
 
             @discord.ui.button(label="❌ Deny", style=discord.ButtonStyle.danger)  # type: ignore[misc]
             async def deny(
-                self, interaction: discord.Interaction, button: discord.ui.Button[Any]  # type: ignore[type-arg]
+                self,
+                interaction: discord.Interaction,
+                button: discord.ui.Button[Any],  # type: ignore[type-arg]
             ) -> None:
                 if ws_ref is not None:
                     payload = json.dumps(
@@ -301,11 +307,7 @@ class DiscordAdapter(RetryableConnection):
             and self._bot.user.mentioned_in(message)
         )
         bot_name: str = (
-            (
-                self._bot.user.display_name
-                or self._bot.user.name
-                or ""
-            )
+            (self._bot.user.display_name or self._bot.user.name or "")
             if self._bot is not None and self._bot.user is not None
             else ""
         )

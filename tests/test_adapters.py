@@ -434,7 +434,6 @@ class TestTelegramAdapter:
                 except Exception:  # noqa: BLE001
                     pass  # ImportError path should be handled internally
 
-
     async def test_unknown_adapter(self) -> None:
         from cordbeat.adapters.runner import _run_adapter
 

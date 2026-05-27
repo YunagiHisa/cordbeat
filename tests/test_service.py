@@ -175,9 +175,7 @@ class TestRunServiceCommandWindows:
     def test_install_calls_schtasks(self) -> None:
         fake_exe = r"C:\bin\cordbeat.exe"
         with (
-            patch(
-                "cordbeat.tools.service._cordbeat_exe", return_value=fake_exe
-            ),
+            patch("cordbeat.tools.service._cordbeat_exe", return_value=fake_exe),
             patch("cordbeat.tools.service.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)

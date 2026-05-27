@@ -180,7 +180,7 @@ class TestCoreEngineVision:
         )
         memory.update_user_summary = AsyncMock()
         memory.link_platform = AsyncMock()
-        memory.get_core_profile= AsyncMock(return_value=None)
+        memory.get_core_profile = AsyncMock(return_value=None)
         memory.get_recent_messages = AsyncMock(return_value=[])
         memory.search_semantic = AsyncMock(return_value=[])
         memory.search_episodic = AsyncMock(return_value=[])

@@ -2459,9 +2459,7 @@ class TestSendHeartbeatMessagePlatformLink:
         _, sent_msg = mock_gateway.send_to_adapter.await_args.args
         assert sent_msg.platform_user_id == "294731191007969280"
 
-        resolved = await memory.resolve_platform_user(
-            "294731191007969280", "discord"
-        )
+        resolved = await memory.resolve_platform_user("294731191007969280", "discord")
         assert resolved == "294731191007969280"
 
     async def test_missing_target_skips_send(

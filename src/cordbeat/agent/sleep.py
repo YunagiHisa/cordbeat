@@ -155,9 +155,7 @@ class SleepPhase:
                 return
 
             chunk_size = self._memory_config.context_compression_chunk
-            oldest = await self._memory.get_oldest_messages(
-                user.user_id, chunk_size
-            )
+            oldest = await self._memory.get_oldest_messages(user.user_id, chunk_size)
             if not oldest:
                 return
 

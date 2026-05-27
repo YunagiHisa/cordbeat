@@ -124,9 +124,7 @@ async def test_truncates_to_max_length() -> None:
         patch("_fetch_url_skill_main.socket.getaddrinfo", return_value=gai),
         patch("_fetch_url_skill_main.httpx.AsyncClient", fake),
     ):
-        result = await fetch_url.execute(
-            url="http://example.com/", max_length=500
-        )
+        result = await fetch_url.execute(url="http://example.com/", max_length=500)
     assert result["truncated"] is True
     assert result["length"] == 500
 

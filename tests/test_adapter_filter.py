@@ -14,6 +14,7 @@ from cordbeat.adapters._utils import AdapterFilter
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _filter(
     respond_mode: str = "all",
     channel_whitelist: list[str] | None = None,
@@ -35,6 +36,7 @@ def _filter(
 # ---------------------------------------------------------------------------
 # User blocklist
 # ---------------------------------------------------------------------------
+
 
 class TestUserBlocklist:
     def test_blocked_user_rejected(self) -> None:
@@ -58,6 +60,7 @@ class TestUserBlocklist:
 # Channel whitelist
 # ---------------------------------------------------------------------------
 
+
 class TestChannelWhitelist:
     def test_non_whitelisted_channel_blocked(self) -> None:
         f = _filter(channel_whitelist=["chan_a"])
@@ -80,6 +83,7 @@ class TestChannelWhitelist:
 # Channel blacklist
 # ---------------------------------------------------------------------------
 
+
 class TestChannelBlacklist:
     def test_blacklisted_channel_blocked(self) -> None:
         f = _filter(channel_blacklist=["spam"])
@@ -97,6 +101,7 @@ class TestChannelBlacklist:
 # ---------------------------------------------------------------------------
 # DM bypass
 # ---------------------------------------------------------------------------
+
 
 class TestDMBypass:
     def test_dm_bypasses_respond_mode_mention_only(self) -> None:
@@ -116,6 +121,7 @@ class TestDMBypass:
 # respond_mode: all
 # ---------------------------------------------------------------------------
 
+
 class TestModeAll:
     def test_all_mode_always_responds(self) -> None:
         f = _filter(respond_mode="all")
@@ -129,6 +135,7 @@ class TestModeAll:
 # ---------------------------------------------------------------------------
 # respond_mode: mention_only
 # ---------------------------------------------------------------------------
+
 
 class TestModeMentionOnly:
     def test_mentioned_in_guild_allowed(self) -> None:
@@ -147,6 +154,7 @@ class TestModeMentionOnly:
 # ---------------------------------------------------------------------------
 # respond_mode: ai_decision
 # ---------------------------------------------------------------------------
+
 
 class TestModeAIDecision:
     def test_keyword_present_in_text_allowed(self) -> None:
@@ -211,6 +219,7 @@ class TestModeAIDecision:
 # ---------------------------------------------------------------------------
 # from_options factory
 # ---------------------------------------------------------------------------
+
 
 class TestFromOptions:
     def test_defaults_when_empty_options(self) -> None:

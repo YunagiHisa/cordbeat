@@ -112,7 +112,7 @@ def _parse_quoted(tokens: list[str]) -> tuple[str, list[str]] | None:
     if not m:
         return None
     consumed = m.group(0)
-    remaining = rejoined[len(consumed):].split()
+    remaining = rejoined[len(consumed) :].split()
     return m.group(1), remaining
 
 
@@ -310,7 +310,7 @@ class _DrawDSL:
     def _cmd_text(self, args: list[str]) -> None:
         coords = _int_coords(args, 2)
         if not coords:
-            self.warnings.append("TEXT requires x y \"text\" color [font_size]")
+            self.warnings.append('TEXT requires x y "text" color [font_size]')
             return
         x, y = coords
         rest = args[2:]
@@ -371,7 +371,7 @@ class _DrawDSL:
     def _cmd_output(self, args: list[str]) -> None:
         self._ensure_canvas()
         assert self._img is not None
-        fmt = (args[0].upper() if args else "PNG")
+        fmt = args[0].upper() if args else "PNG"
         if fmt not in ("PNG", "JPEG", "JPG", "WEBP"):
             fmt = "PNG"
         if fmt == "JPG":

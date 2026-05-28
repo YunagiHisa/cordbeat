@@ -8,10 +8,12 @@ when auto-detection fails.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import urllib.error
 import urllib.request
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -442,6 +444,136 @@ def _build_config(
     return cfg
 
 
+# -- Annotated config template rendering ──────────────────────────────
+
+
+def _load_config_template() -> str:
+    """Return the bundled annotated ``config.yaml`` template as text."""
+    return (
+        resources.files("cordbeat.tools")
+        .joinpath("config_template.yaml")
+        .read_text(encoding="utf-8")
+    )
+
+
+def _render_config_yaml(
+    home: Path,
+    *,
+    provider: str,
+    base_url: str,
+    model: str,
+    adapters: dict[str, str | None],
+    auth_token: str,
+) -> str:
+    """Render the annotated config template with user choices applied.
+
+    Comments and default values from the bundled template are preserved so
+    that the user can read the file and tweak any option without having to
+    consult external docs.
+    """
+    text = _load_config_template()
+
+    def _replace_value(pattern: str, value: str) -> None:
+        """Substitute *value* into the *first* group of *pattern*.
+
+        Using a callable replacement avoids backreference interpretation
+        problems on Windows where values may contain ``\\`` characters.
+        """
+        nonlocal text
+        text = re.sub(
+            pattern,
+            lambda m: m.group(1) + value + m.group(2),
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+
+    # ai_backend defaults (only the three fields the wizard asks about)
+    _replace_value(
+        r"^(\s*provider:\s*)ollama(\b.*)$",
+        provider,
+    )
+    _replace_value(
+        r'^(\s*base_url:\s*")http://localhost:11434(".*)$',
+        base_url,
+    )
+    _replace_value(
+        r'^(\s*model:\s*")llama3(".*)$',
+        model,
+    )
+
+    # Anchor data paths to ~/.cordbeat/ so different installs don't collide.
+    _replace_value(
+        r'^(\s*sqlite_path:\s*")data/cordbeat.db(".*)$',
+        (home / "cordbeat.db").as_posix(),
+    )
+    _replace_value(
+        r'^(\s*soul_dir:\s*")data/soul(".*)$',
+        (home / "soul").as_posix(),
+    )
+    _replace_value(
+        r'^(\s*skills_dir:\s*")skills(".*)$',
+        (home / "skills").as_posix(),
+    )
+    _replace_value(
+        r'^(\s*data_dir:\s*")data(".*)$',
+        home.as_posix(),
+    )
+
+    # Inject auth_token into the gateway block (after handshake_timeout) when
+    # not already present. The bundled template intentionally omits the line
+    # so that secrets stay in .env; wizard re-runs preserve the token verbatim.
+    if auth_token and "auth_token:" not in text:
+        injection = (
+            f'\n  auth_token: "{auth_token}"'
+            "  # also exported via CORDBEAT_GATEWAY__AUTH_TOKEN in .env"
+        )
+        text = re.sub(
+            r"^(\s*handshake_timeout:.*)$",
+            lambda m: m.group(1) + injection,
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+
+    # Flip selected adapters from `enabled: false` to `enabled: true`.
+    # The template uses unique 2-space-indented headers (e.g. ``  discord:``)
+    # so a non-greedy lookahead reliably matches the *first* `enabled:` line
+    # inside each block.
+    for adapter_key in adapters:
+        if adapter_key == "cli":
+            continue  # cli is implicit; not present in the template
+        pattern = (
+            rf"(^  {re.escape(adapter_key)}:\n(?:(?!^  \S).*\n)*?\s*enabled:\s*)false"
+        )
+        text = re.sub(
+            pattern,
+            lambda m: m.group(1) + "true",
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+
+    # CLI adapter is not in the template; append a minimal block at the end of
+    # the ``adapters:`` section so users see it exists.
+    if "cli" in adapters and re.search(
+        r"^  cli:\s*$", text, flags=re.MULTILINE
+    ) is None:
+        cli_block = (
+            "  cli:\n"
+            "    enabled: true  # local terminal adapter (always available)\n"
+        )
+        text = re.sub(
+            r"(\n  signal:\n(?:(?!^[A-Za-z]).*\n)*)",
+            lambda m: m.group(1) + cli_block,
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+
+    return text
+
+
 # -- File writers ──────────────────────────────────────────────────────
 
 
@@ -577,6 +709,8 @@ def run_wizard(home: Path | None = None) -> tuple[Path, bool]:
     # ── Write config.yaml ─────────────────────────────────────────
     config_path = home / "config.yaml"
     # Preserve auth_token across re-runs so a running service keeps working.
+    # Look first inside config.yaml (legacy layout), then fall back to .env
+    # because the new template ships secrets exclusively through .env.
     _existing_auth_token: str | None = None
     if config_path.exists():
         try:
@@ -585,28 +719,34 @@ def run_wizard(home: Path | None = None) -> tuple[Path, bool]:
                 _existing_auth_token = _existing.get("gateway", {}).get("auth_token")
         except Exception:
             pass
-    cfg = _build_config(
+    if not _existing_auth_token:
+        env_path = home / ".env"
+        if env_path.is_file():
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("CORDBEAT_GATEWAY__AUTH_TOKEN="):
+                    _existing_auth_token = stripped.split("=", 1)[1].strip() or None
+                    break
+    import secrets as _secrets
+
+    auth_token = _existing_auth_token or _secrets.token_urlsafe(32)
+    rendered = _render_config_yaml(
         home,
         provider=provider,
         base_url=base_url,
         model=model,
-        api_key=api_key,
         adapters=selected_adapters,
-        auth_token=_existing_auth_token,
+        auth_token=auth_token,
     )
-    config_path.write_text(
-        yaml.dump(cfg, default_flow_style=False, sort_keys=False),
-        encoding="utf-8",
-    )
+    config_path.write_text(rendered, encoding="utf-8")
     _ok(str(config_path))
 
     # ── Write .env with secrets ───────────────────────────────────
     # Centralise all secrets in ~/.cordbeat/.env so they never need to
     # be entered manually and `_apply_env_overrides` always wins.
     env_secrets: dict[str, str] = {}
-    _gw_token: str = cfg["gateway"]["auth_token"]
-    if _gw_token:
-        env_secrets["CORDBEAT_GATEWAY__AUTH_TOKEN"] = _gw_token
+    if auth_token:
+        env_secrets["CORDBEAT_GATEWAY__AUTH_TOKEN"] = auth_token
     for _adapter_key, _adapter_token in selected_adapters.items():
         if _adapter_key != "cli" and _adapter_token:
             env_secrets[

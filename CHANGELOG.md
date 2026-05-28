@@ -135,7 +135,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   exclusions for modules that cannot be exercised by a unit-test runner.
 
 ### Changed
-- **BREAKING: Skills now run inside per-skill ``uv``-managed Python
+- **Friendlier persona prompt with relationship-stage awareness.** The system
+  prompt now includes an English tone block instructing the AI to "talk like a
+  friend, not a butler-speak assistant", regardless of the configured response
+  language. When prior conversation history is available, a relationship-stage
+  hint is added based on the number of stored messages with the user
+  (`stranger` <10, `acquaintance` <100, `friend` <500, `close friend` ≥500),
+  letting the model calibrate warmth/familiarity automatically. The default
+  soul trait set was broadened from `["curious", "playful"]` to
+  `["curious", "playful", "warm", "candid", "emotionally expressive"]`;
+  existing `soul.json` files are unaffected.
+- **`cordbeat-init` ships a fully-annotated `config.yaml`.** The wizard now
+  renders config from a bundled commented template (`config_template.yaml`,
+  a copy of `config.example.yaml`) instead of `yaml.dump()`. The generated
+  file preserves all section headers, defaults, and inline documentation so
+  users can discover every option without reading the source. All secrets
+  (adapter tokens, gateway `auth_token`, AI `api_key`) are routed exclusively
+  through `.env`; on re-run, the wizard reads `auth_token` from either the
+  existing `config.yaml` or `.env`.
+
+### Changed
+
   environments.** Each builtin skill ships its own ``pyproject.toml``;
   on first execution the dependencies declared there are installed
   into ``~/.cordbeat/skill-envs/<skill_name>/`` (cached and re-used

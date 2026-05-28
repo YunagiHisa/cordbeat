@@ -315,7 +315,8 @@ class TestRunWizard:
 
         cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         assert cfg["ai_backend"]["provider"] == "openai"
-        assert cfg["ai_backend"]["options"]["api_key"] == "sk-test123"
+        env_text = (tmp_path / ".env").read_text(encoding="utf-8")
+        assert "CORDBEAT_AI_BACKEND__OPTIONS__API_KEY=sk-test123" in env_text
 
     def test_directory_structure_created(self, tmp_path: Path) -> None:
         inputs = iter(["Bot", "en", "n"])

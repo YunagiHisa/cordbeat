@@ -109,7 +109,7 @@ class TelegramAdapter(RetryableConnection):
             is_mentioned = bool(
                 bot_username and f"@{bot_username}".lower() in raw_text.lower()
             )
-            if not self._filter.should_respond(
+            if not await self._filter.should_respond_async(
                 user_id=user_id,
                 channel_id=str(chat_id),
                 is_dm=is_private,

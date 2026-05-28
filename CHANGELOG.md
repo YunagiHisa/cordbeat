@@ -38,11 +38,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   safe directory; user-supplied paths are stripped to basename to prevent traversal).
   Safety level `requires_confirmation`; dependency: `Pillow` only.
 - **Adapter respond-mode filtering — E-4.** All adapters now support a
-  `respond_mode` option (`all` | `mention_only` | `ai_decision`) plus
-  `channel_whitelist`, `channel_blacklist`, and `user_blocklist` lists configurable
-  in `config.yaml` under `adapters.<platform>.options`. In `mention_only` mode the
-  bot replies only when directly mentioned or in a DM. `ai_decision` mode calls the
-  LLM with a lightweight prompt to decide whether to interject.
+  `respond_mode` option (`all` | `mention_only` | `ai_decision` |
+  `ai_decision_llm`) plus `channel_whitelist`, `channel_blacklist`, and
+  `user_blocklist` lists configurable in `config.yaml` under
+  `adapters.<platform>.options`. In `mention_only` mode the bot replies only
+  when directly mentioned or in a DM. `ai_decision` mode matches the soul
+  name and `ai_decision_keywords` against the message text (no LLM call).
+  `ai_decision_llm` mode (new) consults a small dedicated LLM configured
+  under the top-level `ai_decision:` section to decide whether to interject;
+  when no backend is configured it falls back to keyword matching.
+- **Opt-in `ai_decision` AI backend.** New top-level `ai_decision:` config
+  section accepts the same shape as `ai_backend:` (provider, model, host,
+  api_key, cache, …) and is used exclusively by adapters running in
+  `respond_mode: ai_decision_llm`. Defaults to `None` (disabled). Intended
+  for tiny/fast judge models such as `gemma2:2b`, `qwen2.5:0.5b`, or
+  BitNet b1.58. DMs always bypass the judge call.
+- **DM and channel conversation history are stored separately.** Schema
+  migration v4 adds `channel_id` and `is_dm` columns to
+  `conversation_messages` (auto-applied on startup; legacy rows default to
+  `is_dm=1`). The engine now scopes message retrieval to the originating
+  venue, so private DM context no longer leaks into public-channel replies
+  and vice versa. Heartbeat / tool paths that don't supply venue metadata
+  see the full per-user history (unchanged behaviour).
 - **Package structure refactored into subpackages.** The previously flat
   `src/cordbeat/` namespace is now organised into six subpackages mirroring
   architectural domains: `adapters/` (Discord, Telegram, CLI, Slack, LINE,

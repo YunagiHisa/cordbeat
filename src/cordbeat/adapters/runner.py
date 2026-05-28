@@ -110,12 +110,41 @@ async def _run_adapter(adapter_name: str, config_path: str) -> None:
         return
 
     logger.info("Starting %s adapter...", adapter_name)
+
+    judge_backend: Any = None
+    if config.ai_decision is not None:
+        try:
+            from cordbeat.adapters._utils import set_judge_backend
+            from cordbeat.ai.backend import create_backend
+
+            judge_backend = create_backend(config.ai_decision)
+            set_judge_backend(judge_backend)
+            logger.info(
+                "ai_decision_llm judge backend ready (%s)",
+                config.ai_decision.provider,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Failed to initialise ai_decision_llm backend; "
+                "respond_mode=ai_decision_llm will fall back to keyword matching",
+                exc_info=True,
+            )
+            judge_backend = None
+
     try:
         await adapter.start()
     except KeyboardInterrupt:
         pass
     finally:
         await adapter.stop()
+        if judge_backend is not None:
+            try:
+                from cordbeat.adapters._utils import set_judge_backend
+
+                await judge_backend.aclose()
+                set_judge_backend(None)
+            except Exception:  # noqa: BLE001
+                logger.debug("judge backend close failed", exc_info=True)
         logger.info("%s adapter stopped", adapter_name)
 
 

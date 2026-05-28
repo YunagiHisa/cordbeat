@@ -318,7 +318,7 @@ class DiscordAdapter(RetryableConnection):
             if self._bot is not None and self._bot.user is not None
             else ""
         )
-        if not self._filter.should_respond(
+        if not await self._filter.should_respond_async(
             user_id=user_id,
             channel_id=str(channel_id),
             is_dm=not is_guild,

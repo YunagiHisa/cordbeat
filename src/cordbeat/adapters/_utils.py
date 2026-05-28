@@ -4,9 +4,34 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from cordbeat.ai.backend import AIBackend
 
 logger = logging.getLogger(__name__)
+
+
+# ── ai_decision_llm: global judge backend ─────────────────────────────
+#
+# When ``config.ai_decision`` is configured, the adapter runner instantiates
+# a small/fast LLM backend (e.g. gemma2:2b) and registers it here.  Adapters
+# in ``respond_mode: ai_decision_llm`` consult this backend to decide whether
+# a public-channel message warrants a reply.  Default ``None`` → adapters
+# fall back to the keyword-only ``ai_decision`` behaviour.
+
+_judge_backend: AIBackend | None = None
+
+
+def set_judge_backend(backend: AIBackend | None) -> None:
+    """Register (or clear) the global ai_decision_llm judge backend."""
+    global _judge_backend
+    _judge_backend = backend
+
+
+def get_judge_backend() -> AIBackend | None:
+    """Return the currently registered ai_decision_llm judge backend, if any."""
+    return _judge_backend
 
 
 def _read_soul_keywords() -> list[str]:
@@ -122,4 +147,78 @@ class AdapterFilter:
             text_lower = text.lower()
             return any(kw.lower() in text_lower for kw in keywords)
 
+        if self.respond_mode == "ai_decision_llm":
+            # Sync pre-filter: when no judge backend is registered, degrade
+            # gracefully to keyword matching.  When one IS registered the
+            # final yes/no call happens in :meth:`should_respond_async`,
+            # which adapters await *after* this sync check passes.
+            if get_judge_backend() is None:
+                keywords = list(self.ai_keywords) or list(_read_soul_keywords())
+                if extra_keywords:
+                    keywords.extend(k for k in extra_keywords if k)
+                if not keywords:
+                    return True
+                text_lower = text.lower()
+                return any(kw.lower() in text_lower for kw in keywords)
+            return True  # defer to async judge
+
         return True  # "all" or unrecognised mode
+
+    async def should_respond_async(
+        self,
+        *,
+        user_id: str,
+        channel_id: str = "",
+        is_dm: bool = False,
+        is_mentioned: bool = False,
+        text: str = "",
+        extra_keywords: list[str] | None = None,
+    ) -> bool:
+        """Async variant of :meth:`should_respond` with LLM judgement support.
+
+        For modes other than ``ai_decision_llm`` (or when no judge backend
+        is registered), this is equivalent to :meth:`should_respond`.  When
+        ``respond_mode == "ai_decision_llm"`` *and* a judge backend has
+        been registered via :func:`set_judge_backend`, a short yes/no LLM
+        prompt is issued and the message is forwarded only when the model
+        replies affirmatively.
+        """
+        if not self.should_respond(
+            user_id=user_id,
+            channel_id=channel_id,
+            is_dm=is_dm,
+            is_mentioned=is_mentioned,
+            text=text,
+            extra_keywords=extra_keywords,
+        ):
+            return False
+        if self.respond_mode != "ai_decision_llm" or is_dm:
+            return True
+        backend = get_judge_backend()
+        if backend is None:
+            return True  # already keyword-judged above
+        soul_name = ""
+        soul_keys = _read_soul_keywords()
+        if soul_keys:
+            soul_name = soul_keys[0]
+        prompt = (
+            "You are deciding whether an AI assistant"
+            + (f" named {soul_name}" if soul_name else "")
+            + " should reply to a public-channel message.\n"
+            "Reply with exactly one word: yes or no.\n"
+            "Answer 'yes' only if the message clearly addresses the "
+            "assistant, asks a question the assistant could answer, or "
+            "invites it into the conversation.\n"
+            "Answer 'no' for unrelated chatter between other users.\n\n"
+            f"Message: {text}\n"
+            "Answer:"
+        )
+        try:
+            reply = await backend.generate(prompt, system="", max_tokens=8,
+                                            temperature=0.0)
+        except Exception:  # noqa: BLE001
+            logger.warning("ai_decision_llm backend failed; allowing message",
+                           exc_info=True)
+            return True
+        first = reply.strip().lower().split()[:1]
+        return bool(first and first[0].startswith("y"))

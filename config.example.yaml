@@ -66,6 +66,23 @@ ai_backend:
     ttl_seconds: 3600    # Cache entry lifetime (seconds)
     max_temperature: 0.2 # Only cache calls at or below this temperature
 
+# ── ai_decision: opt-in lightweight judge LLM ────────────────────────────
+# Used exclusively by adapters with `respond_mode: ai_decision_llm`.
+# A short yes/no prompt is sent per public-channel message to decide whether
+# to reply.  Pick a small, fast model (gemma2:2b, qwen2.5:0.5b, BitNet, etc.)
+# — this call runs on top of every public message that survives the
+# whitelist/blocklist checks, so latency matters.  DMs always bypass it.
+# Leave this section out (or commented) to fall back to keyword matching.
+#
+# ai_decision:
+#   provider: ollama
+#   base_url: "http://localhost:11434"
+#   model: "gemma2:2b"
+#   timeout: 5.0
+#   max_tokens: 8
+#   options:
+#     api_key: ""
+
 heartbeat:
   default_interval_minutes: 60
   min_interval_minutes: 5
@@ -139,6 +156,11 @@ adapters:
   #   respond_mode: "ai_decision"   → respond when a keyword appears in text
   #                                   (defaults to the AI's soul name if no
   #                                   keywords are configured)
+  #   respond_mode: "ai_decision_llm" → consult the dedicated `ai_decision:`
+  #                                   LLM with a yes/no judge prompt for each
+  #                                   public-channel message; falls back to
+  #                                   keyword matching when no judge backend
+  #                                   is configured
   #
   # DMs always bypass channel filters and respond_mode restrictions.
   # user_blocklist takes priority over everything (even DMs).

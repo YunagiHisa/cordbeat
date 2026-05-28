@@ -208,8 +208,15 @@ class CoreEngine:
         """
         soul_snap = self._soul.get_soul_snapshot()
         profile = await self._memory.get_core_profile(user_id)
+        md = message.metadata or {}
+        channel_id = str(md.get("channel_id") or "") or None
+        is_dm_raw = md.get("is_dm")
+        is_dm: bool | None = bool(is_dm_raw) if is_dm_raw is not None else None
         history = await self._memory.get_recent_messages(
-            user_id, limit=self._memory_config.conversation_history_limit
+            user_id,
+            limit=self._memory_config.conversation_history_limit,
+            channel_id=channel_id,
+            is_dm=is_dm,
         )
         message_count = await self._memory.count_messages(user_id)
 
@@ -399,11 +406,17 @@ class CoreEngine:
     ) -> None:
         """Background task: persist conversation + run emotion/memory extraction."""
         try:
+            md = message.metadata or {}
+            channel_id = str(md.get("channel_id") or "")
+            is_dm_raw = md.get("is_dm")
+            is_dm = bool(is_dm_raw) if is_dm_raw is not None else True
             await self._memory.add_message(
-                user_id, "user", message.content, message.adapter_id
+                user_id, "user", message.content, message.adapter_id,
+                channel_id=channel_id, is_dm=is_dm,
             )
             await self._memory.add_message(
-                user_id, "assistant", response, message.adapter_id
+                user_id, "assistant", response, message.adapter_id,
+                channel_id=channel_id, is_dm=is_dm,
             )
             await self._extractor.infer_and_update_emotion(
                 user_id, message.content, response

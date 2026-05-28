@@ -271,15 +271,23 @@ class MemoryStore:
         role: str,
         content: str,
         adapter_id: str = "",
+        channel_id: str = "",
+        is_dm: bool = True,
     ) -> None:
-        await self._conversations.add_message(user_id, role, content, adapter_id)
+        await self._conversations.add_message(
+            user_id, role, content, adapter_id, channel_id, is_dm
+        )
 
     async def get_recent_messages(
         self,
         user_id: str,
         limit: int = 20,
+        channel_id: str | None = None,
+        is_dm: bool | None = None,
     ) -> list[dict[str, str]]:
-        return await self._conversations.get_recent_messages(user_id, limit)
+        return await self._conversations.get_recent_messages(
+            user_id, limit, channel_id=channel_id, is_dm=is_dm
+        )
 
     async def get_todays_messages(
         self,

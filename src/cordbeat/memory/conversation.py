@@ -19,12 +19,22 @@ class ConversationStore:
         role: str,
         content: str,
         adapter_id: str = "",
+        channel_id: str = "",
+        is_dm: bool = True,
     ) -> None:
         await self._db.execute(
             "INSERT INTO conversation_messages "
-            "(user_id, role, content, adapter_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (user_id, role, content, adapter_id, datetime.now(tz=UTC).isoformat()),
+            "(user_id, role, content, adapter_id, channel_id, is_dm, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                user_id,
+                role,
+                content,
+                adapter_id,
+                channel_id,
+                1 if is_dm else 0,
+                datetime.now(tz=UTC).isoformat(),
+            ),
         )
         await self._db.commit()
 
@@ -32,15 +42,35 @@ class ConversationStore:
         self,
         user_id: str,
         limit: int = 20,
+        channel_id: str | None = None,
+        is_dm: bool | None = None,
     ) -> list[dict[str, str]]:
+        """Return the *limit* most recent messages for *user_id*.
+
+        When ``channel_id`` is given (non-empty), results are scoped to that
+        channel.  When ``is_dm`` is given, results are scoped to DM vs
+        non-DM history.  Passing both narrows further.  Pass neither to keep
+        the legacy "all history for this user" behaviour (used by tools and
+        backward-compat call sites).
+        """
+        conditions = ["user_id = ?"]
+        params: list[object] = [user_id]
+        if channel_id is not None and channel_id != "":
+            conditions.append("channel_id = ?")
+            params.append(channel_id)
+        if is_dm is not None:
+            conditions.append("is_dm = ?")
+            params.append(1 if is_dm else 0)
+        where_clause = " AND ".join(conditions)
+        params.append(limit)
         cursor = await self._db.execute(
             "SELECT role, content FROM ("
             "  SELECT role, content, created_at "
             "  FROM conversation_messages "
-            "  WHERE user_id = ? "
+            f"  WHERE {where_clause} "
             "  ORDER BY created_at DESC LIMIT ?"
             ") sub ORDER BY created_at ASC",
-            (user_id, limit),
+            tuple(params),
         )
         rows = await cursor.fetchall()
         return [{"role": row["role"], "content": row["content"]} for row in rows]

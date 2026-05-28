@@ -1789,16 +1789,16 @@ class TestApprovedTraitExecution:
         soul: Soul,
     ) -> None:
         """Approved trait change proposal applies traits to soul."""
-        assert "playful" not in soul.traits
+        assert "mischievous" not in soul.traits
 
         proposal_id = await memory.add_certain_record(
             user_id="u1",
-            content="Add playful trait",
+            content="Add mischievous trait",
             record_type="proposal",
             metadata={
                 "status": ProposalStatus.APPROVED,
                 "proposal_type": ProposalType.TRAIT_CHANGE,
-                "trait_add": ["playful"],
+                "trait_add": ["mischievous"],
                 "trait_remove": [],
             },
         )
@@ -1806,7 +1806,7 @@ class TestApprovedTraitExecution:
         await heartbeat._proposals.execute_approved()
 
         # Trait was applied
-        assert "playful" in soul.traits
+        assert "mischievous" in soul.traits
 
         # Proposal marked as executed
         proposal = await memory.get_proposal(proposal_id)

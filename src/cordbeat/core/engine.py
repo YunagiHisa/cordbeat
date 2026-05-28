@@ -211,9 +211,12 @@ class CoreEngine:
         history = await self._memory.get_recent_messages(
             user_id, limit=self._memory_config.conversation_history_limit
         )
+        message_count = await self._memory.count_messages(user_id)
 
         system_prompt = build_soul_system_prompt(
-            soul_snap, timezone_name=self._timezone_name
+            soul_snap,
+            timezone_name=self._timezone_name,
+            user_message_count=message_count,
         )
         if self._skills.get("draw") is not None:
             system_prompt += (

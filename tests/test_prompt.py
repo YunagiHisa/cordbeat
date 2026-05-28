@@ -91,6 +91,44 @@ class TestBuildSoulSystemPrompt:
         result = build_soul_system_prompt(snap)
         assert "Character notes:" not in result
 
+    def test_default_tone_is_friend_like(self) -> None:
+        """Default prompt nudges the model away from butler-speak."""
+        snap = {
+            "name": "TestBot",
+            "traits": ["curious"],
+            "emotion": {"primary": "calm", "intensity": 0.5},
+            "immutable_rules": [],
+        }
+        result = build_soul_system_prompt(snap)
+        assert "talk like a friend" in result.lower()
+        assert "butler-speak" in result
+
+    def test_familiarity_stages(self) -> None:
+        """Relationship stage label tracks message count."""
+        snap = {
+            "name": "TestBot",
+            "traits": ["curious"],
+            "emotion": {"primary": "calm", "intensity": 0.5},
+            "immutable_rules": [],
+        }
+        assert "stranger" in build_soul_system_prompt(snap, user_message_count=0)
+        assert "acquaintance" in build_soul_system_prompt(snap, user_message_count=20)
+        assert "friend" in build_soul_system_prompt(snap, user_message_count=200)
+        assert "close friend" in build_soul_system_prompt(
+            snap, user_message_count=1000
+        )
+
+    def test_familiarity_omitted_when_none(self) -> None:
+        """Without a message count, no relationship-stage section is added."""
+        snap = {
+            "name": "TestBot",
+            "traits": ["curious"],
+            "emotion": {"primary": "calm", "intensity": 0.5},
+            "immutable_rules": [],
+        }
+        result = build_soul_system_prompt(snap)
+        assert "Relationship stage" not in result
+
 
 class TestBuildContext:
     def test_minimal_context(self) -> None:

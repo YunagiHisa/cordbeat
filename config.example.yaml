@@ -251,7 +251,7 @@ adapters:
     reconnect_max_backoff: 60
     options:
       user_blocklist: []             # never respond to these Signal numbers
-      rpc_url: "http://localhost:7583"  # signal-cli JSON-RPC URL
+      rpc_url: "http://localhost:8088/api/v1/rpc"  # signal-cli JSON-RPC URL
       poll_interval: 1.0             # seconds between receive polls
       # phone_number: "+1234567890"  # Signal phone number registered with signal-cli (use .env)
 

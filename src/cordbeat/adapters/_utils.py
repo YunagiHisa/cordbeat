@@ -12,26 +12,69 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# ── ai_decision_llm: global judge backend ─────────────────────────────
+# ── respond_mode constants ────────────────────────────────────────────
+#
+# These string values appear in user-facing config (``config.yaml`` →
+# ``adapters.<name>.options.respond_mode``) so renaming requires migration.
+# Centralise the literals here so adapter code references the constants
+# rather than repeating string literals.
+MODE_ALL = "all"
+MODE_MENTION_ONLY = "mention_only"
+MODE_AI_DECISION = "ai_decision"
+MODE_AI_DECISION_LLM = "ai_decision_llm"
+
+
+# ── ai_decision_llm: global judge backend + parameters ────────────────
 #
 # When ``config.ai_decision`` is configured, the adapter runner instantiates
 # a small/fast LLM backend (e.g. gemma2:2b) and registers it here.  Adapters
 # in ``respond_mode: ai_decision_llm`` consult this backend to decide whether
 # a public-channel message warrants a reply.  Default ``None`` → adapters
 # fall back to the keyword-only ``ai_decision`` behaviour.
+#
+# ``JUDGE_DEFAULT_MAX_TOKENS`` / ``JUDGE_DEFAULT_TEMPERATURE`` are the values
+# used when the user has not overridden them via
+# ``config.ai_decision.options.judge_max_tokens`` /
+# ``config.ai_decision.options.judge_temperature``.
+
+JUDGE_DEFAULT_MAX_TOKENS = 8
+JUDGE_DEFAULT_TEMPERATURE = 0.0
 
 _judge_backend: AIBackend | None = None
+_judge_max_tokens: int = JUDGE_DEFAULT_MAX_TOKENS
+_judge_temperature: float = JUDGE_DEFAULT_TEMPERATURE
 
 
-def set_judge_backend(backend: AIBackend | None) -> None:
-    """Register (or clear) the global ai_decision_llm judge backend."""
-    global _judge_backend
+def set_judge_backend(
+    backend: AIBackend | None,
+    *,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+) -> None:
+    """Register (or clear) the global ai_decision_llm judge backend.
+
+    ``max_tokens`` / ``temperature`` override the per-call generation
+    parameters used by :meth:`MessageFilter.should_respond_async`.  Pass
+    ``None`` (the default) to fall back to ``JUDGE_DEFAULT_*``.
+    """
+    global _judge_backend, _judge_max_tokens, _judge_temperature
     _judge_backend = backend
+    _judge_max_tokens = (
+        max_tokens if max_tokens is not None else JUDGE_DEFAULT_MAX_TOKENS
+    )
+    _judge_temperature = (
+        temperature if temperature is not None else JUDGE_DEFAULT_TEMPERATURE
+    )
 
 
 def get_judge_backend() -> AIBackend | None:
     """Return the currently registered ai_decision_llm judge backend, if any."""
     return _judge_backend
+
+
+def get_judge_params() -> tuple[int, float]:
+    """Return ``(max_tokens, temperature)`` for ai_decision_llm yes/no calls."""
+    return _judge_max_tokens, _judge_temperature
 
 
 def _read_soul_keywords() -> list[str]:
@@ -135,10 +178,10 @@ class AdapterFilter:
             return True
 
         # 4. Mode-specific filtering.
-        if self.respond_mode == "mention_only":
+        if self.respond_mode == MODE_MENTION_ONLY:
             return is_mentioned
 
-        if self.respond_mode == "ai_decision":
+        if self.respond_mode == MODE_AI_DECISION:
             keywords: list[str] = list(self.ai_keywords) or list(_read_soul_keywords())
             if extra_keywords:
                 keywords.extend(k for k in extra_keywords if k)
@@ -147,7 +190,7 @@ class AdapterFilter:
             text_lower = text.lower()
             return any(kw.lower() in text_lower for kw in keywords)
 
-        if self.respond_mode == "ai_decision_llm":
+        if self.respond_mode == MODE_AI_DECISION_LLM:
             # Sync pre-filter: when no judge backend is registered, degrade
             # gracefully to keyword matching.  When one IS registered the
             # final yes/no call happens in :meth:`should_respond_async`,
@@ -192,11 +235,12 @@ class AdapterFilter:
             extra_keywords=extra_keywords,
         ):
             return False
-        if self.respond_mode != "ai_decision_llm" or is_dm:
+        if self.respond_mode != MODE_AI_DECISION_LLM or is_dm:
             return True
         backend = get_judge_backend()
         if backend is None:
             return True  # already keyword-judged above
+        max_tokens, temperature = get_judge_params()
         soul_name = ""
         soul_keys = _read_soul_keywords()
         if soul_keys:
@@ -214,11 +258,18 @@ class AdapterFilter:
             "Answer:"
         )
         try:
-            reply = await backend.generate(prompt, system="", max_tokens=8,
-                                            temperature=0.0)
+            reply = await backend.generate(
+                prompt,
+                system="",
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
         except Exception:  # noqa: BLE001
             logger.warning("ai_decision_llm backend failed; allowing message",
                            exc_info=True)
             return True
-        first = reply.strip().lower().split()[:1]
-        return bool(first and first[0].startswith("y"))
+        # Match against ``yes`` rather than the looser ``startswith("y")``
+        # so replies like ``y'know`` / ``ya``  don't trigger a reply.  The
+        # prompt asks for a one-word ``yes``/``no`` answer; this handles
+        # common variants like ``yes.`` / ``"yes"`` / ``Yes!``.
+        return "yes" in reply.strip().lower()

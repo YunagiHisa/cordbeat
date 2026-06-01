@@ -10,6 +10,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_COMPRESS_TEMPERATURE = 0.3
+DEFAULT_COMPRESS_MAX_TOKENS = 256
+
 _COMPRESS_SYSTEM_PROMPT = """\
 You are summarizing an older portion of a conversation between a user and an
 AI assistant. Create a concise summary that preserves the key information:
@@ -24,8 +27,16 @@ Respond with ONLY the summary text, no JSON or extra formatting.
 class ConversationCompressor:
     """Summarises conversation history chunks using LLM."""
 
-    def __init__(self, ai: AIBackend) -> None:
+    def __init__(
+        self,
+        ai: AIBackend,
+        *,
+        temperature: float = DEFAULT_COMPRESS_TEMPERATURE,
+        max_tokens: int = DEFAULT_COMPRESS_MAX_TOKENS,
+    ) -> None:
         self._ai = ai
+        self._temperature = temperature
+        self._max_tokens = max_tokens
 
     async def compress_in_memory(
         self,
@@ -93,8 +104,8 @@ class ConversationCompressor:
             summary = await self._ai.generate(
                 prompt=prompt,
                 system=_COMPRESS_SYSTEM_PROMPT,
-                temperature=0.3,
-                max_tokens=256,
+                temperature=self._temperature,
+                max_tokens=self._max_tokens,
             )
             return summary.strip() or None
         except Exception:

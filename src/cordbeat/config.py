@@ -103,6 +103,9 @@ class MemoryConfig:
     context_compression_threshold: int = 60
     # Number of oldest messages to summarise per compression pass.
     context_compression_chunk: int = 20
+    # LLM generation parameters for the compression / summarisation calls.
+    context_compression_temperature: float = 0.3
+    context_compression_max_tokens: int = 256
 
 
 @dataclass
@@ -182,6 +185,11 @@ class STTConfig:
     language: str = ""
     api_url: str = ""
     api_key: str = ""
+    # Override for whisper_openai (set to a self-hosted OpenAI-compatible
+    # endpoint).  Empty → use the official OpenAI API base URL.
+    base_url: str = ""
+    # HTTP request timeout for cloud STT calls (whisper_openai / openai_compat).
+    timeout: float = 60.0
 
 
 @dataclass
@@ -203,6 +211,11 @@ class TTSConfig:
     model: str = "tts-1"
     api_url: str = ""
     api_key: str = ""
+    # Override for the official OpenAI TTS backend (set to a self-hosted
+    # OpenAI-compatible endpoint).  Empty → use the official OpenAI API URL.
+    base_url: str = ""
+    # HTTP request timeout for cloud TTS calls (openai / openai_compat).
+    timeout: float = 60.0
 
 
 @dataclass

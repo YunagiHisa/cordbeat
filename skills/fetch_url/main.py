@@ -99,13 +99,10 @@ def _resolve_and_check(host: str) -> tuple[str | None, list[tuple[str, int]]]:
     return (None, resolved)
 
 
-_SCRIPT_STYLE_RE = re.compile(
-    r"<(script|style|noscript|template)\b[^>]*>.*?</\1>",
-    re.IGNORECASE | re.DOTALL,
-)
-_TAG_RE = re.compile(r"<[^>]+>")
-_WHITESPACE_RE = re.compile(r"[ \t]+")
-_BLANKLINES_RE = re.compile(r"\n\s*\n+")
+_SCRIPT_STYLE_PATTERN = r"<(script|style|noscript|template)\b[^>]*>.*?</\1>"
+_TAG_PATTERN = r"<[^>]+>"
+_WHITESPACE_PATTERN = r"[ \t]+"
+_BLANKLINES_PATTERN = r"\n\s*\n+"
 
 _ENTITY_MAP = {
     "&amp;": "&",
@@ -120,8 +117,10 @@ _ENTITY_MAP = {
 
 def _html_to_text(html: str) -> str:
     """Strip HTML tags and collapse whitespace into readable text."""
-    text = _SCRIPT_STYLE_RE.sub("", html)
-    text = _TAG_RE.sub("", text)
+    text = re.sub(
+        _SCRIPT_STYLE_PATTERN, "", html, flags=re.IGNORECASE | re.DOTALL
+    )
+    text = re.sub(_TAG_PATTERN, "", text)
     for entity, char in _ENTITY_MAP.items():
         text = text.replace(entity, char)
     text = re.sub(
@@ -134,8 +133,8 @@ def _html_to_text(html: str) -> str:
         lambda m: chr(int(m.group(1), 16)) if int(m.group(1), 16) < 0x110000 else "",
         text,
     )
-    text = _WHITESPACE_RE.sub(" ", text)
-    text = _BLANKLINES_RE.sub("\n\n", text)
+    text = re.sub(_WHITESPACE_PATTERN, " ", text)
+    text = re.sub(_BLANKLINES_PATTERN, "\n\n", text)
     return text.strip()
 
 

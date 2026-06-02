@@ -81,13 +81,15 @@ class OpenAITTS(TTSBackend):
     """OpenAI TTS API — returns ogg/opus (``content_type = "audio/ogg"``)."""
 
     content_type = "audio/ogg"
+    _DEFAULT_BASE_URL = "https://api.openai.com"
 
     def __init__(self, config: TTSConfig) -> None:
         self._api_key = config.api_key
         self._model = config.model or "tts-1"
         self._voice = config.voice or "alloy"
         self._speed = config.speed
-        self._base_url = "https://api.openai.com"
+        self._base_url = (config.base_url or self._DEFAULT_BASE_URL).rstrip("/")
+        self._timeout = config.timeout
 
     async def synthesize(self, text: str) -> bytes:
         headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -106,7 +108,7 @@ class OpenAITTS(TTSBackend):
                     f"{self._base_url}/v1/audio/speech",
                     json=payload,
                     headers=headers,
-                    timeout=60.0,
+                    timeout=self._timeout,
                 )
                 resp.raise_for_status()
                 return bytes(resp.content)
@@ -126,6 +128,7 @@ class OpenAICompatTTS(TTSBackend):
         self._voice = config.voice or "alloy"
         self._speed = config.speed
         self._base_url = config.api_url.rstrip("/")
+        self._timeout = config.timeout
 
     async def synthesize(self, text: str) -> bytes:
         if not self._base_url:
@@ -147,7 +150,7 @@ class OpenAICompatTTS(TTSBackend):
                     f"{self._base_url}/v1/audio/speech",
                     json=payload,
                     headers=headers,
-                    timeout=60.0,
+                    timeout=self._timeout,
                 )
                 resp.raise_for_status()
                 return bytes(resp.content)

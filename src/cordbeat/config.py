@@ -103,6 +103,9 @@ class MemoryConfig:
     context_compression_threshold: int = 60
     # Number of oldest messages to summarise per compression pass.
     context_compression_chunk: int = 20
+    # LLM generation parameters for the compression / summarisation calls.
+    context_compression_temperature: float = 0.3
+    context_compression_max_tokens: int = 256
 
 
 @dataclass
@@ -182,6 +185,11 @@ class STTConfig:
     language: str = ""
     api_url: str = ""
     api_key: str = ""
+    # Override for whisper_openai (set to a self-hosted OpenAI-compatible
+    # endpoint).  Empty → use the official OpenAI API base URL.
+    base_url: str = ""
+    # HTTP request timeout for cloud STT calls (whisper_openai / openai_compat).
+    timeout: float = 60.0
 
 
 @dataclass
@@ -203,6 +211,11 @@ class TTSConfig:
     model: str = "tts-1"
     api_url: str = ""
     api_key: str = ""
+    # Override for the official OpenAI TTS backend (set to a self-hosted
+    # OpenAI-compatible endpoint).  Empty → use the official OpenAI API URL.
+    base_url: str = ""
+    # HTTP request timeout for cloud TTS calls (openai / openai_compat).
+    timeout: float = 60.0
 
 
 @dataclass
@@ -259,6 +272,12 @@ class Config:
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     ai_backend: AIBackendConfig = field(default_factory=AIBackendConfig)
+    # Opt-in lightweight backend for ``respond_mode: ai_decision_llm``.
+    # When ``None`` (default), the LLM judgement mode falls back to the
+    # keyword-based ``ai_decision`` behaviour.  Configure with a small / fast
+    # model (e.g. ``gemma2:2b``, ``qwen2.5:0.5b`` or BitNet b1.58) — it is
+    # invoked per public-channel message and must answer yes/no quickly.
+    ai_decision: AIBackendConfig | None = None
     soul: SoulConfig = field(default_factory=SoulConfig)
     log: LogConfig = field(default_factory=LogConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
@@ -288,6 +307,7 @@ def _build_dataclass(cls: type, data: dict[str, Any]) -> Any:
 _SECRET_YAML_PATHS: tuple[tuple[str, ...], ...] = (
     ("gateway", "auth_token"),
     ("ai_backend", "api_key"),
+    ("ai_decision", "api_key"),
     ("stt", "api_key"),
     ("tts", "api_key"),
 )
@@ -509,6 +529,14 @@ def load_config(path: str | Path) -> Config:
     if isinstance(ai_cache_raw, dict):
         ai_backend.cache = _build_dataclass(LLMCacheConfig, ai_cache_raw)
 
+    ai_decision: AIBackendConfig | None = None
+    ai_decision_raw = raw.get("ai_decision")
+    if isinstance(ai_decision_raw, dict):
+        ai_decision = _build_dataclass(AIBackendConfig, ai_decision_raw)
+        decision_cache_raw = ai_decision_raw.get("cache")
+        if isinstance(decision_cache_raw, dict):
+            ai_decision.cache = _build_dataclass(LLMCacheConfig, decision_cache_raw)
+
     adapters: dict[str, AdapterConfig] = {}
     for name, adapter_raw in raw.get("adapters", {}).items():
         if isinstance(adapter_raw, dict):
@@ -570,6 +598,7 @@ def load_config(path: str | Path) -> Config:
         heartbeat=heartbeat,
         memory=memory,
         ai_backend=ai_backend,
+        ai_decision=ai_decision,
         soul=soul,
         log=log,
         skills=skills,

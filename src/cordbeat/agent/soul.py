@@ -45,7 +45,7 @@ _DEFAULT_SOUL: dict[str, Any] = {
         "pronoun": "I",
     },
     "personality": {
-        "traits": ["curious", "emotionally expressive", "caring"],
+        "traits": ["curious", "playful", "warm", "candid", "emotionally expressive"],
     },
     "current_emotion": {
         "primary": Emotion.CALM.value,

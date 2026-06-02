@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -164,6 +165,7 @@ def heartbeat(
         skills=skills,
         gateway=mock_gateway,
         queue=queue,
+        adapters_options={"discord": {"dm_policy": "allow_proactive"}},
     )
 
 
@@ -1787,16 +1789,16 @@ class TestApprovedTraitExecution:
         soul: Soul,
     ) -> None:
         """Approved trait change proposal applies traits to soul."""
-        assert "playful" not in soul.traits
+        assert "mischievous" not in soul.traits
 
         proposal_id = await memory.add_certain_record(
             user_id="u1",
-            content="Add playful trait",
+            content="Add mischievous trait",
             record_type="proposal",
             metadata={
                 "status": ProposalStatus.APPROVED,
                 "proposal_type": ProposalType.TRAIT_CHANGE,
-                "trait_add": ["playful"],
+                "trait_add": ["mischievous"],
                 "trait_remove": [],
             },
         )
@@ -1804,7 +1806,7 @@ class TestApprovedTraitExecution:
         await heartbeat._proposals.execute_approved()
 
         # Trait was applied
-        assert "playful" in soul.traits
+        assert "mischievous" in soul.traits
 
         # Proposal marked as executed
         proposal = await memory.get_proposal(proposal_id)
@@ -2475,3 +2477,124 @@ class TestSendHeartbeatMessagePlatformLink:
         )
         await heartbeat._send_heartbeat_message(decision)
         mock_gateway.send_to_adapter.assert_not_awaited()
+
+
+class TestSendHeartbeatMessageDmPolicy:
+    """``dm_policy`` gates whether the loop may speak proactively.
+
+    See ``設計書/gap-analysis-2026-04-20.md`` (DM/channel routing fix).
+    Default is ``reply_only``: do not speak first; only re-engage on a
+    channel the user has previously written in.
+    """
+
+    @pytest.fixture
+    def heartbeat_factory(
+        self,
+        heartbeat_config: HeartbeatConfig,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+        queue: MessageQueue,
+    ) -> Any:
+        def _make(policy: str) -> HeartbeatLoop:
+            return HeartbeatLoop(
+                config=heartbeat_config,
+                ai=mock_ai,
+                soul=soul,
+                memory=memory,
+                skills=skills,
+                gateway=mock_gateway,
+                queue=queue,
+                adapters_options={"discord": {"dm_policy": policy}},
+            )
+
+        return _make
+
+    async def _decision(self) -> HeartbeatDecision:
+        return HeartbeatDecision(
+            action=HeartbeatAction.MESSAGE,
+            content="ping",
+            target_user_id="uid-policy",
+            target_adapter_id="discord",
+        )
+
+    async def test_never_skips_unconditionally(
+        self,
+        heartbeat_factory: Any,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.link_platform("uid-policy", "discord", "snowflake-x")
+        await memory.record_last_seen_channel("uid-policy", "discord", "777", False)
+        loop = heartbeat_factory("never")
+        await loop._send_heartbeat_message(await self._decision())
+        mock_gateway.send_to_adapter.assert_not_awaited()
+
+    async def test_reply_only_without_last_seen_skips(
+        self,
+        heartbeat_factory: Any,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.link_platform("uid-policy", "discord", "snowflake-x")
+        loop = heartbeat_factory("reply_only")
+        await loop._send_heartbeat_message(await self._decision())
+        mock_gateway.send_to_adapter.assert_not_awaited()
+
+    async def test_reply_only_with_dm_last_seen_skips(
+        self,
+        heartbeat_factory: Any,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.link_platform("uid-policy", "discord", "snowflake-x")
+        await memory.record_last_seen_channel("uid-policy", "discord", "999", True)
+        loop = heartbeat_factory("reply_only")
+        await loop._send_heartbeat_message(await self._decision())
+        mock_gateway.send_to_adapter.assert_not_awaited()
+
+    async def test_reply_only_with_channel_last_seen_sends_pinned(
+        self,
+        heartbeat_factory: Any,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.link_platform("uid-policy", "discord", "snowflake-x")
+        await memory.record_last_seen_channel("uid-policy", "discord", "555", False)
+        loop = heartbeat_factory("reply_only")
+        await loop._send_heartbeat_message(await self._decision())
+        mock_gateway.send_to_adapter.assert_awaited_once()
+        _, sent = mock_gateway.send_to_adapter.await_args.args
+        assert sent.metadata.get("channel_id") == "555"
+        assert sent.metadata.get("is_dm") is False
+        assert sent.metadata.get("allow_dm_fallback") is False
+
+    async def test_allow_proactive_without_last_seen_permits_dm_fallback(
+        self,
+        heartbeat_factory: Any,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.link_platform("uid-policy", "discord", "snowflake-x")
+        loop = heartbeat_factory("allow_proactive")
+        await loop._send_heartbeat_message(await self._decision())
+        mock_gateway.send_to_adapter.assert_awaited_once()
+        _, sent = mock_gateway.send_to_adapter.await_args.args
+        assert sent.metadata.get("allow_dm_fallback") is True
+        assert "channel_id" not in sent.metadata
+
+    async def test_records_assistant_turn_after_send(
+        self,
+        heartbeat_factory: Any,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.link_platform("uid-policy", "discord", "snowflake-x")
+        await memory.record_last_seen_channel("uid-policy", "discord", "555", False)
+        loop = heartbeat_factory("reply_only")
+        await loop._send_heartbeat_message(await self._decision())
+        history = await memory.get_recent_messages("uid-policy", limit=5)
+        roles_and_content = [(m["role"], m["content"]) for m in history]
+        assert ("assistant", "ping") in roles_and_content

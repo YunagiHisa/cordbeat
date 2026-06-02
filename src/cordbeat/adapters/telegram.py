@@ -109,7 +109,7 @@ class TelegramAdapter(RetryableConnection):
             is_mentioned = bool(
                 bot_username and f"@{bot_username}".lower() in raw_text.lower()
             )
-            if not self._filter.should_respond(
+            if not await self._filter.should_respond_async(
                 user_id=user_id,
                 channel_id=str(chat_id),
                 is_dm=is_private,
@@ -342,7 +342,12 @@ class TelegramAdapter(RetryableConnection):
             await super()._dispatch_skill_confirm(platform_user_id, data)
 
     async def _dispatch_core_message(
-        self, platform_user_id: str, content: str, images: list[str]
+        self,
+        platform_user_id: str,
+        content: str,
+        images: list[str],
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         if self._tts is not None and platform_user_id in self._voice_users:
             await self._send_voice_to_telegram(platform_user_id, content)

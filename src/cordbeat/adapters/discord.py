@@ -167,13 +167,20 @@ class DiscordAdapter(RetryableConnection):
             await self._bot.close()
 
     async def _dispatch_core_message(
-        self, platform_user_id: str, content: str, images: list[str]
+        self,
+        platform_user_id: str,
+        content: str,
+        images: list[str],
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         guild_id = self._vc_user_guild.get(platform_user_id)
         if guild_id is not None and guild_id in self._vc_receivers:
             await self._speak_in_vc(guild_id, content)
             return
-        await self._send_to_discord(platform_user_id, content, images)
+        await self._send_to_discord(
+            platform_user_id, content, images, metadata=metadata
+        )
 
     async def _dispatch_skill_confirm(
         self, platform_user_id: str, data: dict[str, Any]
@@ -311,7 +318,7 @@ class DiscordAdapter(RetryableConnection):
             if self._bot is not None and self._bot.user is not None
             else ""
         )
-        if not self._filter.should_respond(
+        if not await self._filter.should_respond_async(
             user_id=user_id,
             channel_id=str(channel_id),
             is_dm=not is_guild,
@@ -406,6 +413,7 @@ class DiscordAdapter(RetryableConnection):
                 "metadata": {
                     "channel_id": str(message.channel.id),
                     "guild_id": str(message.guild.id) if message.guild else "",
+                    "is_dm": message.guild is None,
                     "display_name": message.author.display_name,
                 },
             }
@@ -455,6 +463,8 @@ class DiscordAdapter(RetryableConnection):
         platform_user_id: str,
         content: str,
         images: list[str] | None = None,
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         if not self._bot or not platform_user_id:
             return
@@ -496,8 +506,27 @@ class DiscordAdapter(RetryableConnection):
         if not chunks and not discord_files:
             return
 
+        # Routing precedence:
+        #   1. Core-supplied metadata.channel_id (Heartbeat consults
+        #      ``user_channels`` table and pins the channel explicitly).
+        #   2. In-memory cache populated by recent inbound messages.
+        #   3. DM fallback (only when ``allow_dm_fallback`` is true; the
+        #      Heartbeat sets it to false to honour ``dm_policy``).
+        hinted: int | None = None
+        if metadata:
+            raw_cid = metadata.get("channel_id")
+            if raw_cid:
+                try:
+                    hinted = int(raw_cid)
+                except (TypeError, ValueError):
+                    hinted = None
+        cached = self._user_channels.get(platform_user_id)
+        channel_id = hinted or cached
+        allow_dm_fallback = True
+        if metadata is not None and "allow_dm_fallback" in metadata:
+            allow_dm_fallback = bool(metadata.get("allow_dm_fallback"))
+
         try:
-            channel_id = self._user_channels.get(platform_user_id)
             if channel_id:
                 self._stop_typing(channel_id)
                 # get_channel() only checks the cache; fall back to fetch_channel()
@@ -513,6 +542,14 @@ class DiscordAdapter(RetryableConnection):
                     if not chunks:
                         await channel.send(None, files=discord_files)
                     return
+
+            if not allow_dm_fallback:
+                logger.info(
+                    "No known channel for user %s and DM fallback disabled; "
+                    "skipping send",
+                    platform_user_id,
+                )
+                return
 
             # No channel mapping found → fall back to DM
             user = await self._bot.fetch_user(int(platform_user_id))

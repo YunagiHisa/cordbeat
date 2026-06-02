@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from cordbeat.config import AdapterConfig, LogConfig
@@ -163,6 +164,46 @@ class TestDiscordAdapter:
 
         await adapter._send_to_discord("123", "hello")
         mock_user.send.assert_awaited_once_with("hello", files=[])
+
+    async def test_send_to_discord_metadata_channel_id_overrides_cache(self) -> None:
+        """Core-supplied channel_id in metadata wins over the in-memory cache."""
+        from cordbeat.adapters.discord import DiscordAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = DiscordAdapter(config)
+        pinned_channel = AsyncMock()
+        cached_channel = AsyncMock()
+
+        def _get(cid: int) -> Any:
+            return pinned_channel if cid == 999 else cached_channel
+
+        adapter._bot = MagicMock()
+        adapter._bot.get_channel = MagicMock(side_effect=_get)
+        adapter._user_channels["123"] = 456  # stale/wrong cache
+
+        await adapter._send_to_discord(
+            "123", "hi", metadata={"channel_id": "999", "is_dm": False}
+        )
+        pinned_channel.send.assert_awaited_once_with("hi", files=[])
+        cached_channel.send.assert_not_called()
+
+    async def test_send_to_discord_no_dm_fallback_when_disallowed(self) -> None:
+        """allow_dm_fallback=False prevents DM as the last-resort path."""
+        from cordbeat.adapters.discord import DiscordAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = DiscordAdapter(config)
+        mock_user = AsyncMock()
+        adapter._bot = MagicMock()
+        adapter._bot.get_channel = MagicMock(return_value=None)
+        adapter._bot.fetch_channel = AsyncMock(return_value=None)
+        adapter._bot.fetch_user = AsyncMock(return_value=mock_user)
+        # No cache, no metadata.channel_id → previously would DM.
+
+        await adapter._send_to_discord(
+            "123", "hi", metadata={"allow_dm_fallback": False}
+        )
+        mock_user.send.assert_not_awaited()
 
 
 class TestTelegramAdapter:

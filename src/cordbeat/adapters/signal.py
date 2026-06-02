@@ -54,6 +54,7 @@ class SignalAdapter(RetryableConnection):
         self._rpc_url: str = opts.get("rpc_url", "http://localhost:8088/api/v1/rpc")
         self._phone_number: str = opts.get("phone_number", "")
         self._poll_interval: float = float(opts.get("poll_interval", 2))
+        self._http_timeout: float = float(opts.get("http_timeout", 30.0))
         self._http_client: Any = None
         self._ws: Any = None
         self._running = False
@@ -75,7 +76,7 @@ class SignalAdapter(RetryableConnection):
             return
 
         self._running = True
-        self._http_client = httpx.AsyncClient(timeout=30.0)
+        self._http_client = httpx.AsyncClient(timeout=self._http_timeout)
 
         # Connect to Core in background
         asyncio.create_task(self._connect_to_core())
@@ -95,7 +96,12 @@ class SignalAdapter(RetryableConnection):
             await self._http_client.aclose()
 
     async def _dispatch_core_message(
-        self, platform_user_id: str, content: str, images: list[str]
+        self,
+        platform_user_id: str,
+        content: str,
+        images: list[str],
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         await self._send_to_signal(platform_user_id, content)
 

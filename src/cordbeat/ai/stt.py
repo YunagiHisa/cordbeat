@@ -77,10 +77,13 @@ class WhisperLocalSTT(STTBackend):
 class WhisperOpenAISTT(STTBackend):
     """OpenAI Whisper STT via the official cloud API."""
 
+    _DEFAULT_BASE_URL = "https://api.openai.com"
+
     def __init__(self, config: STTConfig) -> None:
         self._api_key = config.api_key
         self._language = config.language
-        self._base_url = "https://api.openai.com"
+        self._base_url = (config.base_url or self._DEFAULT_BASE_URL).rstrip("/")
+        self._timeout = config.timeout
 
     async def transcribe(self, audio_bytes: bytes, language: str = "") -> str:
         lang = language or self._language
@@ -98,7 +101,7 @@ class WhisperOpenAISTT(STTBackend):
                     headers=headers,
                     data=data,
                     files=files,
-                    timeout=60.0,
+                    timeout=self._timeout,
                 )
                 resp.raise_for_status()
                 return str(resp.json().get("text", "")).strip()
@@ -114,6 +117,7 @@ class OpenAICompatSTT(STTBackend):
         self._base_url = config.api_url.rstrip("/")
         self._api_key = config.api_key
         self._language = config.language
+        self._timeout = config.timeout
 
     async def transcribe(self, audio_bytes: bytes, language: str = "") -> str:
         if not self._base_url:
@@ -134,7 +138,7 @@ class OpenAICompatSTT(STTBackend):
                     headers=headers,
                     data=data,
                     files=files,
-                    timeout=60.0,
+                    timeout=self._timeout,
                 )
                 resp.raise_for_status()
                 return str(resp.json().get("text", "")).strip()

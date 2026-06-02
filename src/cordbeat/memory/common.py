@@ -65,6 +65,19 @@ CREATE INDEX IF NOT EXISTS idx_certain_user_type_time
 """
 
 
+CHANNEL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS user_channels (
+    user_id     TEXT NOT NULL,
+    adapter_id  TEXT NOT NULL,
+    channel_id  TEXT NOT NULL,
+    is_dm       INTEGER NOT NULL DEFAULT 0,
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY (user_id, adapter_id),
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+"""
+
+
 VECTOR_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS semantic_vectors USING vec0(
     user_id TEXT PARTITION KEY,

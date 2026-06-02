@@ -189,7 +189,12 @@ class WhatsAppAdapter(RetryableConnection):
             await self._http_client.aclose()
 
     async def _dispatch_core_message(
-        self, platform_user_id: str, content: str, images: list[str]
+        self,
+        platform_user_id: str,
+        content: str,
+        images: list[str],
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         await self._send_to_whatsapp(platform_user_id, content)
 

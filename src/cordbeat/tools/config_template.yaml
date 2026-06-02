@@ -1,0 +1,296 @@
+# CordBeat Configuration
+# Copy this file to config.yaml and adjust settings.
+#
+# SECRETS → .env (NOT config.yaml)
+#   API keys, tokens, and passwords must be stored in a .env file
+#   placed next to config.yaml. Never put secrets in config.yaml.
+#   Example .env:
+#     CORDBEAT_GATEWAY__AUTH_TOKEN=your-hmac-secret
+#     CORDBEAT_AI_BACKEND__API_KEY=sk-...
+#     CORDBEAT_ADAPTERS__DISCORD__OPTIONS__TOKEN=your-discord-token
+#
+# Environment variable overrides:
+#   All settings can be overridden via env vars with the CORDBEAT_ prefix.
+#   Use double underscores (__) for nesting:
+#     CORDBEAT_GATEWAY__PORT=9000
+#     CORDBEAT_AI_BACKEND__MODEL=gpt-4
+#
+# You can also place a .env file next to config.yaml.
+
+gateway:
+  host: "0.0.0.0"
+  port: 8765
+  handshake_timeout: 10.0  # seconds to wait for adapter handshake
+
+log:
+  level: "INFO"                                            # DEBUG | INFO | WARNING | ERROR
+  format: "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+  # file: "data/logs/cordbeat.log"  # Default: data/logs/cordbeat.log; set to "" to disable
+  # max_bytes: 10485760             # 10 MiB — rotate when file exceeds this size
+  # backup_count: 5                 # Number of rotated backup files to keep
+
+ai_backend:
+  provider: ollama          # ollama | openai | openai_compat
+  base_url: "http://localhost:11434"
+  model: "llama3"
+  timeout: 120.0             # request timeout in seconds
+  max_tokens: 4096           # max tokens per generation
+                             # ⚠ thinking models (Qwen3/DeepSeek-R1) consume 1000-3000
+                             #   tokens in the <think> phase — use 4096+ to avoid
+                             #   content=null responses
+  # options:                 # provider-specific options
+  #   api_key: ""           # required for openai/openai_compat
+
+  # --- Alternative: llama.cpp server (e.g. Qwen3 thinking model) ---
+  # provider: openai_compat
+  # base_url: "http://localhost:8080/v1"
+  # model: "default"
+  # max_tokens: 8192         # Qwen3 thinking needs headroom; 8192 recommended
+  # options:
+  #   enable_thinking: true  # set to false to skip <think> phase entirely
+  #                          # (faster, less tokens; use when thinking model causes
+  #                          #  empty responses even at high max_tokens)
+
+  # --- Alternative: OpenAI API ---
+  # provider: openai
+  # base_url: "https://api.openai.com/v1"
+  # model: "gpt-4"
+  # options:
+  #   api_key: "sk-..."
+
+  vision_enabled: false  # Enable image input for vision-capable models
+
+  cache:
+    enabled: false       # Cache identical LLM requests (deterministic-ish only)
+    max_entries: 256     # Max cached entries (LRU eviction)
+    ttl_seconds: 3600    # Cache entry lifetime (seconds)
+    max_temperature: 0.2 # Only cache calls at or below this temperature
+
+# --- ai_decision: opt-in lightweight LLM judge for respond_mode=ai_decision_llm ---
+# When configured, public-channel adapters (Discord/Slack/Telegram/etc.) using
+# `respond_mode: "ai_decision_llm"` consult this small/fast LLM for a yes/no
+# decision on whether to reply.  When this section is absent (default),
+# `ai_decision_llm` falls back to keyword matching (= ai_decision behaviour).
+# Choose a model that answers in a single token quickly (e.g. gemma2:2b,
+# qwen2.5:0.5b, BitNet-b1.58).  DMs always respond regardless of this setting.
+# ai_decision:
+#   provider: ollama
+#   base_url: "http://localhost:11434"
+#   model: "gemma2:2b"
+#   options:
+#     judge_max_tokens: 8        # tokens for the yes/no judgement reply
+#     judge_temperature: 0.0     # 0.0 = deterministic; raise for more variety
+
+heartbeat:
+  default_interval_minutes: 60
+  min_interval_minutes: 5
+  max_interval_minutes: 1440
+  quiet_hours_start: "01:00"
+  quiet_hours_end: "07:00"
+  timezone: "UTC"  # IANA timezone (e.g. "Asia/Tokyo")
+
+memory:
+  sqlite_path: "data/cordbeat.db"
+  decay_rate: 0.1
+  archive_threshold: 0.05
+  conversation_history_limit: 20     # recent messages loaded into context
+  memory_search_results: 3           # vector search results per query
+  diary_max_tokens: 512              # max tokens for diary generation
+  facts_per_message_limit: 5         # max facts extracted per message
+  extraction_temperature: 0.2          # AI temperature for memory extraction
+  flashbulb_intensity_threshold: 0.8   # emotion intensity to trigger flashbulb memory
+  max_user_input_len: 2000             # max chars for sanitized user input
+  diary_temperature: 0.5               # AI temperature for diary generation
+  consolidation_temperature: 0.2       # AI temperature for memory consolidation
+  consolidation_episode_results: 10    # episodic memories to review during consolidation
+  consolidation_facts_limit: 5         # max facts promoted per consolidation
+  chain_link_episode_results: 5        # today's episodes for chain link building
+  chain_link_related_results: 3        # related memories per episode for chain linking
+  recall_keyword_search_results: 2     # results per recall keyword search
+  emotion_recall_search_results: 2     # results for emotion-based recall
+  chain_recall_max_depth: 2            # max depth for chain recall traversal
+  recall_hints_limit: 20               # max recall hints per user
+  message_trim_keep: 100               # messages to keep per user when trimming
+  token_expiry_minutes: 10             # link token expiry in minutes
+  chain_link_query_limit: 100          # max chain link records to query
+  chain_link_max_results: 10           # max chain link results returned
+  recall_hints_retention_days: 2       # days to keep recall hints before cleanup
+  chain_links_retention_days: 2        # days to keep chain links before cleanup
+  proposal_expiry_days: 7              # days before pending proposals expire
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"  # Sentence embedding model
+  embedding_dim: 384               # Must match embedding model output dimension
+  dedup_distance_threshold: 0.0    # Skip storing memories closer than this (0.0 = off)
+  # --- Conversation history compression (sleep-phase summarisation) ---
+  context_compression_enabled: true
+  context_compression_chars_threshold: 4000  # in-memory: summarise if history exceeds chars
+  context_compression_threshold: 60          # sleep: summarise when user has > N messages
+  context_compression_chunk: 20              # oldest messages summarised per pass
+  context_compression_temperature: 0.3       # LLM temperature for the summary call
+  context_compression_max_tokens: 256        # LLM max_tokens for the summary call
+
+soul:
+  soul_dir: "data/soul"
+  emotion_decay_rate: 0.05             # per-tick emotion intensity decay
+  emotion_baseline_intensity: 0.3      # emotion intensity baseline (decay target)
+  emotion_secondary_clear_threshold: 0.1  # below this, secondary emotion is cleared
+skills_dir: "skills"
+data_dir: "data"
+
+react:
+  enabled: true             # set false to disable ReAct loop (strips skill tags instead)
+  max_iterations: 3         # maximum tool-call/re-prompt cycles per message
+  max_tool_output_chars: 4000  # per-result output truncation limit fed back to AI
+  expose_trace_to_user: false  # reserved; trace is debug-log only for now
+
+skills:
+  default_rate_limit_per_minute: 0  # 0 = unlimited; per-skill rate limit (calls/min)
+  sandbox:
+    timeout_seconds: 30            # hard timeout per skill invocation
+    memory_limit_mb: 256           # address-space cap (Unix: RLIMIT_AS)
+    max_output_bytes: 1048576      # 1 MiB cap on skill stdout
+    allow_network_by_default: false  # default for skills without explicit network flag
+
+adapters:
+  # Secrets (tokens, keys) → .env file.  See .env.example.
+  #
+  # ── E-4 Response Filtering ───────────────────────────────────────────────
+  # Each adapter supports respond_mode and blocklist/whitelist filters.
+  #
+  #   respond_mode: "all"           → respond to every message
+  #   respond_mode: "mention_only"  → respond only when @mentioned or in DM
+  #   respond_mode: "ai_decision"   → respond when a keyword appears in text
+  #   respond_mode: "ai_decision_llm" → ask a small LLM for yes/no (see top-level ai_decision:)
+  #                                   (defaults to the AI's soul name if no
+  #                                   keywords are configured)
+  #
+  # DMs always bypass channel filters and respond_mode restrictions.
+  # user_blocklist takes priority over everything (even DMs).
+  # ─────────────────────────────────────────────────────────────────────────
+  discord:
+    core_ws_url: "ws://localhost:8765"
+    enabled: false
+    reconnect_max_backoff: 60  # max seconds between reconnection attempts
+    options:
+      respond_mode: "all"          # all | mention_only | ai_decision | ai_decision_llm      channel_whitelist: []        # only respond in these channel IDs (empty = all channels; DMs always bypass)
+      channel_blacklist: []        # never respond in these channel IDs
+      user_blocklist: []           # never respond to these user IDs
+      ai_decision_keywords: []     # keywords for ai_decision mode (default: soul name)
+      # dm_policy controls whether autonomous HEARTBEAT messages may DM users
+      # who have only ever talked to the bot in a channel.
+      #   reply_only      (default, recommended): only send proactive messages
+      #                   when we have a remembered non-DM channel for the user;
+      #                   otherwise skip silently.  Prevents unintended DMs.
+      #   allow_proactive : send even without history; allow DM as last resort
+      #                    (pre-1.0 behaviour — opt back in here).
+      #   never           : never send proactive Heartbeat messages at all.
+      dm_policy: "reply_only"
+      # guild_id: 123456789012345678 # set for instant slash-command sync (dev/single-server).
+      #                              # leave unset for global sync (up to 1 hour to propagate)
+    # -- Example: mention-only bot in a busy server --
+    # options:
+    #   respond_mode: "mention_only"
+    #   channel_blacklist: [123456789, 987654321]  # mute in #announcements, #rules
+    #   user_blocklist: []
+    # -- Example: keyword-based auto-reply --
+    # options:
+    #   respond_mode: "ai_decision"
+    #   ai_decision_keywords: ["cordbeat", "ai", "bot"]
+    #   channel_whitelist: [111222333444555666]  # only in #ai-chat
+  telegram:
+    core_ws_url: "ws://localhost:8765"
+    enabled: false
+    reconnect_max_backoff: 60
+    options:
+      respond_mode: "all"          # all | mention_only | ai_decision | ai_decision_llm  (groups only; DMs always respond)
+      channel_whitelist: []        # only respond in these chat IDs (groups only; DMs always bypass)
+      channel_blacklist: []        # never respond in these chat IDs (groups only)
+      user_blocklist: []           # never respond to these Telegram user IDs
+      ai_decision_keywords: []     # keywords for ai_decision mode (default: soul name)
+
+  # --- v1.0+ scaffolds (uv sync --extra <name> to install SDKs) -----------
+  slack:
+    core_ws_url: "ws://localhost:8765"
+    enabled: false
+    reconnect_max_backoff: 60
+    options:
+      respond_mode: "all"            # all | mention_only | ai_decision | ai_decision_llm
+      channel_whitelist: []          # only respond in these channel IDs (DMs always bypass)
+      channel_blacklist: []          # never respond in these channel IDs
+      user_blocklist: []             # never respond to these Slack user IDs
+      ai_decision_keywords: []       # keywords for ai_decision mode (default: soul name)
+      # bot_token: "xoxb-..."        # Bot User OAuth Token (use .env)
+      # app_token: "xapp-..."        # App-Level Token (connections:write) (use .env)
+  line:
+    core_ws_url: "ws://localhost:8765"
+    enabled: false
+    reconnect_max_backoff: 60
+    options:
+      respond_mode: "all"            # all | mention_only | ai_decision | ai_decision_llm (groups only)
+      user_blocklist: []             # never respond to these LINE user IDs
+      ai_decision_keywords: []       # keywords for ai_decision/mention_only (default: soul name)
+      webhook_host: "0.0.0.0"
+      webhook_port: 8080
+      webhook_path: "/webhook"
+      # channel_access_token: "..."  # LINE Channel Access Token (use .env)
+      # channel_secret: "..."        # LINE Channel Secret (use .env)
+  whatsapp:
+    core_ws_url: "ws://localhost:8765"
+    enabled: false
+    reconnect_max_backoff: 60
+    options:
+      user_blocklist: []             # never respond to these WhatsApp phone numbers
+      webhook_host: "0.0.0.0"
+      webhook_port: 8081
+      webhook_path: "/webhook"
+      # phone_number_id: "..."       # WhatsApp Business phone number ID (use .env)
+      # access_token: "..."          # Meta Cloud API access token (use .env)
+      # app_secret: "..."            # Webhook signature secret (use .env)
+  signal:
+    core_ws_url: "ws://localhost:8765"
+    enabled: false
+    reconnect_max_backoff: 60
+    options:
+      user_blocklist: []             # never respond to these Signal numbers
+      rpc_url: "http://localhost:8088/api/v1/rpc"  # signal-cli JSON-RPC URL
+      poll_interval: 1.0             # seconds between receive polls
+      http_timeout: 30.0             # signal-cli HTTP timeout (seconds)
+      # phone_number: "+1234567890"  # Signal phone number registered with signal-cli (use .env)
+
+# --- STT: Speech-to-text (requires uv sync --extra stt-local or stt-openai) ---
+stt:
+  enabled: false
+  backend: "whisper_openai"   # whisper_local | whisper_openai | openai_compat
+  model: "base"               # tiny | base | small | medium | large (whisper_local)
+  language: ""                # language hint, e.g. "ja" (empty = auto-detect)
+  api_url: ""                 # openai_compat endpoint
+  api_key: ""                 # API key for whisper_openai / openai_compat
+  base_url: ""                # override official OpenAI URL for whisper_openai
+                              # (empty = "https://api.openai.com")
+  timeout: 60.0               # HTTP request timeout (seconds)
+
+# --- TTS: Text-to-speech (requires uv sync --extra tts-edge or tts-openai) ---
+tts:
+  enabled: false
+  backend: "edge_tts"         # edge_tts | openai | openai_compat
+  voice: "ja-JP-NanamiNeural" # edge_tts voice name (see edge-tts --list-voices)
+  speed: 1.0                  # playback speed multiplier
+  model: "tts-1"              # OpenAI TTS model (openai / openai_compat)
+  api_url: ""                 # openai_compat endpoint
+  api_key: ""                 # API key for openai / openai_compat
+  base_url: ""                # override official OpenAI URL for openai backend
+                              # (empty = "https://api.openai.com")
+  timeout: 60.0               # HTTP request timeout (seconds)
+
+# --- RVC: Voice conversion post-processor (requires uv sync --extra rvc) ---
+rvc:
+  enabled: false
+  model_path: ""              # path to .pth RVC checkpoint
+  index_path: ""              # path to .index file (optional, improves quality)
+  f0_up_key: 0                # pitch shift in semitones (0 = no shift)
+  device: ""                  # "cuda" | "cpu" | "" (auto)
+
+# --- Metrics ---
+metrics:
+  enabled: true
+  prometheus_host: "127.0.0.1"
+  prometheus_port: 0          # 0 = HTTP endpoint disabled; set e.g. 9090 to enable

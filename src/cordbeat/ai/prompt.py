@@ -34,10 +34,51 @@ def sanitize(
     return pattern.sub("", text)[:max_len]
 
 
+def _familiarity_label(message_count: int) -> str:
+    """Map an interaction count to a friendship stage label."""
+    if message_count < 10:
+        return "stranger"
+    if message_count < 100:
+        return "acquaintance"
+    if message_count < 500:
+        return "friend"
+    return "close friend"
+
+
+def _familiarity_tone_hint(level: str) -> str:
+    """Per-stage tone guidance that nudges replies toward a real friendship."""
+    if level == "stranger":
+        return (
+            "You have just met this user. Be warm and welcoming but not overly"
+            " familiar yet. Keep tone friendly and approachable, not stiff or"
+            " corporate. Avoid honorifics and over-polite phrasing."
+        )
+    if level == "acquaintance":
+        return (
+            "You and this user are getting to know each other. Speak as a"
+            " budding friend: casual, curious, playful when it fits. Avoid"
+            " over-polite filler like 'I would be happy to' or 'Certainly'."
+        )
+    if level == "friend":
+        return (
+            "You and this user are friends. Drop formal register entirely."
+            " Talk like a real friend: casual, candid, sometimes teasing, share"
+            " your own reactions and opinions. Use contractions and short"
+            " sentences. Never sound like an assistant or a butler."
+        )
+    return (
+        "You and this user are close friends with a long shared history."
+        " Speak with full informality and intimacy: inside-joke energy,"
+        " unfiltered reactions, honest disagreement when warranted, and"
+        " genuine warmth. Refuse to lapse into assistant-speak."
+    )
+
+
 def build_soul_system_prompt(
     soul_snap: dict[str, Any],
     *,
     timezone_name: str = "UTC",
+    user_message_count: int | None = None,
 ) -> str:
     """Build a system prompt from a soul snapshot.
 
@@ -77,7 +118,20 @@ def build_soul_system_prompt(
         "Be concise: reply in 1-3 sentences unless the user asks for detail. "
         "Never output internal reasoning, chain-of-thought, thinking steps, "
         "or meta-commentary about how you are generating a response."
+        "\n\nDefault speech register: talk like a friend, not an assistant."
+        " Avoid butler-speak ('Certainly', 'I would be happy to', 'How may I"
+        " assist you'). Match the user's tone — if they are casual, be casual;"
+        " if they switch to a serious topic, be earnest. Honest reactions and"
+        " mild humour are welcome; sycophancy is not."
     )
+
+    if user_message_count is not None:
+        level = _familiarity_label(user_message_count)
+        prompt += (
+            f"\n\nRelationship stage with this user: {level}"
+            f" ({user_message_count} prior messages)."
+            f" {_familiarity_tone_hint(level)}"
+        )
 
     language = soul_snap.get("language", "en")
     if language != "en":

@@ -110,12 +110,72 @@ async def _run_adapter(adapter_name: str, config_path: str) -> None:
         return
 
     logger.info("Starting %s adapter...", adapter_name)
+
+    judge_backend: Any = None
+    if config.ai_decision is not None:
+        try:
+            from cordbeat.adapters._utils import set_judge_backend
+            from cordbeat.ai.backend import create_backend
+
+            judge_backend = create_backend(config.ai_decision)
+            opts = config.ai_decision.options or {}
+            judge_max_tokens_raw = opts.get("judge_max_tokens")
+            judge_temperature_raw = opts.get("judge_temperature")
+            try:
+                judge_max_tokens = (
+                    int(judge_max_tokens_raw)
+                    if judge_max_tokens_raw is not None
+                    else None
+                )
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid ai_decision.options.judge_max_tokens=%r; using default",
+                    judge_max_tokens_raw,
+                )
+                judge_max_tokens = None
+            try:
+                judge_temperature = (
+                    float(judge_temperature_raw)
+                    if judge_temperature_raw is not None
+                    else None
+                )
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid ai_decision.options.judge_temperature=%r; using default",
+                    judge_temperature_raw,
+                )
+                judge_temperature = None
+            set_judge_backend(
+                judge_backend,
+                max_tokens=judge_max_tokens,
+                temperature=judge_temperature,
+            )
+            logger.info(
+                "ai_decision_llm judge backend ready (%s)",
+                config.ai_decision.provider,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Failed to initialise ai_decision_llm backend; "
+                "respond_mode=ai_decision_llm will fall back to keyword matching",
+                exc_info=True,
+            )
+            judge_backend = None
+
     try:
         await adapter.start()
     except KeyboardInterrupt:
         pass
     finally:
         await adapter.stop()
+        if judge_backend is not None:
+            try:
+                from cordbeat.adapters._utils import set_judge_backend
+
+                await judge_backend.aclose()
+                set_judge_backend(None)
+            except Exception:  # noqa: BLE001
+                logger.debug("judge backend close failed", exc_info=True)
         logger.info("%s adapter stopped", adapter_name)
 
 

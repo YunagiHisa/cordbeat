@@ -159,7 +159,11 @@ class SleepPhase:
             if not oldest:
                 return
 
-            compressor = ConversationCompressor(self._ai)
+            compressor = ConversationCompressor(
+                self._ai,
+                temperature=self._memory_config.context_compression_temperature,
+                max_tokens=self._memory_config.context_compression_max_tokens,
+            )
             summary = await compressor.compress_chunk_to_text(
                 oldest, soul_name=soul_snap["name"]
             )

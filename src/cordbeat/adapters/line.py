@@ -141,7 +141,12 @@ class LineAdapter(RetryableConnection):
             await self._http_runner.cleanup()
 
     async def _dispatch_core_message(
-        self, platform_user_id: str, content: str, images: list[str]
+        self,
+        platform_user_id: str,
+        content: str,
+        images: list[str],
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         await self._send_to_line(platform_user_id, content)
 
@@ -163,7 +168,7 @@ class LineAdapter(RetryableConnection):
                 is_mentioned = any(kw.lower() in text.lower() for kw in kws)
             else:
                 is_mentioned = True  # no keywords → treat as mentioned
-        if not self._filter.should_respond(
+        if not await self._filter.should_respond_async(
             user_id=user_id,
             channel_id="",  # LINE groups have no stable channel_id for filtering
             is_dm=is_dm,

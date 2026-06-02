@@ -329,7 +329,9 @@ class TestDiscordAdapterVC:
         adapter._send_to_discord = AsyncMock()  # type: ignore[method-assign]
 
         await adapter._dispatch_core_message("99", "text reply", [])
-        adapter._send_to_discord.assert_called_once_with("99", "text reply", [])
+        adapter._send_to_discord.assert_called_once_with(
+            "99", "text reply", [], metadata=None
+        )
 
     async def test_speak_in_vc_no_tts(self) -> None:
         adapter = self._make_adapter()

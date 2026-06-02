@@ -100,10 +100,13 @@ class RetryableConnection(ABC):
                 content = data.get("content", "")
                 platform_user_id = data.get("platform_user_id", "")
                 images: list[str] = data.get("images") or []
+                metadata: dict[str, Any] = data.get("metadata") or {}
                 if msg_type == "skill_confirm":
                     await self._dispatch_skill_confirm(platform_user_id, data)
                 elif msg_type in ("message", "heartbeat_message", "error"):
-                    await self._dispatch_core_message(platform_user_id, content, images)
+                    await self._dispatch_core_message(
+                        platform_user_id, content, images, metadata=metadata
+                    )
         except websockets.ConnectionClosed:
             logger.info("Core connection closed")
 
@@ -120,9 +123,19 @@ class RetryableConnection(ABC):
 
     @abstractmethod
     async def _dispatch_core_message(
-        self, platform_user_id: str, content: str, images: list[str]
+        self,
+        platform_user_id: str,
+        content: str,
+        images: list[str],
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
-        """Override in subclass to route messages to the platform."""
+        """Override in subclass to route messages to the platform.
+
+        ``metadata`` carries optional adapter-specific routing hints from
+        Core (e.g. ``{"channel_id": "...", "is_dm": False}``). Adapters
+        may ignore it for backward compatibility.
+        """
 
 
 # ── Message queue ─────────────────────────────────────────────────────

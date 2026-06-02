@@ -135,7 +135,12 @@ class SlackAdapter(RetryableConnection):
             await self._socket_client.close()
 
     async def _dispatch_core_message(
-        self, platform_user_id: str, content: str, images: list[str]
+        self,
+        platform_user_id: str,
+        content: str,
+        images: list[str],
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         await self._send_to_slack(platform_user_id, content)
 
@@ -154,7 +159,7 @@ class SlackAdapter(RetryableConnection):
         is_dm = channel_type == "im"
         # For Slack: "mentioned" = <@BOT_USER_ID> present in text
         is_mentioned = bool(self._bot_user_id) and f"<@{self._bot_user_id}>" in text
-        if not self._filter.should_respond(
+        if not await self._filter.should_respond_async(
             user_id=user_id,
             channel_id=channel,
             is_dm=is_dm,

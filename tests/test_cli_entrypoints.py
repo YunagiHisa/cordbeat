@@ -27,6 +27,63 @@ class TestMainCliKeyboardInterrupt:
             # Must not raise
             cli()
 
+    def test_cli_strips_server_subcommand(self) -> None:
+        """``cordbeat server <path>`` must not pass 'server' as the config path.
+
+        Regression test: systemd unit emits ``cordbeat server <path>`` and
+        previously _resolve_config_path() returned the literal string
+        "server", so load_config silently returned defaults (provider=ollama).
+        """
+        import sys
+
+        from cordbeat.main import cli
+
+        captured: dict[str, str] = {}
+
+        def fake_resolve() -> str:
+            # _resolve_config_path uses sys.argv[1] when present and
+            # not starting with "-"; record what it sees.
+            captured["argv1"] = sys.argv[1] if len(sys.argv) > 1 else ""
+            return "config.yaml"
+
+        with (
+            patch("cordbeat.main._resolve_config_path", side_effect=fake_resolve),
+            patch(
+                "cordbeat.main.asyncio.run",
+                side_effect=KeyboardInterrupt,
+            ),
+            patch.object(sys, "argv", ["cordbeat", "server", "/etc/cordbeat.yaml"]),
+        ):
+            cli()
+
+        assert captured["argv1"] == "/etc/cordbeat.yaml", (
+            "cli() must strip the 'server' subcommand before resolving config"
+        )
+
+    def test_cli_strips_server_subcommand_without_path(self) -> None:
+        """``cordbeat server`` with no path: argv[1] must not be 'server'."""
+        import sys
+
+        from cordbeat.main import cli
+
+        captured: dict[str, int] = {}
+
+        def fake_resolve() -> str:
+            captured["argc"] = len(sys.argv)
+            return "config.yaml"
+
+        with (
+            patch("cordbeat.main._resolve_config_path", side_effect=fake_resolve),
+            patch(
+                "cordbeat.main.asyncio.run",
+                side_effect=KeyboardInterrupt,
+            ),
+            patch.object(sys, "argv", ["cordbeat", "server"]),
+        ):
+            cli()
+
+        assert captured["argc"] == 1
+
     def test_cli_chat_keyboard_interrupt_is_swallowed(self) -> None:
         """cordbeat-chat exits cleanly on KeyboardInterrupt.
 

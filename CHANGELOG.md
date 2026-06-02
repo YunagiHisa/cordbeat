@@ -122,6 +122,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `_detect_image_mime()` helper infers JPEG/PNG/GIF/WebP from magic bytes.
 
 ### Fixed
+- **`cordbeat server <path>` invocation now actually loads the given config.**
+  systemd units installed via `cordbeat-init` use
+  `ExecStart=cordbeat server <path>`, but `cli()` only handled `doctor` as
+  a subcommand — `server` itself was treated as the config path, and the
+  resulting `load_config("server")` call silently returned defaults
+  (`provider=ollama`, `base_url=http://localhost:11434`). Production agents
+  configured for `openai_compat` (e.g. llama.cpp / LM Studio) ended up
+  trying to talk to a non-existent Ollama service. `cli()` now strips a
+  leading `server` token from `sys.argv` so the rest of the path is
+  resolved correctly. Existing systemd installs continue to work without
+  modification.
 - **Signal adapter `rpc_url` default URL aligned across config samples.**
   `config.example.yaml` and the bundled `config_template.yaml` previously
   documented `http://localhost:7583` while the adapter default and

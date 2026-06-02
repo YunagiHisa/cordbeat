@@ -325,6 +325,14 @@ def cli() -> None:
 
         raise SystemExit(run_doctor())
 
+    # ``cordbeat server [path]`` — explicit server invocation.  Strip the
+    # subcommand so that ``_resolve_config_path`` sees only the (optional)
+    # config path argument.  Without this, ``server`` itself gets used as
+    # the config path, ``load_config('server')`` silently returns defaults
+    # (provider=ollama) and the agent connects to the wrong backend.
+    if len(sys.argv) > 1 and sys.argv[1] == "server":
+        sys.argv.pop(1)
+
     config_path = _resolve_config_path()
     try:
         asyncio.run(main(config_path))

@@ -71,6 +71,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   venue, so private DM context no longer leaks into public-channel replies
   and vice versa. Heartbeat / tool paths that don't supply venue metadata
   see the full per-user history (unchanged behaviour).
+- **Conversation history is also scoped per adapter.** `get_recent_messages`
+  now accepts an `adapter_id` filter, and the engine passes the originating
+  adapter (e.g. `discord`, `telegram`, `cli`). A user who chats with the
+  bot on multiple platforms with the same canonical user-id no longer sees
+  cross-platform context bleed. Heartbeat and tool paths still default to
+  the unscoped legacy behaviour.
 - **Package structure refactored into subpackages.** The previously flat
   `src/cordbeat/` namespace is now organised into six subpackages mirroring
   architectural domains: `adapters/` (Discord, Telegram, CLI, Slack, LINE,

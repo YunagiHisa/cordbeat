@@ -145,6 +145,52 @@ class TestConversationHistory:
         msgs = await memory.get_recent_messages("u1")
         assert len(msgs) == 3
 
+    async def test_filter_by_adapter_id(self, memory: MemoryStore) -> None:
+        """Recent messages can be scoped to a single adapter."""
+        await memory.get_or_create_user("u1", "Test")
+        await memory.add_message("u1", "user", "from discord", "discord")
+        await memory.add_message("u1", "user", "from telegram", "telegram")
+        await memory.add_message("u1", "user", "from cli", "cli")
+
+        all_msgs = await memory.get_recent_messages("u1")
+        assert len(all_msgs) == 3  # legacy: no filter → all history
+
+        discord_msgs = await memory.get_recent_messages("u1", adapter_id="discord")
+        assert [m["content"] for m in discord_msgs] == ["from discord"]
+
+        telegram_msgs = await memory.get_recent_messages(
+            "u1", adapter_id="telegram"
+        )
+        assert [m["content"] for m in telegram_msgs] == ["from telegram"]
+
+        cli_msgs = await memory.get_recent_messages("u1", adapter_id="cli")
+        assert [m["content"] for m in cli_msgs] == ["from cli"]
+
+    async def test_adapter_filter_combines_with_dm_and_channel(
+        self, memory: MemoryStore
+    ) -> None:
+        """adapter_id, channel_id, and is_dm filters narrow together."""
+        await memory.get_or_create_user("u1", "Test")
+        await memory.add_message(
+            "u1", "user", "discord guild #1", "discord", channel_id="c1", is_dm=False
+        )
+        await memory.add_message(
+            "u1", "user", "discord dm", "discord", channel_id="", is_dm=True
+        )
+        await memory.add_message(
+            "u1", "user", "telegram guild #1", "telegram", channel_id="c1", is_dm=False
+        )
+
+        only_discord_guild = await memory.get_recent_messages(
+            "u1", adapter_id="discord", channel_id="c1", is_dm=False
+        )
+        assert [m["content"] for m in only_discord_guild] == ["discord guild #1"]
+
+        only_telegram_guild = await memory.get_recent_messages(
+            "u1", adapter_id="telegram", channel_id="c1", is_dm=False
+        )
+        assert [m["content"] for m in only_telegram_guild] == ["telegram guild #1"]
+
 
 class TestFlashbulbMemory:
     async def test_add_flashbulb_memory(self, memory: MemoryStore) -> None:

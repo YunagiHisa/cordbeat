@@ -212,11 +212,13 @@ class CoreEngine:
         channel_id = str(md.get("channel_id") or "") or None
         is_dm_raw = md.get("is_dm")
         is_dm: bool | None = bool(is_dm_raw) if is_dm_raw is not None else None
+        adapter_id = message.adapter_id or None
         history = await self._memory.get_recent_messages(
             user_id,
             limit=self._memory_config.conversation_history_limit,
             channel_id=channel_id,
             is_dm=is_dm,
+            adapter_id=adapter_id,
         )
         message_count = await self._memory.count_messages(user_id)
 

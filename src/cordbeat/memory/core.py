@@ -284,9 +284,14 @@ class MemoryStore:
         limit: int = 20,
         channel_id: str | None = None,
         is_dm: bool | None = None,
+        adapter_id: str | None = None,
     ) -> list[dict[str, str]]:
         return await self._conversations.get_recent_messages(
-            user_id, limit, channel_id=channel_id, is_dm=is_dm
+            user_id,
+            limit,
+            channel_id=channel_id,
+            is_dm=is_dm,
+            adapter_id=adapter_id,
         )
 
     async def get_todays_messages(

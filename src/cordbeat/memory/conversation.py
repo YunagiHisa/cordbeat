@@ -44,13 +44,17 @@ class ConversationStore:
         limit: int = 20,
         channel_id: str | None = None,
         is_dm: bool | None = None,
+        adapter_id: str | None = None,
     ) -> list[dict[str, str]]:
         """Return the *limit* most recent messages for *user_id*.
 
         When ``channel_id`` is given (non-empty), results are scoped to that
         channel.  When ``is_dm`` is given, results are scoped to DM vs
-        non-DM history.  Passing both narrows further.  Pass neither to keep
-        the legacy "all history for this user" behaviour (used by tools and
+        non-DM history.  When ``adapter_id`` is given (non-empty), results
+        are scoped to that adapter (e.g. ``discord``, ``telegram``, ``cli``)
+        so cross-platform linked accounts don't see each other's history.
+        Passing more arguments narrows further.  Pass none to keep the
+        legacy "all history for this user" behaviour (used by tools and
         backward-compat call sites).
         """
         conditions = ["user_id = ?"]
@@ -61,6 +65,9 @@ class ConversationStore:
         if is_dm is not None:
             conditions.append("is_dm = ?")
             params.append(1 if is_dm else 0)
+        if adapter_id is not None and adapter_id != "":
+            conditions.append("adapter_id = ?")
+            params.append(adapter_id)
         where_clause = " AND ".join(conditions)
         params.append(limit)
         cursor = await self._db.execute(

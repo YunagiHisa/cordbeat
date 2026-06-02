@@ -37,6 +37,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   The `SAVE <filename>` command writes output to `~/.cordbeat/draw_output/` (fixed
   safe directory; user-supplied paths are stripped to basename to prevent traversal).
   Safety level `requires_confirmation`; dependency: `Pillow` only.
+- **Configurable LLM/HTTP parameters (audit pass).** Several previously
+  hardcoded values are now exposed in `config.yaml`:
+  - `ai_decision.options.judge_max_tokens` / `judge_temperature` for the
+    yes/no judge call (defaults `8` / `0.0`).
+  - `memory.context_compression_temperature` / `context_compression_max_tokens`
+    for the conversation summarisation LLM call (defaults `0.3` / `256`).
+  - `stt.base_url` / `stt.timeout` (override official OpenAI STT endpoint /
+    HTTP timeout). `tts.base_url` / `tts.timeout` likewise for the TTS side.
+  - `adapters.signal.options.http_timeout` for signal-cli RPC requests
+    (default `30.0`).
+  All defaults reproduce the previous behaviour, so this is non-breaking.
 - **Adapter respond-mode filtering — E-4.** All adapters now support a
   `respond_mode` option (`all` | `mention_only` | `ai_decision` |
   `ai_decision_llm`) plus `channel_whitelist`, `channel_blacklist`, and
@@ -105,6 +116,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `_detect_image_mime()` helper infers JPEG/PNG/GIF/WebP from magic bytes.
 
 ### Fixed
+- **Signal adapter `rpc_url` default URL aligned across config samples.**
+  `config.example.yaml` and the bundled `config_template.yaml` previously
+  documented `http://localhost:7583` while the adapter default and
+  documentation use `http://localhost:8088/api/v1/rpc`.  All three now
+  match the adapter default.
 - **Heartbeat no longer sends unintended DMs (production incident fix).**
   Previously the Heartbeat loop's outbound path went `Heartbeat → Gateway →
   Discord adapter → DM fallback`: if the Discord adapter had no cached

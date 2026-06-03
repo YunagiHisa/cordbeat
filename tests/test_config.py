@@ -8,11 +8,15 @@ from pathlib import Path
 import pytest
 
 from cordbeat.config import (
+    AdapterConfig,
+    AIBackendConfig,
     Config,
+    ConfigValidationError,
     _apply_env_overrides,
     _coerce_value,
     _load_dotenv,
     load_config,
+    validate_config,
 )
 
 
@@ -344,3 +348,58 @@ class TestLogRotationConfig:
         config = load_config(cfg_file)
         assert config.log.max_bytes == 5_242_880
         assert config.log.backup_count == 3
+
+
+class TestValidateConfig:
+    def test_accepts_default(self) -> None:
+        # Default config should validate cleanly.
+        validate_config(Config())
+
+    def test_rejects_string_options_in_ai_backend(self) -> None:
+        cfg = Config()
+        # Simulate the broken-YAML case where `options:` collapses to a
+        # bare scalar string (e.g. `options:\n    enable_thinking:false`
+        # without space after the colon).
+        cfg.ai_backend.options = "enable_thinking:false"  # type: ignore[assignment]
+        with pytest.raises(ConfigValidationError) as excinfo:
+            validate_config(cfg)
+        assert "ai_backend.options" in str(excinfo.value)
+        assert "missing space after a colon" in str(excinfo.value)
+
+    def test_rejects_string_options_in_adapter(self) -> None:
+        cfg = Config()
+        cfg.adapters["discord"] = AdapterConfig(options="token:foo")  # type: ignore[arg-type]
+        with pytest.raises(ConfigValidationError) as excinfo:
+            validate_config(cfg)
+        assert "adapters.discord.options" in str(excinfo.value)
+
+    def test_rejects_string_options_in_ai_decision(self) -> None:
+        cfg = Config()
+        cfg.ai_decision = AIBackendConfig(options="bad")  # type: ignore[arg-type]
+        with pytest.raises(ConfigValidationError) as excinfo:
+            validate_config(cfg)
+        assert "ai_decision.options" in str(excinfo.value)
+
+    def test_collects_multiple_errors(self) -> None:
+        cfg = Config()
+        cfg.ai_backend.options = "x"  # type: ignore[assignment]
+        cfg.adapters["discord"] = AdapterConfig(options="y")  # type: ignore[arg-type]
+        with pytest.raises(ConfigValidationError) as excinfo:
+            validate_config(cfg)
+        msg = str(excinfo.value)
+        assert "ai_backend.options" in msg
+        assert "adapters.discord.options" in msg
+
+    def test_load_config_runs_validation(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        # `enable_thinking:false` (no space) is the canonical user-reported
+        # bug — YAML parses `options` as a bare-string scalar.
+        cfg_file.write_text(
+            "ai_backend:\n"
+            "  provider: openai_compat\n"
+            "  options:\n"
+            "    enable_thinking:false\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigValidationError):
+            load_config(cfg_file)

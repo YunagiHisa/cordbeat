@@ -167,7 +167,14 @@ class OllamaBackend(AIBackend):
     def __init__(self, config: AIBackendConfig) -> None:
         self._base_url = config.base_url.rstrip("/")
         self._model = config.model
-        self._options = config.options
+        options = config.options if isinstance(config.options, dict) else {}
+        if not isinstance(config.options, dict):
+            logger.warning(
+                "ai_backend.options is %s (expected mapping); "
+                "ignoring. Check config.yaml for missing space after a colon.",
+                type(config.options).__name__,
+            )
+        self._options = options
         self._client = httpx.AsyncClient(timeout=config.timeout)
 
     async def aclose(self) -> None:
@@ -300,16 +307,23 @@ class OpenAICompatBackend(AIBackend):
     def __init__(self, config: AIBackendConfig) -> None:
         self._base_url = config.base_url.rstrip("/")
         self._model = config.model
-        self._api_key = config.options.get("api_key", "")
+        options = config.options if isinstance(config.options, dict) else {}
+        if not isinstance(config.options, dict):
+            logger.warning(
+                "ai_backend.options is %s (expected mapping); "
+                "ignoring. Check config.yaml for missing space after a colon.",
+                type(config.options).__name__,
+            )
+        self._api_key = options.get("api_key", "")
         # Qwen3 / DeepSeek-R1 thinking models: set enable_thinking: false in
         # ai.options to skip the <think> phase for JSON-mode requests.
         # Defaults to None (not sent) to avoid breaking non-thinking models.
-        self._enable_thinking: bool | None = config.options.get("enable_thinking")
+        self._enable_thinking: bool | None = options.get("enable_thinking")
         # Optional override for voice contexts (STT-originated messages).
         # When set, it replaces ``enable_thinking`` while
         # ``is_voice_context()`` is true so VC / voice-message replies stay
         # within real-time latency budgets.  None = use ``_enable_thinking``.
-        self._voice_enable_thinking: bool | None = config.options.get(
+        self._voice_enable_thinking: bool | None = options.get(
             "voice_enable_thinking"
         )
         headers: dict[str, str] = {"Content-Type": "application/json"}

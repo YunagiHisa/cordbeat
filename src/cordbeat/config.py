@@ -453,6 +453,48 @@ def _coerce_value(value: str) -> Any:
     return value
 
 
+class ConfigValidationError(ValueError):
+    """Raised when ``config.yaml`` contains structural errors that would
+    cause silent crashes at runtime (e.g. options field declared but parsed
+    as a string due to missing space after a YAML colon)."""
+
+
+def validate_config(cfg: Config) -> None:
+    """Validate a loaded :class:`Config` for structural correctness.
+
+    Catches common YAML authoring mistakes that would otherwise cause a
+    silent crash deep inside subsystem initialisation.  The most frequent
+    culprit is a missing space after a colon (``key:value`` instead of
+    ``key: value``), which YAML happily parses as a single bare scalar
+    string and turns the parent mapping into a string — leading to an
+    ``AttributeError: 'str' object has no attribute 'get'`` from inside an
+    AI backend constructor.
+
+    Raises :class:`ConfigValidationError` listing **all** detected problems
+    at once so the user can fix them in a single edit pass.
+    """
+    errors: list[str] = []
+
+    def _check_options(label: str, value: Any) -> None:
+        if not isinstance(value, dict):
+            errors.append(
+                f"{label}.options must be a mapping, got "
+                f"{type(value).__name__}={value!r}. "
+                "Common cause: missing space after a colon (e.g. "
+                "'enable_thinking:false' instead of 'enable_thinking: false')."
+            )
+
+    _check_options("ai_backend", cfg.ai_backend.options)
+    if cfg.ai_decision is not None:
+        _check_options("ai_decision", cfg.ai_decision.options)
+    for name, adapter in cfg.adapters.items():
+        _check_options(f"adapters.{name}", adapter.options)
+
+    if errors:
+        msg = "Invalid config.yaml:\n  - " + "\n  - ".join(errors)
+        raise ConfigValidationError(msg)
+
+
 def _resolve_relative_paths(config: Config, config_dir: Path) -> None:
     """Resolve relative paths in config relative to the config file directory.
 
@@ -617,5 +659,7 @@ def load_config(path: str | Path) -> Config:
     # Only set if NOT explicitly configured in YAML/env (empty string = user-disabled)
     if not log_file_explicit and not cfg.log.file:
         cfg.log.file = str(Path(cfg.data_dir) / "logs" / "cordbeat.log")
+
+    validate_config(cfg)
 
     return cfg

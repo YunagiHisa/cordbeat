@@ -9,6 +9,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Config validation at startup.** `load_config()` now runs a structural
+  validation pass that detects common YAML authoring mistakes — most notably
+  a missing space after a colon (`enable_thinking:false` instead of
+  `enable_thinking: false`) which causes YAML to parse the parent `options:`
+  mapping as a bare scalar string. Previously such errors caused a silent
+  `AttributeError: 'str' object has no attribute 'get'` deep inside AI backend
+  initialisation, which surfaced as a hung Core service with no log entry
+  past `MEMORY store initialized`. The new `validate_config()` helper raises
+  `ConfigValidationError` listing every detected problem at once. As
+  belt-and-suspenders, `OllamaBackend` and `OpenAICompatBackend` also
+  defensively coerce a non-dict `options` field to `{}` with a WARNING log.
 - **ReAct multi-step skill execution loop.** Replaces the single-pass
   `_dispatch_skill_tags` with a full ReAct loop (`_react_loop`). The AI can now
   call multiple `[SKILL: name | key=value]` tags per response; results are fed

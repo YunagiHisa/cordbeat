@@ -290,6 +290,57 @@ class TestOpenAICompatBackend:
         payload = call_kwargs[1]["json"]
         assert "enable_thinking" not in payload
 
+    async def test_voice_enable_thinking_overrides_in_voice_context(self) -> None:
+        """voice_enable_thinking should replace enable_thinking inside a voice scope."""
+        from cordbeat.ai.backend import voice_context_scope
+
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={"enable_thinking": True, "voice_enable_thinking": False},
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"choices": [{"message": {"content": "Hi!"}}]}
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        # Inside voice scope: voice_enable_thinking (False) wins
+        with voice_context_scope(True):
+            await backend.generate("voice prompt")
+        voice_payload = backend._client.post.call_args[1]["json"]
+        assert voice_payload.get("enable_thinking") is False
+
+        # Outside voice scope: enable_thinking (True) applies
+        await backend.generate("text prompt")
+        text_payload = backend._client.post.call_args[1]["json"]
+        assert text_payload.get("enable_thinking") is True
+
+    async def test_voice_enable_thinking_unset_falls_back(self) -> None:
+        """When voice_enable_thinking is unset, voice scope reuses enable_thinking."""
+        from cordbeat.ai.backend import voice_context_scope
+
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={"enable_thinking": False},
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"choices": [{"message": {"content": "Hi!"}}]}
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        with voice_context_scope(True):
+            await backend.generate("voice prompt")
+        payload = backend._client.post.call_args[1]["json"]
+        # Falls back to global enable_thinking value
+        assert payload.get("enable_thinking") is False
+
 
 class TestGenerateJsonEmptyResponse:
     async def test_empty_raw_raises_json_decode_error(self) -> None:

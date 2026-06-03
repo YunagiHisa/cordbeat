@@ -67,6 +67,48 @@ class TestMessageQueue:
         await asyncio.sleep(0.05)
         task.cancel()
 
+    async def test_is_busy_reflects_pending_and_processing(self) -> None:
+        """is_busy() must be True while a message is queued AND while
+        the handler is running, and return to False afterwards."""
+        queue = MessageQueue()
+
+        # Empty queue, idle handler -> not busy
+        assert queue.is_busy() is False
+
+        in_handler = asyncio.Event()
+        release = asyncio.Event()
+        observed: list[bool] = []
+
+        async def slow_handler(_: GatewayMessage) -> None:
+            in_handler.set()
+            observed.append(queue.is_busy())  # busy while handler runs
+            await release.wait()
+
+        queue.set_handler(slow_handler)
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="u1",
+            content="hi",
+        )
+        await queue.put(msg)
+        # Pending in queue: busy
+        assert queue.is_busy() is True
+
+        task = asyncio.create_task(queue.process_loop())
+        await in_handler.wait()
+        assert observed == [True]
+        # Handler still running: busy
+        assert queue.is_busy() is True
+
+        release.set()
+        await asyncio.sleep(0.05)
+        # Done: not busy
+        assert queue.is_busy() is False
+
+        task.cancel()
+
     async def test_handler_error_does_not_stop_loop(self) -> None:
         queue = MessageQueue()
         call_count = 0

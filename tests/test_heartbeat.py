@@ -411,6 +411,21 @@ class TestTick:
         assert result == 60
         assert heartbeat._sleep_done_today is True
 
+    async def test_tick_skipped_when_queue_busy(
+        self,
+        heartbeat: HeartbeatLoop,
+        queue: MessageQueue,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Heartbeat must skip its tick when a user-message handler is
+        actively running, to avoid contending with that LLM call."""
+        queue._processing = True  # simulate handler in flight
+        result = await heartbeat._tick()
+        assert result == 60
+        # Crucially, no AI call must have been issued by heartbeat itself.
+        mock_ai.generate.assert_not_called()
+        mock_ai.generate_json.assert_not_called()
+
     async def test_tick_calls_ai(
         self,
         heartbeat: HeartbeatLoop,

@@ -122,6 +122,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `_detect_image_mime()` helper infers JPEG/PNG/GIF/WebP from magic bytes.
 
 ### Fixed
+- **Heartbeat now skips ticks while user-message generation is in flight.**
+  `HeartbeatLoop._tick` issued its own LLM calls (Layer 1 triage / Layer 2
+  evaluation) on a fixed timer regardless of whether the engine was busy
+  handling a real user message. On single-GPU local-inference setups this
+  produced two parallel LLM calls competing for the same backend, causing
+  timeouts and degraded UX. The default `MessageQueue` now exposes an
+  `is_busy()` flag (handler running OR pending messages) and `_tick`
+  returns `default_interval_minutes` early when the queue reports busy.
+  Custom `MessageQueueProtocol` implementations should implement `is_busy`
+  to opt in (returning a constant `False` keeps the previous behaviour).
+- **ReAct: leaked `[SKILL: ...]` tags in final reply when iterations exhausted.**
+  When `max_iterations` was reached and the AI was still emitting tool tags,
+  `_react_loop` returned the raw response with the tag visible to the user
+  (e.g. `Let me check [SKILL: web_search | query=...]`). The loop now strips
+  any remaining tags from the final response before returning.
+- **ReAct: empty final reply when AI emits tag-only responses.** If every
+  ReAct continuation contained only `[SKILL: ...]` and no prose, stripping
+  tags produced an empty string and the user got nothing back. The engine
+  now substitutes a short Japanese acknowledgement when tools were actually
+  executed but the model produced no closing text.
+
+### Added
+- **`voice_enable_thinking` per-context override for OpenAI-compat backend.**
+  Thinking models (Qwen3, etc.) consume the entire token budget on
+  `<reasoning>` for short voice replies, producing empty `content` and
+  zero-length TTS output. The new `ai_backend.options.voice_enable_thinking`
+  setting overrides `enable_thinking` only when the request originates from
+  a voice channel/voice-message path. Activated via
+  `voice_context_scope(is_voice)` around AI generation in the engine.
+  `GatewayMessage.is_voice` is now plumbed through Discord (VC + audio
+  attachment STT) and Telegram (voice handler) adapters.
+
+### Changed
+- **System prompt strengthened to enforce tool-promise consistency.** The
+  prompt now lists the action verbs that MUST be paired with a `[SKILL: ...]`
+  tag (調べる/確認する/検索する/見る/取ってくる/描く) and explicitly allows
+  multiple tags per response (matching ReAct semantics). Previous wording
+  said "include exactly one tag" which conflicted with multi-step ReAct
+  behaviour.
+
+### Fixed
 - **`cordbeat server <path>` invocation now actually loads the given config.**
   systemd units installed via `cordbeat-init` use
   `ExecStart=cordbeat server <path>`, but `cli()` only handled `doctor` as

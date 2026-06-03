@@ -59,6 +59,11 @@ class GatewayMessage:
     timestamp: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
     images: list[str] = field(default_factory=list)  # base64-encoded image data
+    is_voice: bool = False  # True if the message originated from a voice
+    # input (STT transcription).  Adapters set this when the underlying
+    # source was speech (Discord VC, voice attachment, Telegram voice
+    # message, etc.) so the engine can apply latency-sensitive overrides
+    # such as ``ai.options.voice_enable_thinking``.
 
 
 # ── User ──────────────────────────────────────────────────────────────

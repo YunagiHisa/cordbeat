@@ -13,7 +13,7 @@ from typing import Any
 
 from cordbeat.agent.react_types import ToolCallResult, ToolTrace
 from cordbeat.agent.soul import Soul
-from cordbeat.ai.backend import AIBackend
+from cordbeat.ai.backend import AIBackend, voice_context_scope
 from cordbeat.ai.extraction import MemoryExtractor
 from cordbeat.ai.prompt import (
     build_context,
@@ -118,17 +118,24 @@ class CoreEngine:
         # Phase 1: Resolve user
         user_id, user = await self._resolve_user(message)
 
-        # Phase 2: Build prompt and generate initial response
-        result = await self._generate_response(user_id, user, message)
-        if result is None:
-            return
-        response, system_prompt, user_prompt = result
+        # Voice-context scope: any LLM call inside this block consults
+        # ``ai.options.voice_enable_thinking`` instead of
+        # ``ai.options.enable_thinking`` so STT-originated messages get
+        # a faster (non-thinking) response when configured.
+        with voice_context_scope(message.is_voice):
+            # Phase 2: Build prompt and generate initial response
+            result = await self._generate_response(user_id, user, message)
+            if result is None:
+                return
+            response, system_prompt, user_prompt = result
 
-        # Phase 3: ReAct loop — execute skill tags and re-prompt
-        response = await self._react_loop(response, message, system_prompt, user_prompt)
+            # Phase 3: ReAct loop — execute skill tags and re-prompt
+            response = await self._react_loop(
+                response, message, system_prompt, user_prompt
+            )
 
-        # Phase 4: Send reply immediately — do NOT wait for post-processing
-        clean_response, draw_images = await self._maybe_draw(response)
+            # Phase 4: Send reply immediately — do NOT wait for post-processing
+            clean_response, draw_images = await self._maybe_draw(response)
         reply = GatewayMessage(
             type=MessageType.MESSAGE,
             adapter_id=message.adapter_id,
@@ -240,11 +247,22 @@ class CoreEngine:
         skills_desc = self._skills.get_skill_descriptions_for_prompt()
         if skills_desc and skills_desc != "(no skills available)":
             system_prompt += (
-                "\n\nYou have access to the following tools. When using a tool,"
-                " include exactly one [SKILL: <name> | <param>=<value>] tag in your"
-                " reply. Only safe tools run automatically; others are queued for"
-                " approval. Only use a tool when it genuinely helps the user."
+                "\n\nYou have access to the following tools. To USE a tool you"
+                " MUST include a [SKILL: <name> | <param>=<value>] tag in your"
+                " reply — multiple tags per reply are allowed (they execute in"
+                " order). Only safe tools run automatically; others are queued"
+                " for approval."
+                "\n\n**STRICT RULE**: If you state in natural language that you"
+                " will look something up, search, check, investigate, fetch,"
+                " confirm, draw, or perform any other action that needs a tool"
+                " (Japanese: 調べる/確認する/検索する/見る/取ってくる/描く"
+                " etc.), you MUST include the corresponding [SKILL: ...] tag in"
+                " the SAME reply. Do NOT promise an action without emitting the"
+                " tag — that produces dishonest replies and frustrates users."
+                " Conversely, if you have no need for a tool, do not promise one."
                 "\nExample: [SKILL: web_search | query=latest AI news]"
+                "\nExample (multi): [SKILL: fetch_url | url=https://example.com]"
+                " followed by your reply."
                 f"\nAvailable tools:\n{skills_desc}"
             )
 
@@ -574,7 +592,18 @@ class CoreEngine:
             trace.iterations,
             len(trace.calls),
         )
-        return response
+        # C-1: Strip any leaked [SKILL: ...] tags before returning so users
+        # never see raw tags. C-2: If max_iterations was exhausted and the
+        # final response is empty after stripping (AI emitted only tags
+        # with no natural language), fall back to a generic acknowledgement
+        # so the user still gets a reply.
+        cleaned_final = _SKILL_TAG_RE.sub("", response).strip()
+        if not cleaned_final and trace.calls:
+            cleaned_final = (
+                "(ツールの実行は完了したけれど、まとめの返信を生成できなかったよ。"
+                "もう一度聞いてくれると嬉しいな)"
+            )
+        return cleaned_final
 
     async def _maybe_draw(self, response: str) -> tuple[str, list[str]]:
         """Parse [DRAW: ...] tags from LLM response and execute the draw skill.

@@ -50,6 +50,13 @@ ai_backend:
   #   enable_thinking: true  # set to false to skip <think> phase entirely
   #                          # (faster, less tokens; use when thinking model causes
   #                          #  empty responses even at high max_tokens)
+  #   voice_enable_thinking: false  # OPTIONAL per-context override:
+  #                          # disable <think> ONLY for voice messages
+  #                          # (Discord VC, voice attachments, Telegram voice).
+  #                          # Useful when the same thinking model is great for
+  #                          # text but eats the entire token budget on short
+  #                          # voice replies, producing empty TTS output.
+  #                          # Falls back to enable_thinking when unset.
 
   # --- Alternative: OpenAI API ---
   # provider: openai

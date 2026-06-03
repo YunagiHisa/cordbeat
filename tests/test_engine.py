@@ -2353,3 +2353,146 @@ class TestReActLoop:
         all_contents = [c[0][1].content for c in all_calls]
         # "Let me check." should be flushed before the final reply
         assert any("Let me check." in c for c in all_contents)
+
+    async def test_max_iterations_strips_leaked_tags(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """C-1: even when max_iterations is exhausted with a tag-bearing
+        response, the final reply must NOT contain a raw [SKILL: ...] tag."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "First reply [SKILL: test_tool]"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        # generate_chat keeps emitting another tag, never settling.
+        mock_ai.generate_chat = AsyncMock(
+            return_value="Still working [SKILL: test_tool]"
+        )
+
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        eng._skills._skills["test_tool"] = self._make_safe_skill("data")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Loop forever",
+        )
+        await eng.handle_message(msg)
+
+        all_calls = mock_gateway.send_to_adapter.call_args_list
+        for call in all_calls:
+            content = call[0][1].content
+            assert "[SKILL:" not in content, (
+                f"Raw [SKILL:...] tag leaked to user: {content!r}"
+            )
+
+    async def test_max_iterations_empty_text_fallback(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """C-2: if after stripping tags the final reply would be empty AND
+        tools were called, send a fallback message instead of nothing."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            # AI emits ONLY the skill tag, no preamble (empty pre_text).
+            return "[SKILL: test_tool]"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        # All ReAct continuations emit only a tag too.
+        mock_ai.generate_chat = AsyncMock(return_value="[SKILL: test_tool]")
+
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        eng._skills._skills["test_tool"] = self._make_safe_skill("data")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Empty replies",
+        )
+        await eng.handle_message(msg)
+
+        all_calls = mock_gateway.send_to_adapter.call_args_list
+        # Final message (the reply) should have non-empty fallback content.
+        final_reply = all_calls[-1][0][1]
+        assert final_reply.content.strip()
+        assert "[SKILL:" not in final_reply.content
+
+    async def test_voice_message_propagates_to_backend(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """is_voice on GatewayMessage activates voice_context_scope around
+        AI generation, so backends can apply per-context overrides."""
+        from cordbeat.ai.backend import is_voice_context
+
+        observed: list[bool] = []
+
+        async def _generate(**kw: object) -> str:
+            observed.append(is_voice_context())
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "Hi there!"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Hi",
+            is_voice=True,
+        )
+        await eng.handle_message(msg)
+
+        # The main response generation must observe voice context = True.
+        # Background tasks like memory extraction may run outside scope; we
+        # only require that AT LEAST one call saw voice_context active.
+        assert any(observed), (
+            f"Expected at least one generate() call inside voice_context_scope; "
+            f"observed={observed}"
+        )

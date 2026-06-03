@@ -185,6 +185,7 @@ class TelegramAdapter(RetryableConnection):
                 display_name=display_name,
                 chat_id=chat_id,
                 images=images,
+                is_voice=user_id in self._voice_users,
             )
 
         from telegram.ext import CallbackQueryHandler  # noqa: PLC0415
@@ -405,6 +406,7 @@ class TelegramAdapter(RetryableConnection):
         display_name: str = "",
         chat_id: int = 0,
         images: list[str] | None = None,
+        is_voice: bool = False,
     ) -> None:
         if self._ws is None:
             logger.warning("Not connected to Core, dropping message")
@@ -418,6 +420,7 @@ class TelegramAdapter(RetryableConnection):
                 "content": text,
                 "timestamp": datetime.now(tz=UTC).isoformat(),
                 "images": images or [],
+                "is_voice": is_voice,
                 "metadata": {
                     "chat_id": str(chat_id),
                     "display_name": display_name,

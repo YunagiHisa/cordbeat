@@ -201,6 +201,13 @@ class HeartbeatLoop:
 
     async def _tick(self) -> int:
         """Execute one HEARTBEAT cycle. Returns next interval in minutes."""
+        if self._queue.is_busy():
+            logger.info(
+                "HEARTBEAT skipped: message queue is busy "
+                "(user-message generation in progress)"
+            )
+            return self._config.default_interval_minutes
+
         if await self._maybe_run_sleep():
             return self._config.default_interval_minutes
 

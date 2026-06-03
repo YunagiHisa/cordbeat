@@ -374,6 +374,7 @@ class DiscordAdapter(RetryableConnection):
                 await _fetch_attachment_images(ref_msg, images)
 
         content = message.content
+        is_voice = False
         if self._stt is not None:
             for att in getattr(message, "attachments", []):
                 ct = getattr(att, "content_type", "") or ""
@@ -396,6 +397,7 @@ class DiscordAdapter(RetryableConnection):
                             if content
                             else transcribed
                         )
+                        is_voice = True
                         logger.debug("Discord STT transcribed: %.100s", transcribed)
                 except Exception:
                     logger.warning(
@@ -410,6 +412,7 @@ class DiscordAdapter(RetryableConnection):
                 "content": content,
                 "timestamp": datetime.now(tz=UTC).isoformat(),
                 "images": images,
+                "is_voice": is_voice,
                 "metadata": {
                     "channel_id": str(message.channel.id),
                     "guild_id": str(message.guild.id) if message.guild else "",
@@ -598,6 +601,7 @@ class DiscordAdapter(RetryableConnection):
                 "platform_user_id": str(user_id),
                 "content": transcribed,
                 "timestamp": datetime.now(UTC).isoformat(),
+                "is_voice": True,
                 "metadata": {
                     "guild_id": str(guild_id),
                     "channel_id": "vc",

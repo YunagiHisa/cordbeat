@@ -163,6 +163,16 @@ class MessageQueueProtocol(Protocol):
     async def process_loop(self) -> None:
         """Run forever, passing each dequeued message to the handler."""
 
+    def is_busy(self) -> bool:
+        """Return True if the queue is currently dispatching a message
+        (i.e. the handler is actively running).
+
+        Used by heartbeat / proactive subsystems to defer work that
+        would otherwise contend with the active inference call. A
+        non-empty pending queue ALSO counts as busy because the next
+        message will be picked up immediately after the current one.
+        """
+
 
 class MessageQueue:
     """Default :class:`MessageQueueProtocol` — single-threaded FIFO."""
@@ -170,6 +180,7 @@ class MessageQueue:
     def __init__(self) -> None:
         self._queue: asyncio.Queue[GatewayMessage] = asyncio.Queue()
         self._handler: Any = None
+        self._processing: bool = False
 
     def set_handler(self, handler: Any) -> None:
         """Set the message handler (typically the Core engine)."""
@@ -178,16 +189,26 @@ class MessageQueue:
     async def put(self, message: GatewayMessage) -> None:
         await self._queue.put(message)
 
+    def is_busy(self) -> bool:
+        """True while a message is being handled or any are pending.
+
+        Single-GPU local inference cannot tolerate parallel calls; the
+        heartbeat loop checks this before kicking off its own LLM run.
+        """
+        return self._processing or not self._queue.empty()
+
     async def process_loop(self) -> None:
         """Process messages one at a time (no parallel AI inference)."""
         while True:
             message = await self._queue.get()
+            self._processing = True
             try:
                 if self._handler:
                     await self._handler(message)
             except Exception:
                 logger.exception("Error processing message: %s", message)
             finally:
+                self._processing = False
                 self._queue.task_done()
 
 
@@ -294,6 +315,7 @@ class GatewayServer:
                         else datetime.now(tz=UTC),
                         metadata=msg_data.get("metadata", {}),
                         images=msg_data.get("images", []),
+                        is_voice=bool(msg_data.get("is_voice", False)),
                     )
                     await self._queue.put(message)
                 except (json.JSONDecodeError, ValueError, KeyError) as exc:

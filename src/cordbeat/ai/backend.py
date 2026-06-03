@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import contextlib
+import contextvars
 import json
 import logging
 import re
@@ -21,6 +23,33 @@ from cordbeat.tools.metrics import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ── Voice-context contextvar ─────────────────────────────────────────
+# Set by the engine at the start of message handling (via
+# ``voice_context_scope(is_voice)``).  Backends that support per-context
+# overrides (e.g. ``ai.options.voice_enable_thinking``) read this var
+# inside their request-payload code.  Using a contextvar keeps the public
+# ``generate(...)`` API unchanged while remaining async-task-safe.
+_voice_context: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "cordbeat_voice_context",
+    default=False,
+)
+
+
+@contextlib.contextmanager
+def voice_context_scope(is_voice: bool) -> Any:
+    """Set the voice-context flag for any backend calls inside the block."""
+    token = _voice_context.set(bool(is_voice))
+    try:
+        yield
+    finally:
+        _voice_context.reset(token)
+
+
+def is_voice_context() -> bool:
+    """Return True if the current asyncio task is in a voice-context scope."""
+    return _voice_context.get()
 
 
 def _detect_image_mime(b64data: str) -> str:
@@ -276,10 +305,23 @@ class OpenAICompatBackend(AIBackend):
         # ai.options to skip the <think> phase for JSON-mode requests.
         # Defaults to None (not sent) to avoid breaking non-thinking models.
         self._enable_thinking: bool | None = config.options.get("enable_thinking")
+        # Optional override for voice contexts (STT-originated messages).
+        # When set, it replaces ``enable_thinking`` while
+        # ``is_voice_context()`` is true so VC / voice-message replies stay
+        # within real-time latency budgets.  None = use ``_enable_thinking``.
+        self._voice_enable_thinking: bool | None = config.options.get(
+            "voice_enable_thinking"
+        )
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         self._client = httpx.AsyncClient(timeout=config.timeout, headers=headers)
+
+    def _effective_enable_thinking(self) -> bool | None:
+        """Return ``enable_thinking`` accounting for voice-context override."""
+        if is_voice_context() and self._voice_enable_thinking is not None:
+            return self._voice_enable_thinking
+        return self._enable_thinking
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -292,8 +334,9 @@ class OpenAICompatBackend(AIBackend):
         max_tokens: int = 1024,
     ) -> str:
         messages: list[dict[str, str]] = []
+        effective_thinking = self._effective_enable_thinking()
         effective_system = system
-        if self._enable_thinking is False:
+        if effective_thinking is False:
             # Belt-and-suspenders: inject /no_think soft-switch into the system
             # message so Qwen3 disables thinking even if the server ignores
             # chat_template_kwargs (works across all llama.cpp versions).
@@ -305,10 +348,13 @@ class OpenAICompatBackend(AIBackend):
         messages.append({"role": "user", "content": prompt})
 
         logger.debug(
-            "openai_compat request: model=%s system=%d chars prompt=%d chars",
+            "openai_compat request: model=%s system=%d chars prompt=%d chars"
+            " voice_ctx=%s thinking=%s",
             self._model,
             len(effective_system),
             len(prompt),
+            is_voice_context(),
+            effective_thinking,
         )
         labels = {"backend": "openai_compat", "model": self._model}
         try:
@@ -318,13 +364,13 @@ class OpenAICompatBackend(AIBackend):
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             }
-            if self._enable_thinking is not None:
+            if effective_thinking is not None:
                 # llama.cpp passes template kwargs via chat_template_kwargs;
                 # keep the legacy top-level field for other servers (vLLM etc.)
                 payload["chat_template_kwargs"] = {
-                    "enable_thinking": self._enable_thinking
+                    "enable_thinking": effective_thinking
                 }
-                payload["enable_thinking"] = self._enable_thinking
+                payload["enable_thinking"] = effective_thinking
             async with time_block(LLM_GENERATE_LATENCY, labels):
                 resp = await self._client.post(
                     f"{self._base_url}/chat/completions",
@@ -380,11 +426,11 @@ class OpenAICompatBackend(AIBackend):
                         "temperature": temperature,
                         "max_tokens": retry_mt,
                     }
-                    if self._enable_thinking is not None:
+                    if effective_thinking is not None:
                         retry_payload["chat_template_kwargs"] = {
-                            "enable_thinking": self._enable_thinking
+                            "enable_thinking": effective_thinking
                         }
-                        retry_payload["enable_thinking"] = self._enable_thinking
+                        retry_payload["enable_thinking"] = effective_thinking
                     try:
                         async with time_block(LLM_GENERATE_LATENCY, labels):
                             retry_resp = await self._client.post(
@@ -518,6 +564,7 @@ class OpenAICompatBackend(AIBackend):
         max_tokens: int = 1024,
     ) -> str:
         labels = {"backend": "openai_compat", "model": self._model}
+        effective_thinking = self._effective_enable_thinking()
         try:
             payload: dict[str, Any] = {
                 "model": self._model,
@@ -525,11 +572,11 @@ class OpenAICompatBackend(AIBackend):
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             }
-            if self._enable_thinking is not None:
+            if effective_thinking is not None:
                 payload["chat_template_kwargs"] = {
-                    "enable_thinking": self._enable_thinking
+                    "enable_thinking": effective_thinking
                 }
-                payload["enable_thinking"] = self._enable_thinking
+                payload["enable_thinking"] = effective_thinking
             async with time_block(LLM_GENERATE_LATENCY, labels):
                 resp = await self._client.post(
                     f"{self._base_url}/chat/completions",

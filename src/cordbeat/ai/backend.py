@@ -24,6 +24,10 @@ from cordbeat.tools.metrics import (
 
 logger = logging.getLogger(__name__)
 
+_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"<think\b[^>]*>", re.IGNORECASE)
+_THINK_CLOSE_RE = re.compile(r"</think\s*>", re.IGNORECASE)
+
 
 # ── Voice-context contextvar ─────────────────────────────────────────
 # Set by the engine at the start of message handling (via
@@ -50,6 +54,24 @@ def voice_context_scope(is_voice: bool) -> Any:
 def is_voice_context() -> bool:
     """Return True if the current asyncio task is in a voice-context scope."""
     return _voice_context.get()
+
+
+def strip_thinking_text(raw: str) -> str:
+    """Remove complete and malformed thinking-tag output from model text.
+
+    Some OpenAI-compatible thinking-model servers split chain-of-thought into
+    ``reasoning_content`` but still leave a dangling ``</think>`` marker in
+    user-facing ``content``.  If a close marker remains, keep only text after
+    the last close marker; that is the actual answer for Qwen/DeepSeek-style
+    outputs.
+    """
+
+    text = _THINK_BLOCK_RE.sub("", raw)
+    if _THINK_CLOSE_RE.search(text):
+        text = _THINK_CLOSE_RE.split(text)[-1]
+    if _THINK_OPEN_RE.search(text):
+        text = _THINK_OPEN_RE.split(text, maxsplit=1)[0]
+    return text.strip()
 
 
 def _detect_image_mime(b64data: str) -> str:
@@ -135,8 +157,8 @@ class AIBackend(ABC):
                 len(prompt),
             )
         logger.debug("generate_json raw(%d chars): %.500s", len(raw), raw)
-        # Strip <think>...</think> reasoning blocks (Qwen3, DeepSeek-R1, etc.)
-        text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        # Strip reasoning blocks/fragments (Qwen3, DeepSeek-R1, etc.)
+        text = strip_thinking_text(raw)
         # If thinking model put ALL output inside <think> (e.g. JSON-only prompts),
         # fall back to extracting the outermost {...} from the raw response.
         if not text:
@@ -454,12 +476,7 @@ class OpenAICompatBackend(AIBackend):
                         retry_message = retry_data["choices"][0]["message"]
                         retry_content = retry_message.get("content") or ""
                         if retry_content:
-                            result = re.sub(
-                                r"<think>.*?</think>",
-                                "",
-                                str(retry_content),
-                                flags=re.DOTALL,
-                            ).strip() or str(retry_content)
+                            result = strip_thinking_text(str(retry_content))
                             logger.debug(
                                 "openai_compat retry response: %d chars: %.300s",
                                 len(result),
@@ -499,9 +516,7 @@ class OpenAICompatBackend(AIBackend):
                         len(combined_thinking),
                         combined_thinking,
                     )
-                stripped = re.sub(
-                    r"<think>.*?</think>", "", raw_content, flags=re.DOTALL
-                ).strip()
+                stripped = strip_thinking_text(raw_content)
                 if not stripped:
                     logger.warning(
                         "openai_compat: content was entirely <think> blocks; "
@@ -606,9 +621,7 @@ class OpenAICompatBackend(AIBackend):
         try:
             content = data["choices"][0]["message"].get("content") or ""
             raw_content = str(content)
-            stripped = re.sub(
-                r"<think>.*?</think>", "", raw_content, flags=re.DOTALL
-            ).strip()
+            stripped = strip_thinking_text(raw_content)
             return stripped if stripped else raw_content
         except (KeyError, IndexError) as exc:
             msg = f"Unexpected response format from {self._base_url}"

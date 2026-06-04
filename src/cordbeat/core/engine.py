@@ -13,7 +13,7 @@ from typing import Any
 
 from cordbeat.agent.react_types import ToolCallResult, ToolTrace
 from cordbeat.agent.soul import Soul
-from cordbeat.ai.backend import AIBackend, voice_context_scope
+from cordbeat.ai.backend import AIBackend, strip_thinking_text, voice_context_scope
 from cordbeat.ai.extraction import MemoryExtractor
 from cordbeat.ai.prompt import (
     build_context,
@@ -481,16 +481,14 @@ class CoreEngine:
                         images=message.images,
                         system=system_prompt,
                     )
-                    cleaned = re.sub(
-                        r"<think>.*?</think>", "", raw, flags=re.DOTALL
-                    ).strip()
+                    cleaned = strip_thinking_text(raw)
                     return cleaned, system_prompt, prompt
                 except Exception:
                     logger.warning(
                         "Vision generation failed, falling back to text-only response"
                     )
             raw = await self._ai.generate(prompt=prompt, system=system_prompt)
-            cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            cleaned = strip_thinking_text(raw)
             logger.debug(
                 "[AI OUTPUT] raw(%d chars):\n%s",
                 len(raw),
@@ -726,7 +724,7 @@ class CoreEngine:
                 )
                 break
 
-            cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            cleaned = strip_thinking_text(raw)
             logger.debug(
                 "ReAct iter %d response: %d chars", iteration + 1, len(cleaned)
             )

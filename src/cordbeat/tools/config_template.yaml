@@ -47,9 +47,9 @@ ai_backend:
   # model: "default"
   # max_tokens: 8192         # Qwen3 thinking needs headroom; 8192 recommended
   # options:
-  #   enable_thinking: true  # set to false to skip <think> phase entirely
-  #                          # (faster, less tokens; use when thinking model causes
-  #                          #  empty responses even at high max_tokens)
+  #   enable_thinking: false # recommended for CordBeat runtime replies/JSON tasks:
+  #                          # skip <think> entirely to prevent reasoning leakage,
+  #                          # reduce latency, and avoid token-budget exhaustion.
   #   voice_enable_thinking: false  # OPTIONAL per-context override: disable
   #                          # <think> only for voice messages (VC / audio).
   #                          # Falls back to enable_thinking when unset.

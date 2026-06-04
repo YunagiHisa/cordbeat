@@ -11,6 +11,7 @@ from cordbeat.ai.backend import (
     OllamaBackend,
     OpenAICompatBackend,
     create_backend,
+    strip_thinking_text,
 )
 from cordbeat.config import AIBackendConfig
 from cordbeat.exceptions import AIBackendError
@@ -91,6 +92,15 @@ class TestGenerateJson:
         result = await backend.generate_json("test")
         assert result == {"key": "val"}
 
+    async def test_orphan_think_close_keeps_json_after_close(self) -> None:
+        cfg = AIBackendConfig(provider="ollama")
+        backend = OllamaBackend(cfg)
+        backend.generate = AsyncMock(  # type: ignore[method-assign]
+            return_value='- internal checklist\n</think>\n{"action": "none"}'
+        )
+        result = await backend.generate_json("test")
+        assert result == {"action": "none"}
+
 
 # ── OllamaBackend ────────────────────────────────────────────────────
 
@@ -145,6 +155,15 @@ class TestOllamaBackend:
 
 
 class TestOpenAICompatBackend:
+    def test_strip_thinking_text_handles_malformed_tags(self) -> None:
+        raw = (
+            "- Relationship: acquaintance\n"
+            "3. **Formulate Response:**\n"
+            "</think>\n\n"
+            "奈良旅行！？いいね。"
+        )
+        assert strip_thinking_text(raw) == "奈良旅行！？いいね。"
+
     async def test_generate_calls_chat_completions(self) -> None:
         cfg = AIBackendConfig(
             provider="openai",
@@ -166,6 +185,51 @@ class TestOpenAICompatBackend:
         assert result == "Hi!"
         call_kwargs = backend._client.post.call_args
         assert "/chat/completions" in call_kwargs[0][0]
+
+    async def test_generate_strips_orphan_think_close(self) -> None:
+        cfg = AIBackendConfig(provider="openai_compat")
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            "- Relationship: acquaintance\n"
+                            "3. **Formulate Response:**\n"
+                            "</think>\n\n"
+                            "奈良旅行！？いいね。"
+                        )
+                    }
+                }
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        result = await backend.generate("test")
+        assert result == "奈良旅行！？いいね。"
+
+    async def test_generate_chat_strips_orphan_think_close(self) -> None:
+        cfg = AIBackendConfig(provider="openai_compat")
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [
+                {"message": {"content": "analysis\n</think>\nFinal answer"}}
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        result = await backend.generate_chat([{"role": "user", "content": "hi"}])
+        assert result == "Final answer"
 
     async def test_unexpected_response_format(self) -> None:
         cfg = AIBackendConfig(provider="openai")

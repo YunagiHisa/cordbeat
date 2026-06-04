@@ -21,6 +21,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ADAPTER_ID = "telegram"
+_IMAGE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024
+_TYPING_REFRESH_SECONDS = 4
+_CORE_BOT_COMMANDS = (
+    ("approve", "Approve a pending CordBeat proposal"),
+    ("reject", "Reject a pending CordBeat proposal"),
+    ("proposals", "List pending CordBeat proposals"),
+    ("link", "Generate a cross-platform link token"),
+    ("unlink", "Unlink a platform from your account"),
+    ("name", "Update CordBeat's displayed character name"),
+    ("quiet", "Set heartbeat quiet hours"),
+    ("prefer", "Set preferred heartbeat platform"),
+    ("draw", "Run Draw DSL and return an image"),
+)
 
 
 def _normalize_telegram_command_text(text: str) -> str:
@@ -133,14 +146,12 @@ class TelegramAdapter(RetryableConnection):
             self._chat_map[user_id] = chat_id
             display_name = user.full_name or user.username or ""
 
-            _image_size_limit = 10 * 1024 * 1024  # 10 MB
-
             # Download photo if present (pick highest resolution).
             images: list[str] = []
             if msg.photo:
                 try:
                     photo = msg.photo[-1]
-                    if (photo.file_size or 0) <= _image_size_limit:
+                    if (photo.file_size or 0) <= _IMAGE_SIZE_LIMIT_BYTES:
                         file = await context.bot.get_file(photo.file_id)
                         raw = await file.download_as_bytearray()
                         images.append(base64.b64encode(bytes(raw)).decode("ascii"))
@@ -156,7 +167,7 @@ class TelegramAdapter(RetryableConnection):
             if not images and msg.document:
                 doc = msg.document
                 mime = (doc.mime_type or "").startswith("image/")
-                size_ok = (doc.file_size or 0) <= _image_size_limit
+                size_ok = (doc.file_size or 0) <= _IMAGE_SIZE_LIMIT_BYTES
                 if mime and size_ok:
                     try:
                         file = await context.bot.get_file(doc.file_id)
@@ -221,7 +232,10 @@ class TelegramAdapter(RetryableConnection):
         from telegram.ext import CallbackQueryHandler  # noqa: PLC0415
 
         self._app.add_handler(
-            CommandHandler(["approve", "reject", "proposals"], handle_core_command)
+            CommandHandler(
+                [name for name, _ in _CORE_BOT_COMMANDS],
+                handle_core_command,
+            )
         )
         self._app.add_handler(
             MessageHandler(
@@ -302,9 +316,8 @@ class TelegramAdapter(RetryableConnection):
         try:
             await self._app.bot.set_my_commands(
                 [
-                    BotCommand("approve", "Approve a pending CordBeat proposal"),
-                    BotCommand("reject", "Reject a pending CordBeat proposal"),
-                    BotCommand("proposals", "List pending CordBeat proposals"),
+                    BotCommand(name, description)
+                    for name, description in _CORE_BOT_COMMANDS
                 ]
             )
         except Exception:
@@ -502,7 +515,7 @@ class TelegramAdapter(RetryableConnection):
             task.cancel()
 
     async def _keep_typing_telegram(self, chat_id: int) -> None:
-        """Send Telegram typing action every 4 s until cancelled.
+        """Send Telegram typing action periodically until cancelled.
 
         Telegram typing actions expire after ~5 seconds.
         """
@@ -516,7 +529,7 @@ class TelegramAdapter(RetryableConnection):
                     )
                 except Exception:
                     pass  # best-effort; don't crash if typing fails
-                await asyncio.sleep(4)
+                await asyncio.sleep(_TYPING_REFRESH_SECONDS)
         except asyncio.CancelledError:
             pass
 

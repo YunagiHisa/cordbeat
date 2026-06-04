@@ -1,6 +1,6 @@
 """LINE adapter — bridges LINE Messaging API to CordBeat Core via WebSocket.
 
-This is a v1.0+ scaffold. LINE Messaging API is webhook-based (no long-poll),
+This is an optional scaffold. LINE Messaging API is webhook-based (no long-poll),
 so this adapter runs a small ``aiohttp`` HTTP server to receive webhook
 events from LINE, and uses ``line-bot-sdk`` (v3 async API) to push replies.
 
@@ -106,10 +106,18 @@ class LineAdapter(RetryableConnection):
                 if isinstance(event, MessageEvent) and isinstance(
                     event.message, TextMessageContent
                 ):
+                    source = event.source
+                    channel_id = (
+                        getattr(source, "group_id", "")
+                        or getattr(source, "room_id", "")
+                        or getattr(source, "user_id", "")
+                        or ""
+                    )
                     await self._forward_to_core(
-                        user_id=event.source.user_id or "",
+                        user_id=source.user_id or "",
                         text=event.message.text,
-                        is_group=getattr(event.source, "type", "user") != "user",
+                        is_group=getattr(source, "type", "user") != "user",
+                        channel_id=str(channel_id),
                     )
             return web.Response(text="OK")
 
@@ -151,7 +159,12 @@ class LineAdapter(RetryableConnection):
         await self._send_to_line(platform_user_id, content)
 
     async def _forward_to_core(
-        self, *, user_id: str, text: str, is_group: bool = False
+        self,
+        *,
+        user_id: str,
+        text: str,
+        is_group: bool = False,
+        channel_id: str = "",
     ) -> None:
         if self._ws is None or not user_id:
             return
@@ -170,7 +183,7 @@ class LineAdapter(RetryableConnection):
                 is_mentioned = True  # no keywords → treat as mentioned
         if not await self._filter.should_respond_async(
             user_id=user_id,
-            channel_id="",  # LINE groups have no stable channel_id for filtering
+            channel_id=channel_id,
             is_dm=is_dm,
             is_mentioned=is_mentioned,
             text=text,
@@ -185,7 +198,10 @@ class LineAdapter(RetryableConnection):
                 "platform_user_id": user_id,
                 "content": text,
                 "timestamp": datetime.now(tz=UTC).isoformat(),
-                "metadata": {},
+                "metadata": {
+                    "channel_id": channel_id or user_id,
+                    "is_dm": is_dm,
+                },
             }
         )
         try:

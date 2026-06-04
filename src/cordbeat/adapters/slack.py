@@ -1,6 +1,6 @@
 """Slack adapter — bridges Slack workspace to CordBeat Core via WebSocket.
 
-This is a v1.0+ scaffold. The CordBeat-side plumbing (Core WebSocket
+This is an optional scaffold. The CordBeat-side plumbing (Core WebSocket
 connection, message forwarding, reply dispatch) follows the same pattern
 as :mod:`cordbeat.discord_adapter` / :mod:`cordbeat.telegram_adapter`.
 
@@ -156,7 +156,7 @@ class SlackAdapter(RetryableConnection):
         *,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        await self._send_to_slack(platform_user_id, content)
+        await self._send_to_slack(platform_user_id, content, metadata=metadata)
 
     async def _forward_to_core(
         self,
@@ -197,7 +197,11 @@ class SlackAdapter(RetryableConnection):
                 "platform_user_id": user_id,
                 "content": text,
                 "timestamp": datetime.now(tz=UTC).isoformat(),
-                "metadata": {"channel": channel},
+                "metadata": {
+                    "channel": channel,
+                    "channel_id": channel,
+                    "is_dm": is_dm,
+                },
             }
         )
         try:
@@ -205,10 +209,19 @@ class SlackAdapter(RetryableConnection):
         except Exception:
             logger.exception("Failed to forward message to Core")
 
-    async def _send_to_slack(self, platform_user_id: str, content: str) -> None:
+    async def _send_to_slack(
+        self,
+        platform_user_id: str,
+        content: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         if not self._web_client or not platform_user_id:
             return
-        channel = self._user_channels.get(platform_user_id)
+        hinted = ""
+        if metadata:
+            hinted = str(metadata.get("channel_id") or metadata.get("channel") or "")
+        channel = hinted or self._user_channels.get(platform_user_id)
         if not channel:
             # Fall back to opening a DM
             try:

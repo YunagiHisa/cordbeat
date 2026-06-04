@@ -65,6 +65,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/cordbeat"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"skills" = "skills"
+
+[tool.hatch.build.targets.sdist.force-include]
+"skills" = "skills"
+
 [tool.ruff]
 target-version = "py311"
 line-length = 88

@@ -29,6 +29,21 @@ ADAPTER_ID = "discord"
 # over long-running bot uptimes; oldest entries are evicted on insertion.
 _USER_CHANNEL_CACHE_MAX = 10_000
 _PENDING_SKILL_CONFIRM_MAX = 1_000
+_MAX_IMAGES_PER_MESSAGE = 4
+_IMAGE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024
+_AUDIO_SIZE_LIMIT_BYTES = 25 * 1024 * 1024
+_DISCORD_MESSAGE_LIMIT = 2000
+_CORE_SLASH_COMMAND_NAMES = (
+    "approve",
+    "reject",
+    "proposals",
+    "link",
+    "unlink",
+    "name",
+    "quiet",
+    "prefer",
+    "draw",
+)
 
 
 class DiscordAdapter(RetryableConnection):
@@ -147,6 +162,63 @@ class DiscordAdapter(RetryableConnection):
         )
         async def proposals_cmd(interaction: Any) -> None:
             await self._forward_core_command_interaction(interaction, "/proposals")
+
+        @self._tree.command(
+            name="link",
+            description="Generate a CordBeat cross-platform link token",
+        )
+        async def link_cmd(interaction: Any) -> None:
+            await self._forward_core_command_interaction(interaction, "/link")
+
+        @self._tree.command(
+            name="unlink",
+            description="Unlink one platform from your CordBeat account",
+        )
+        @discord.app_commands.describe(platform="Platform to unlink, e.g. telegram")
+        async def unlink_cmd(interaction: Any, platform: str) -> None:
+            await self._forward_core_command_interaction(
+                interaction, f"/unlink {platform}"
+            )
+
+        @self._tree.command(
+            name="name",
+            description="Update CordBeat's displayed character name",
+        )
+        @discord.app_commands.describe(name="New character name")
+        async def name_cmd(interaction: Any, name: str) -> None:
+            await self._forward_core_command_interaction(interaction, f"/name {name}")
+
+        @self._tree.command(
+            name="quiet",
+            description="Set heartbeat quiet hours",
+        )
+        @discord.app_commands.describe(
+            start="Quiet start time, e.g. 01:00",
+            end="Quiet end time, e.g. 07:00",
+        )
+        async def quiet_cmd(interaction: Any, start: str, end: str) -> None:
+            await self._forward_core_command_interaction(
+                interaction, f"/quiet {start} {end}"
+            )
+
+        @self._tree.command(
+            name="prefer",
+            description="Set preferred platform for heartbeat replies",
+        )
+        @discord.app_commands.describe(platform="Platform name, or clear")
+        async def prefer_cmd(interaction: Any, platform: str = "") -> None:
+            command = f"/prefer {platform}".strip()
+            await self._forward_core_command_interaction(interaction, command)
+
+        @self._tree.command(
+            name="draw",
+            description="Run Draw DSL and return an image",
+        )
+        @discord.app_commands.describe(commands="Draw DSL commands")
+        async def draw_cmd(interaction: Any, commands: str) -> None:
+            await self._forward_core_command_interaction(
+                interaction, f"/draw {commands}"
+            )
 
         @self._bot.event
         async def on_ready() -> None:
@@ -359,19 +431,15 @@ class DiscordAdapter(RetryableConnection):
         # Show typing indicator while core is processing
         self._start_typing(channel_id, message.channel)
 
-        _max_images = 4
-        _image_size_limit = 10 * 1024 * 1024  # 10 MB
-        _audio_size_limit = 25 * 1024 * 1024  # 25 MB
-
         async def _fetch_attachment_images(src_msg: Any, buf: list[str]) -> None:
             for att in getattr(src_msg, "attachments", []):
-                if len(buf) >= _max_images:
+                if len(buf) >= _MAX_IMAGES_PER_MESSAGE:
                     break
                 ct = getattr(att, "content_type", "") or ""
                 if not ct.startswith("image/"):
                     continue
                 size = getattr(att, "size", 0) or 0
-                if size > _image_size_limit:
+                if size > _IMAGE_SIZE_LIMIT_BYTES:
                     logger.warning(
                         "Skipping oversized Discord image attachment: %d bytes", size
                     )
@@ -390,7 +458,7 @@ class DiscordAdapter(RetryableConnection):
         await _fetch_attachment_images(message, images)
 
         ref = getattr(message, "reference", None)
-        if ref is not None and len(images) < _max_images:
+        if ref is not None and len(images) < _MAX_IMAGES_PER_MESSAGE:
             ref_msg = getattr(ref, "resolved", None)
             if ref_msg is not None:
                 await _fetch_attachment_images(ref_msg, images)
@@ -403,7 +471,7 @@ class DiscordAdapter(RetryableConnection):
                 if not ct.startswith("audio/"):
                     continue
                 size = getattr(att, "size", 0) or 0
-                if size > _audio_size_limit:
+                if size > _AUDIO_SIZE_LIMIT_BYTES:
                     logger.warning(
                         "Skipping oversized Discord audio attachment: %d bytes", size
                     )
@@ -594,17 +662,16 @@ class DiscordAdapter(RetryableConnection):
 
         # Discord 400s on empty string content; use None to allow files-only messages.
         # Discord enforces a 2000-character limit per message — split long content.
-        discord_limit = 2000
         chunks: list[str] = []
         if content:
             remaining = content
-            while len(remaining) > discord_limit:
+            while len(remaining) > _DISCORD_MESSAGE_LIMIT:
                 # Prefer splitting on a newline boundary within the limit
-                split_at = remaining.rfind("\n", 0, discord_limit)
+                split_at = remaining.rfind("\n", 0, _DISCORD_MESSAGE_LIMIT)
                 if split_at <= 0:
-                    split_at = remaining.rfind(" ", 0, discord_limit)
+                    split_at = remaining.rfind(" ", 0, _DISCORD_MESSAGE_LIMIT)
                 if split_at <= 0:
-                    split_at = discord_limit
+                    split_at = _DISCORD_MESSAGE_LIMIT
                 chunks.append(remaining[:split_at])
                 remaining = remaining[split_at:].lstrip("\n")
             if remaining:

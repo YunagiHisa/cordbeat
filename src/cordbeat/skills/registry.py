@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -303,10 +304,15 @@ class SkillRegistry:
             if s.meta.enabled and s.meta.safety_level == SafetyLevel.SAFE
         ]
 
-    def get_skill_descriptions_for_prompt(self) -> str:
+    def get_skill_descriptions_for_prompt(
+        self, exclude_names: Iterable[str] | None = None
+    ) -> str:
         """Build a skill catalog string for AI prompts."""
+        excluded = set(exclude_names or ())
         lines = []
         for name, skill in self._skills.items():
+            if name in excluded:
+                continue
             if not skill.meta.enabled:
                 continue
             params_str = ", ".join(f"{p.name}: {p.type}" for p in skill.meta.parameters)

@@ -21,6 +21,30 @@ from cordbeat.config import STTConfig
 
 logger = logging.getLogger(__name__)
 
+_LOCAL_WHISPER_MODEL_NAMES = frozenset(
+    {
+        "tiny",
+        "base",
+        "small",
+        "medium",
+        "large",
+        "large-v1",
+        "large-v2",
+        "large-v3",
+        "turbo",
+    }
+)
+_DEFAULT_API_STT_MODEL = "whisper-1"
+
+
+def _resolve_api_stt_model(model: str) -> str:
+    """Map local Whisper size defaults to the cloud-compatible API default."""
+
+    normalized = (model or "").strip()
+    if not normalized or normalized in _LOCAL_WHISPER_MODEL_NAMES:
+        return _DEFAULT_API_STT_MODEL
+    return normalized
+
 
 class STTBackend(ABC):
     """Abstract speech-to-text backend."""
@@ -82,6 +106,7 @@ class WhisperOpenAISTT(STTBackend):
     def __init__(self, config: STTConfig) -> None:
         self._api_key = config.api_key
         self._language = config.language
+        self._model = _resolve_api_stt_model(config.model)
         self._base_url = (config.base_url or self._DEFAULT_BASE_URL).rstrip("/")
         self._timeout = config.timeout
 
@@ -90,7 +115,7 @@ class WhisperOpenAISTT(STTBackend):
         headers: dict[str, str] = {}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
-        data: dict[str, str] = {"model": "whisper-1"}
+        data: dict[str, str] = {"model": self._model}
         if lang:
             data["language"] = lang
         files = {"file": ("audio.ogg", audio_bytes, "audio/ogg")}
@@ -117,6 +142,7 @@ class OpenAICompatSTT(STTBackend):
         self._base_url = config.api_url.rstrip("/")
         self._api_key = config.api_key
         self._language = config.language
+        self._model = _resolve_api_stt_model(config.model)
         self._timeout = config.timeout
 
     async def transcribe(self, audio_bytes: bytes, language: str = "") -> str:
@@ -127,7 +153,7 @@ class OpenAICompatSTT(STTBackend):
         headers: dict[str, str] = {}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
-        data: dict[str, str] = {"model": "whisper-1"}
+        data: dict[str, str] = {"model": self._model}
         if lang:
             data["language"] = lang
         files = {"file": ("audio.ogg", audio_bytes, "audio/ogg")}

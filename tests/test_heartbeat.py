@@ -1529,7 +1529,7 @@ class TestSkillProposal:
             action=HeartbeatAction.SKILL,
             skill_name="draw",
             skill_params={
-                "commands": ("DRAW: a majestic dragon with translucent icy blue scales")
+                "commands": ("DRAW: a moonlit winter forest with falling snow")
             },
             target_user_id="u1",
             target_adapter_id="discord",
@@ -2652,3 +2652,12 @@ class TestSendHeartbeatMessageDmPolicy:
         history = await memory.get_recent_messages("uid-policy", limit=5)
         roles_and_content = [(m["role"], m["content"]) for m in history]
         assert ("assistant", "ping") in roles_and_content
+        scoped_history = await memory.get_recent_messages(
+            "uid-policy",
+            limit=5,
+            adapter_id="discord",
+            channel_id="555",
+            is_dm=False,
+        )
+        scoped_roles_and_content = [(m["role"], m["content"]) for m in scoped_history]
+        assert ("assistant", "ping") in scoped_roles_and_content

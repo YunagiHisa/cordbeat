@@ -1,6 +1,6 @@
 """WhatsApp adapter — bridges WhatsApp Cloud API to CordBeat Core.
 
-This is a v1.0+ scaffold. The Meta WhatsApp Cloud API is webhook-based
+This is an optional scaffold. The Meta WhatsApp Cloud API is webhook-based
 (no official Python SDK). This adapter uses raw ``httpx`` for outbound
 messages and ``aiohttp`` to receive inbound webhook events.
 
@@ -214,7 +214,10 @@ class WhatsAppAdapter(RetryableConnection):
                 "platform_user_id": user_id,
                 "content": text,
                 "timestamp": datetime.now(tz=UTC).isoformat(),
-                "metadata": {},
+                "metadata": {
+                    "channel_id": user_id,
+                    "is_dm": True,
+                },
             }
         )
         try:

@@ -2046,6 +2046,120 @@ class TestAutoDraw:
         assert "[DRAW:" not in text
         assert images == ["base64imgdata"]
 
+    async def test_maybe_draw_appends_output_to_truncated_dsl(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Truncated model DSL still emits an image after OUTPUT normalization."""
+        from unittest.mock import MagicMock
+
+        mock_skill = MagicMock()
+        mock_skill.execute = AsyncMock(
+            return_value={"output": "base64imgdata", "warnings": []}
+        )
+
+        fake_skills = MagicMock()
+        fake_skills.get = lambda name: mock_skill if name == "draw" else None
+        mock_ai.generate = AsyncMock(
+            return_value="SIZE 400 400\nCANVAS white\nCIRCLE 200 200 100 red"
+        )
+
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=fake_skills,
+            gateway=mock_gateway,
+        )
+        text, images = await eng._maybe_draw("Here you go! [DRAW: a red circle]")
+
+        assert "[DRAW:" not in text
+        assert images == ["base64imgdata"]
+        commands = mock_skill.execute.await_args.args[0]["commands"]
+        assert commands.endswith("\nOUTPUT")
+
+    async def test_maybe_draw_normalizes_colon_opcodes(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Model output like ``SIZE:`` is normalized before skill execution."""
+        from unittest.mock import MagicMock
+
+        mock_skill = MagicMock()
+        mock_skill.execute = AsyncMock(
+            return_value={"output": "base64imgdata", "warnings": []}
+        )
+
+        fake_skills = MagicMock()
+        fake_skills.get = lambda name: mock_skill if name == "draw" else None
+        mock_ai.generate = AsyncMock(
+            return_value="SIZE: 400 400\nCANVAS: white\nCIRCLE: 200 200 80 red"
+        )
+
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=fake_skills,
+            gateway=mock_gateway,
+        )
+        _, images = await eng._maybe_draw("Here [DRAW: a red moon]")
+
+        assert images == ["base64imgdata"]
+        commands = mock_skill.execute.await_args.args[0]["commands"]
+        assert "SIZE:" not in commands
+        assert "CANVAS:" not in commands
+        assert "CIRCLE:" not in commands
+
+    async def test_maybe_draw_retries_ai_when_llm_dsl_has_no_image(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """If model DSL returns no output, the AI gets one retry."""
+        from unittest.mock import MagicMock
+
+        mock_skill = MagicMock()
+        mock_skill.execute = AsyncMock(
+            side_effect=[
+                {"warnings": ["OUTPUT missing"]},
+                {"output": "retryimgdata", "warnings": []},
+            ]
+        )
+
+        fake_skills = MagicMock()
+        fake_skills.get = lambda name: mock_skill if name == "draw" else None
+        mock_ai.generate = AsyncMock(
+            side_effect=[
+                "SIZE 800 600\nCANVAS #08111f\nCIRCLE 400 300 80 #059669",
+                "SIZE 800 600\nCANVAS #102030\nELLIPSE 220 180 580 420 #38bdf8",
+            ]
+        )
+
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=fake_skills,
+            gateway=mock_gateway,
+        )
+        text, images = await eng._maybe_draw("Here [DRAW: a blue bird in rain]")
+
+        assert "[DRAW:" not in text
+        assert images == ["retryimgdata"]
+        assert mock_ai.generate.await_count == 2
+        assert mock_skill.execute.await_count == 2
+        retry_prompt = mock_ai.generate.await_args.kwargs["prompt"]
+        assert "Previous attempt failed" in retry_prompt
+
     async def test_maybe_draw_skill_error_falls_back(
         self,
         mock_ai: AsyncMock,
@@ -2066,7 +2180,7 @@ class TestAutoDraw:
         async def _gen(**kw: object) -> str:
             prompt = kw.get("prompt", "")
             if isinstance(prompt, str) and "Draw this:" in prompt:
-                return "SIZE 400 400\nOUTPUT"
+                return "SIZE 400 400\nCANVAS white\nCIRCLE 200 200 100 green\nOUTPUT"
             return "Hello!"
 
         mock_ai.generate = AsyncMock(side_effect=_gen)
@@ -2080,6 +2194,7 @@ class TestAutoDraw:
         )
         text, images = await eng._maybe_draw("Check this [DRAW: a tree]!")
         assert "[DRAW:" not in text
+        assert "Drawing failed" in text
         assert images == []
 
     async def test_generate_draw_dsl_calls_ai(
@@ -2107,6 +2222,10 @@ class TestAutoDraw:
         )
         dsl = await eng._generate_draw_dsl("a white canvas")
         assert dsl == dsl_response.strip()
+        call_kwargs = mock_ai.generate.await_args.kwargs
+        assert call_kwargs["temperature"] == 0.2
+        assert call_kwargs["max_tokens"] == 1200
+        assert "/no_think" in call_kwargs["system"]
 
     async def test_generate_draw_dsl_ai_failure_returns_empty(
         self,
@@ -2379,6 +2498,84 @@ class TestReActLoop:
         all_contents = [c[0][1].content for c in all_calls]
         # "Let me check." should be flushed before the final reply
         assert any("Let me check." in c for c in all_contents)
+
+    async def test_pre_tag_text_followed_by_tool_running_ack(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """After pre-tool text, send a visible ACK while the tool runs."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "Let me check. [SKILL: test_tool]"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(return_value="Done!")
+
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        eng._skills._skills["test_tool"] = self._make_safe_skill("data")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Check it",
+        )
+        await eng.handle_message(msg)
+
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        pre_index = next(i for i, m in enumerate(sent) if "Let me check." in m.content)
+        ack_index = next(i for i, m in enumerate(sent) if m.type == MessageType.ACK)
+        assert pre_index < ack_index
+        assert "ツールを実行中" in sent[ack_index].content
+
+    async def test_draw_excluded_from_react_tool_catalog(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Draw is advertised through [DRAW: ...], not [SKILL: draw]."""
+        from unittest.mock import MagicMock
+
+        fake_skills = MagicMock()
+        fake_skills.get = lambda name: object() if name == "draw" else None
+        fake_skills.get_skill_descriptions_for_prompt.return_value = (
+            "(no skills available)"
+        )
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=fake_skills,
+            gateway=mock_gateway,
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Draw something",
+        )
+        await eng.handle_message(msg)
+
+        fake_skills.get_skill_descriptions_for_prompt.assert_called_once_with(
+            exclude_names={"draw"}
+        )
 
     async def test_max_iterations_strips_leaked_tags(
         self,

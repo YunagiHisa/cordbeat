@@ -81,11 +81,8 @@ Based on the user's context, conversation history, and memories below,
 decide what action to take for this specific user.
 
 Important skill rule:
-If you choose action=skill, parameters must be directly executable by the
-skill. For the draw skill, skill_params.commands must be line-based Draw DSL
-(e.g. SIZE/CANVAS/CIRCLE/.../OUTPUT). Do NOT put natural-language prompts or
-"DRAW: ..." text into draw.commands. If you only have an image idea, choose
-action=message instead and describe the idea in words.
+If you choose action=skill, parameters must be directly executable by that
+skill. Do not put natural-language prompts into skill parameters.
 
 You MUST respond in valid JSON:
 {{
@@ -441,7 +438,9 @@ class HeartbeatLoop:
             emotion_intensity=soul_snap["emotion"]["intensity"],
             secondary_emotion_line=secondary_line,
             rules="\n".join(f"- {r}" for r in soul_snap["immutable_rules"]),
-            skills=self._skills.get_skill_descriptions_for_prompt(),
+            skills=self._skills.get_skill_descriptions_for_prompt(
+                exclude_names={"draw"}
+            ),
             target_user_id=user.user_id,
             target_adapter_id=(
                 user.preferred_platform or user.last_platform or "unknown"
@@ -649,6 +648,8 @@ class HeartbeatLoop:
                 "assistant",
                 decision.content,
                 decision.target_adapter_id,
+                channel_id=str(metadata.get("channel_id") or ""),
+                is_dm=bool(metadata.get("is_dm", True)),
             )
         except Exception:
             logger.exception(

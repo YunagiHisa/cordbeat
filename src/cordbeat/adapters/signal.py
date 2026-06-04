@@ -1,6 +1,6 @@
 """Signal adapter — bridges Signal Messenger to CordBeat Core via WebSocket.
 
-This is a v1.0+ scaffold. Signal has no official Python SDK, so this
+This is an optional scaffold. Signal has no official Python SDK, so this
 adapter talks to a local ``signal-cli`` instance running in JSON-RPC
 HTTP daemon mode (see https://github.com/AsamK/signal-cli).
 
@@ -156,7 +156,10 @@ class SignalAdapter(RetryableConnection):
                 "platform_user_id": user_id,
                 "content": text,
                 "timestamp": datetime.now(tz=UTC).isoformat(),
-                "metadata": {},
+                "metadata": {
+                    "channel_id": user_id,
+                    "is_dm": True,
+                },
             }
         )
         try:

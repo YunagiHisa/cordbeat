@@ -15,6 +15,21 @@ class TestDiscordAdapter:
 
         assert DiscordAdapter is not None
 
+    def test_core_slash_command_names_cover_core_commands(self) -> None:
+        from cordbeat.adapters.discord import _CORE_SLASH_COMMAND_NAMES
+
+        assert set(_CORE_SLASH_COMMAND_NAMES) == {
+            "approve",
+            "reject",
+            "proposals",
+            "link",
+            "unlink",
+            "name",
+            "quiet",
+            "prefer",
+            "draw",
+        }
+
     def test_init(self) -> None:
         from cordbeat.adapters.discord import DiscordAdapter
 
@@ -254,6 +269,21 @@ class TestTelegramAdapter:
         from cordbeat.adapters.telegram import TelegramAdapter
 
         assert TelegramAdapter is not None
+
+    def test_core_bot_commands_cover_core_commands(self) -> None:
+        from cordbeat.adapters.telegram import _CORE_BOT_COMMANDS
+
+        assert {name for name, _ in _CORE_BOT_COMMANDS} == {
+            "approve",
+            "reject",
+            "proposals",
+            "link",
+            "unlink",
+            "name",
+            "quiet",
+            "prefer",
+            "draw",
+        }
 
     def test_normalize_telegram_command_strips_bot_suffix(self) -> None:
         from cordbeat.adapters.telegram import _normalize_telegram_command_text
@@ -548,3 +578,105 @@ class TestTelegramAdapter:
         ):
             await _run_adapter("discord", "config.yaml")
             mock_logger.info.assert_called()
+
+
+class TestSlackAdapter:
+    def test_import(self) -> None:
+        from cordbeat.adapters.slack import SlackAdapter
+
+        assert SlackAdapter is not None
+
+    async def test_forward_to_core_includes_channel_scope(self) -> None:
+        from cordbeat.adapters.slack import SlackAdapter
+
+        config = AdapterConfig(options={})
+        adapter = SlackAdapter(config)
+        adapter._ws = AsyncMock()
+
+        await adapter._forward_to_core(
+            user_id="U123",
+            text="hello",
+            channel="C999",
+            channel_type="channel",
+        )
+
+        adapter._ws.send.assert_awaited_once()
+        payload = json.loads(adapter._ws.send.call_args[0][0])
+        assert payload["adapter_id"] == "slack"
+        assert payload["metadata"]["channel_id"] == "C999"
+        assert payload["metadata"]["is_dm"] is False
+
+    async def test_send_to_slack_metadata_channel_overrides_cache(self) -> None:
+        from cordbeat.adapters.slack import SlackAdapter
+
+        config = AdapterConfig(options={})
+        adapter = SlackAdapter(config)
+        adapter._web_client = AsyncMock()
+        adapter._user_channels["U123"] = "Cold"
+
+        await adapter._send_to_slack(
+            "U123",
+            "hello",
+            metadata={"channel_id": "Cnew"},
+        )
+
+        adapter._web_client.chat_postMessage.assert_awaited_once_with(
+            channel="Cnew",
+            text="hello",
+        )
+
+
+class TestLineAdapter:
+    async def test_forward_to_core_includes_channel_scope(self) -> None:
+        from cordbeat.adapters.line import LineAdapter
+
+        config = AdapterConfig(options={})
+        adapter = LineAdapter(config)
+        adapter._ws = AsyncMock()
+
+        await adapter._forward_to_core(
+            user_id="Uline",
+            text="hello",
+            is_group=True,
+            channel_id="Gline",
+        )
+
+        adapter._ws.send.assert_awaited_once()
+        payload = json.loads(adapter._ws.send.call_args[0][0])
+        assert payload["adapter_id"] == "line"
+        assert payload["metadata"]["channel_id"] == "Gline"
+        assert payload["metadata"]["is_dm"] is False
+
+
+class TestWhatsAppAdapter:
+    async def test_forward_to_core_marks_dm_scope(self) -> None:
+        from cordbeat.adapters.whatsapp import WhatsAppAdapter
+
+        config = AdapterConfig(options={})
+        adapter = WhatsAppAdapter(config)
+        adapter._ws = AsyncMock()
+
+        await adapter._forward_to_core(user_id="15551234567", text="hello")
+
+        adapter._ws.send.assert_awaited_once()
+        payload = json.loads(adapter._ws.send.call_args[0][0])
+        assert payload["adapter_id"] == "whatsapp"
+        assert payload["metadata"]["channel_id"] == "15551234567"
+        assert payload["metadata"]["is_dm"] is True
+
+
+class TestSignalAdapter:
+    async def test_forward_to_core_marks_dm_scope(self) -> None:
+        from cordbeat.adapters.signal import SignalAdapter
+
+        config = AdapterConfig(options={})
+        adapter = SignalAdapter(config)
+        adapter._ws = AsyncMock()
+
+        await adapter._forward_to_core(user_id="+15551234567", text="hello")
+
+        adapter._ws.send.assert_awaited_once()
+        payload = json.loads(adapter._ws.send.call_args[0][0])
+        assert payload["adapter_id"] == "signal"
+        assert payload["metadata"]["channel_id"] == "+15551234567"
+        assert payload["metadata"]["is_dm"] is True

@@ -131,7 +131,9 @@ class TestBuildSoulSystemPrompt:
 class TestBuildContext:
     def test_minimal_context(self) -> None:
         result = build_context(user_display_name="Alice")
+        assert "[BEGIN USER CONTEXT]" in result
         assert "User: Alice" in result
+        assert "[END USER CONTEXT]" in result
 
     def test_with_profile(self) -> None:
         result = build_context(
@@ -140,6 +142,7 @@ class TestBuildContext:
         )
         assert "Known info:" in result
         assert "age=25" in result
+        assert "[END USER CONTEXT]" in result
 
     def test_with_memories(self) -> None:
         result = build_context(
@@ -176,9 +179,11 @@ class TestBuildContext:
             ],
             soul_name="CordBeat",
         )
+        assert "[BEGIN CONVERSATION HISTORY]" in result
         assert "Conversation history:" in result
         assert "User: Hello" in result
         assert "CordBeat: Hi!" in result
+        assert "[END CONVERSATION HISTORY]" in result
 
     def test_none_values_excluded(self) -> None:
         result = build_context(

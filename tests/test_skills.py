@@ -288,6 +288,16 @@ class TestSkillDescriptions:
         desc = registry.get_skill_descriptions_for_prompt()
         assert desc == "(no skills available)"
 
+    def test_can_exclude_specific_skills_from_prompt(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "draw", safety="requires_confirmation")
+        _create_skill(skills_dir, "web_search", safety="safe")
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        desc = registry.get_skill_descriptions_for_prompt(exclude_names={"draw"})
+        assert "draw" not in desc
+        assert "web_search" in desc
+
 
 class TestSkillExecution:
     async def test_skill_no_execute_function(self, tmp_path: Path) -> None:

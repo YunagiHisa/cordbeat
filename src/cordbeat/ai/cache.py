@@ -7,7 +7,7 @@ threshold) keyed on the full request signature. The cache is opt-in via
 
 This is a pragmatic, dependency-free first cut: an ``OrderedDict``-based
 LRU with per-entry TTL, single-process only. It is intentionally **not**
-embedding-based — semantic similarity caching is left for v1.0+ once we
+embedding-based — semantic similarity caching is left for a future release once we
 have an evaluator that can verify cache hits don't degrade output
 quality.
 """

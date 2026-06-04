@@ -156,14 +156,20 @@ def build_context(
     max_user_input_len: int = MAX_USER_INPUT_LEN,
 ) -> str:
     """Assemble the context block from memory and conversation data."""
-    parts = [f"User: {sanitize(user_display_name, max_len=max_user_input_len)}"]
+    parts = [
+        "[BEGIN USER CONTEXT]",
+        f"User: {sanitize(user_display_name, strict=True, max_len=max_user_input_len)}",
+    ]
 
     if profile:
         sanitized = ", ".join(
-            f"{k}={sanitize(str(v), max_len=max_user_input_len)}"
+            f"{sanitize(str(k), strict=True, max_len=80)}="
+            f"{sanitize(str(v), strict=True, max_len=max_user_input_len)}"
             for k, v in profile.items()
         )
         parts.append(f"Known info: {sanitized}")
+
+    parts.append("[END USER CONTEXT]")
 
     if semantic_memories:
         parts.append("\n[BEGIN RECALLED FACTS]")
@@ -184,11 +190,13 @@ def build_context(
         parts.append("[END RECALL HINTS]")
 
     if history:
-        parts.append("\nConversation history:")
+        parts.append("\n[BEGIN CONVERSATION HISTORY]")
+        parts.append("Conversation history:")
         for msg in history:
             prefix = "User" if msg["role"] == "user" else (soul_name or "AI")
             sanitized = sanitize(msg["content"], max_len=max_user_input_len)
             parts.append(f"  {prefix}: {sanitized}")
+        parts.append("[END CONVERSATION HISTORY]")
 
     return "\n".join(parts)
 

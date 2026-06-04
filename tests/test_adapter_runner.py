@@ -110,7 +110,7 @@ class TestRunAdapter:
         module_path: str,
         class_name: str,
     ) -> None:
-        """v1.0+ scaffold adapters are instantiated and started."""
+        """Optional scaffold adapters are instantiated and started."""
         cfg = tmp_path / "config.yaml"
         cfg.write_text(
             "gateway:\n  host: 127.0.0.1\n  port: 8765\n"

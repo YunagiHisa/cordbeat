@@ -125,6 +125,31 @@ async def test_whisper_openai_stt_transcribes() -> None:
     assert result == "hello world"
 
 
+async def test_whisper_openai_stt_uses_configured_api_model() -> None:
+    cfg = STTConfig(
+        backend="whisper_openai",
+        api_key="key123",
+        model="gpt-4o-transcribe",
+    )
+    stt = WhisperOpenAISTT(cfg)
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"text": "hello world"}
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_client
+
+        await stt.transcribe(b"fake_audio", language="en")
+
+    data = mock_client.post.call_args.kwargs["data"]
+    assert data["model"] == "gpt-4o-transcribe"
+
+
 async def test_whisper_openai_stt_returns_empty_on_error() -> None:
     cfg = STTConfig(backend="whisper_openai", api_key="key")
     stt = WhisperOpenAISTT(cfg)
@@ -173,6 +198,31 @@ async def test_openai_compat_stt_transcribes() -> None:
         result = await stt.transcribe(b"audio")
 
     assert result == "transcribed text"
+
+
+async def test_openai_compat_stt_uses_configured_api_model() -> None:
+    cfg = STTConfig(
+        backend="openai_compat",
+        api_url="http://localhost:8080",
+        model="custom-whisper",
+    )
+    stt = OpenAICompatSTT(cfg)
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"text": "text"}
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_client
+
+        await stt.transcribe(b"audio")
+
+    data = mock_client.post.call_args.kwargs["data"]
+    assert data["model"] == "custom-whisper"
 
 
 # ---------------------------------------------------------------------------

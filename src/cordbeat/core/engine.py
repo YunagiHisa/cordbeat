@@ -42,12 +42,105 @@ logger = logging.getLogger(__name__)
 # Example: [DRAW: a red circle on a white background]
 _DRAW_TAG_RE = re.compile(r"\[DRAW:\s*(.+?)\]", re.DOTALL | re.IGNORECASE)
 
+_DRAW_SAFE_OPCODES = frozenset(
+    {
+        "SIZE",
+        "CANVAS",
+        "CIRCLE",
+        "RECT",
+        "ELLIPSE",
+        "LINE",
+        "POLYGON",
+        "TEXT",
+        "STAR",
+        "SPIRAL",
+        "ARC",
+        "BEZIER",
+        "GRADIENT",
+        "DOTS",
+        "OUTPUT",
+    }
+)
+_DRAW_CONTENT_OPCODES = _DRAW_SAFE_OPCODES - {"SIZE", "CANVAS", "OUTPUT"}
+_DRAW_MAX_AUTO_LINES = 80
+
 # Pattern for inline skill-invocation tags.
 # Example: [SKILL: web_search | query=latest AI news]
 _SKILL_TAG_RE = re.compile(
     r"\[SKILL:\s*([^\|\]\n]+?)(?:\s*\|\s*([^\]\n]*))?\]",
     re.IGNORECASE,
 )
+
+
+def _draw_line_has_minimum_args(opcode: str, line: str) -> bool:
+    """Return True when a DSL line has enough tokens to be plausibly usable."""
+
+    token_count = len(line.split())
+    minimums = {
+        "SIZE": 3,
+        "CANVAS": 2,
+        "CIRCLE": 5,
+        "RECT": 6,
+        "ELLIPSE": 6,
+        "LINE": 6,
+        "POLYGON": 7,
+        "TEXT": 5,
+        "STAR": 7,
+        "SPIRAL": 6,
+        "ARC": 7,
+        "BEZIER": 10,
+        "GRADIENT": 7,
+        "DOTS": 7,
+        "OUTPUT": 1,
+    }
+    return token_count >= minimums.get(opcode, 1)
+
+
+def _normalize_draw_dsl(raw_dsl: str) -> str:
+    """Keep safe Draw DSL lines and ensure the final command emits an image."""
+
+    normalized: list[str] = []
+    has_size = False
+    has_canvas = False
+    has_content = False
+
+    for raw_line in raw_dsl.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("```"):
+            continue
+        parts = line.split(maxsplit=1)
+        opcode = parts[0].upper().rstrip(":")
+        if opcode not in _DRAW_SAFE_OPCODES:
+            continue
+        normalized_line = f"{opcode} {parts[1]}".strip() if len(parts) > 1 else opcode
+        if not _draw_line_has_minimum_args(opcode, normalized_line):
+            continue
+        if opcode == "OUTPUT":
+            continue
+        if opcode == "SIZE":
+            if has_size:
+                continue
+            has_size = True
+        elif opcode in {"CANVAS", "GRADIENT"}:
+            has_canvas = True
+        if opcode in _DRAW_CONTENT_OPCODES:
+            has_content = True
+        normalized.append(normalized_line)
+        if len(normalized) >= _DRAW_MAX_AUTO_LINES:
+            break
+
+    if not has_content:
+        return ""
+
+    if not has_size:
+        normalized.insert(0, "SIZE 800 600")
+    if not has_canvas:
+        canvas_index = (
+            1 if normalized and normalized[0].upper().startswith("SIZE") else 0
+        )
+        normalized.insert(canvas_index, "CANVAS #f8fafc")
+    normalized.append("OUTPUT")
+    return "\n".join(normalized)
 
 
 class CoreEngine:
@@ -253,7 +346,9 @@ class CoreEngine:
             )
 
         # Inject available skill catalog so the AI knows what tools it can call.
-        skills_desc = self._skills.get_skill_descriptions_for_prompt()
+        skills_desc = self._skills.get_skill_descriptions_for_prompt(
+            exclude_names={"draw"}
+        )
         if skills_desc and skills_desc != "(no skills available)":
             system_prompt += (
                 "\n\nYou have access to the following tools. To USE a tool you"
@@ -513,6 +608,7 @@ class CoreEngine:
             # D9/D15: Execute all tags in order
             results: list[ToolCallResult] = []
             stopped_early = False
+            status_sent = False
             for m in tags:
                 skill_name = m.group(1).strip()
                 params_raw = (m.group(2) or "").strip()
@@ -557,6 +653,22 @@ class CoreEngine:
                     )
                     stopped_early = True
                     break
+
+                if pre_text and not status_sent:
+                    status = GatewayMessage(
+                        type=MessageType.ACK,
+                        adapter_id=message.adapter_id,
+                        platform_user_id=message.platform_user_id,
+                        content="🔧 ツールを実行中…",
+                    )
+                    try:
+                        await self._gateway.send_to_adapter(message.adapter_id, status)
+                    except Exception:
+                        logger.warning(
+                            "Failed to send tool-running status to %s",
+                            message.adapter_id,
+                        )
+                    status_sent = True
 
                 try:
                     result = await skill.execute(params, memory=self._memory)
@@ -697,50 +809,145 @@ class CoreEngine:
         clean_text = _DRAW_TAG_RE.sub("", response).strip()
         description = matches[0].strip()
 
-        try:
-            dsl = await self._generate_draw_dsl(description)
+        skill = self._skills.get("draw")
+        if skill is None:
+            return clean_text, []
+
+        retry_reason: str | None = None
+        for attempt in range(2):
+            raw_dsl = await self._generate_draw_dsl(
+                description,
+                retry_reason=retry_reason,
+            )
+            dsl = _normalize_draw_dsl(raw_dsl)
+            source = f"llm_attempt_{attempt + 1}"
             if not dsl:
-                return clean_text, []
-            skill = self._skills.get("draw")
-            if skill is None:
-                return clean_text, []
-            result = await skill.execute({"commands": dsl}, memory=self._memory)
-            output = result.get("output", "")
-            if output and "error" not in result:
+                retry_reason = "previous attempt produced no valid Draw DSL commands"
+                logger.warning(
+                    "Auto-draw DSL generation produced no usable commands "
+                    "(source=%s, description=%r, raw_len=%d)",
+                    source,
+                    description,
+                    len(raw_dsl),
+                )
+                continue
+
+            output = await self._execute_auto_draw(
+                skill,
+                dsl,
+                description=description,
+                source=source,
+            )
+            if output:
                 return clean_text, [output]
+            retry_reason = "previous Draw DSL executed but produced no image"
+
+        failure_note = "⚠️ Drawing failed, so I couldn't attach an image."
+        return f"{clean_text}\n\n{failure_note}".strip(), []
+
+    async def _execute_auto_draw(
+        self,
+        skill: Any,
+        dsl: str,
+        *,
+        description: str,
+        source: str,
+    ) -> str:
+        """Execute Draw DSL for auto-draw and return a base64 image if present."""
+
+        try:
+            result = await skill.execute({"commands": dsl}, memory=self._memory)
         except Exception:
-            logger.exception("Auto-draw pipeline failed (description=%r)", description)
+            logger.exception(
+                "Auto-draw skill execution failed "
+                "(source=%s, description=%r, dsl_len=%d)",
+                source,
+                description,
+                len(dsl),
+            )
+            return ""
 
-        return clean_text, []
+        if not isinstance(result, dict):
+            logger.warning(
+                "Auto-draw skill returned non-dict result "
+                "(source=%s, description=%r): %r",
+                source,
+                description,
+                result,
+            )
+            return ""
 
-    async def _generate_draw_dsl(self, description: str) -> str:
+        output = result.get("output")
+        if isinstance(output, str) and output and "error" not in result:
+            warnings = result.get("warnings") or []
+            if warnings:
+                logger.debug(
+                    "Auto-draw completed with warnings (source=%s, description=%r): %s",
+                    source,
+                    description,
+                    warnings,
+                )
+            return output
+
+        logger.warning(
+            "Auto-draw produced no image "
+            "(source=%s, description=%r, error=%r, warnings=%r, dsl_len=%d)",
+            source,
+            description,
+            result.get("error"),
+            result.get("warnings"),
+            len(dsl),
+        )
+        return ""
+
+    async def _generate_draw_dsl(
+        self,
+        description: str,
+        *,
+        retry_reason: str | None = None,
+    ) -> str:
         """Ask the AI to produce Draw DSL for the given plain-text description.
 
         Returns an empty string on failure so callers can skip gracefully.
         """
         safe_desc = sanitize(description, max_len=500)
+        retry_line = ""
+        if retry_reason:
+            retry_line = (
+                "\nPrevious attempt failed: "
+                f"{sanitize(retry_reason, strict=True, max_len=160)}"
+                "\nProduce a complete alternative Draw DSL for the same request."
+            )
         system = (
+            "/no_think\n"
             "You are a drawing DSL generator. "
             "Given a description, output ONLY valid Draw DSL"
             " commands — no prose, no markdown fences.\n"
+            "Use at most 35 lines. Prefer a simple poster-like composition. "
+            "Never use SAVE. Always end with OUTPUT as the final line.\n"
             "Available commands (one per line):\n"
             "  SIZE <width> <height>\n"
             "  CANVAS <color>\n"
-            "  CIRCLE <cx> <cy> <radius> <color>\n"
-            "  RECT <x1> <y1> <x2> <y2> <color>\n"
-            "  ELLIPSE <x1> <y1> <x2> <y2> <color>\n"
-            "  LINE <x1> <y1> <x2> <y2> <color>\n"
-            "  POLYGON <color> <x1> <y1> <x2> <y2> ...\n"
-            "  TEXT <x> <y> <text> <color> [size]\n"
-            "  STAR <cx> <cy> <outer_r> <inner_r> <points> <color>\n"
-            "  SPIRAL <cx> <cy> <turns> <spacing> <color>\n"
-            "  OUTPUT\n"
+            "  CIRCLE <cx> <cy> <radius> <color> [FILL]\n"
+            "  RECT <x1> <y1> <x2> <y2> <color> [FILL]\n"
+            "  ELLIPSE <x1> <y1> <x2> <y2> <color> [FILL]\n"
+            "  LINE <x1> <y1> <x2> <y2> <color> [width]\n"
+            "  POLYGON <x1> <y1> <x2> <y2> ... <color> [FILL]\n"
+            '  TEXT <x> <y> "<text>" <color> [size]\n'
+            "  STAR <cx> <cy> <outer_r> <inner_r> <points> <color> [FILL]\n"
+            "  SPIRAL <cx> <cy> <turns> <spacing> <color> [width]\n"
+            "  OUTPUT [PNG]\n"
             "Colors: named colors (white, red, blue, ...) or #RRGGBB."
             " Always end with OUTPUT."
         )
-        prompt = f"Draw this: {safe_desc}"
+        prompt = f"Draw this: {safe_desc}{retry_line}"
         try:
-            raw = await self._ai.generate(prompt=prompt, system=system)
+            raw = await self._ai.generate(
+                prompt=prompt,
+                system=system,
+                temperature=0.2,
+                max_tokens=1200,
+            )
             return raw.strip()
         except Exception:
             logger.exception("DSL generation failed for description=%r", safe_desc)

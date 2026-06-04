@@ -273,7 +273,11 @@ class SkillRegistry:
         # Static AST validation — protects the subprocess from trivially
         # malicious code and provides a fail-fast signal at load time.
         source = source_bytes.decode("utf-8", errors="replace")
-        validate_skill_source(source, meta.name)
+        validate_skill_source(
+            source,
+            meta.name,
+            allow_subprocess=meta.safety_level == SafetyLevel.DANGEROUS,
+        )
 
         self._skills[meta.name] = Skill(
             meta=meta,

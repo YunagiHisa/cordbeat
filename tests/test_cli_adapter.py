@@ -5,7 +5,26 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from cordbeat.adapters.cli import main
+from cordbeat.adapters.cli import (
+    _build_cli_completion_tree,
+    _mark_cli_proposal_action_sent,
+    main,
+)
+
+
+def test_build_cli_completion_tree_includes_pending_ids() -> None:
+    tree = _build_cli_completion_tree(["abc-123"])
+    assert "/approve" in tree
+    assert "/reject" in tree
+    assert tree["/approve"] == {"abc-123": None}
+    assert tree["/reject"] == {"abc-123": None}
+    assert tree["/proposals"] is None
+
+
+def test_mark_cli_proposal_action_sent_removes_pending_id() -> None:
+    pending = {"abc-123": {"skill_name": "draw"}}
+    _mark_cli_proposal_action_sent("/approve abc-123", pending)
+    assert pending == {}
 
 
 class TestCLIAdapter:

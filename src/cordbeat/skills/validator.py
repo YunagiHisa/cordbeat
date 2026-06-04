@@ -175,6 +175,13 @@ _FORBIDDEN_ATTRS: frozenset[str] = frozenset(
     }
 )
 
+_SUBPROCESS_ATTRS: frozenset[str] = frozenset(
+    {
+        "create_subprocess_exec",
+        "create_subprocess_shell",
+    }
+)
+
 
 @dataclass
 class _Violation:
@@ -183,10 +190,11 @@ class _Violation:
 
 
 class _Validator(ast.NodeVisitor):
-    def __init__(self) -> None:
+    def __init__(self, *, allow_subprocess: bool = False) -> None:
         self.violations: list[_Violation] = []
         self._scope_depth = 0
         self.has_execute = False
+        self._allow_subprocess = allow_subprocess
 
     # ----- helpers --------------------------------------------------
 
@@ -198,6 +206,8 @@ class _Validator(ast.NodeVisitor):
     def _check_name(self, node: ast.AST, name: str) -> None:
         if name in _FORBIDDEN_NAMES or name in _FORBIDDEN_ATTRS:
             self._report(node, f"Use of forbidden name: {name!r}")
+        if not self._allow_subprocess and name in _SUBPROCESS_ATTRS:
+            self._report(node, f"Use of subprocess helper is not allowed: {name!r}")
 
     # ----- module / top level --------------------------------------
 
@@ -288,6 +298,11 @@ class _Validator(ast.NodeVisitor):
                     node,
                     f"Importing name {alias.name!r} is not allowed",
                 )
+            if not self._allow_subprocess and alias.name in _SUBPROCESS_ATTRS:
+                self._report(
+                    node,
+                    f"Importing subprocess helper {alias.name!r} is not allowed",
+                )
 
     # ----- definitions ---------------------------------------------
 
@@ -321,6 +336,11 @@ class _Validator(ast.NodeVisitor):
     def visit_Attribute(self, node: ast.Attribute) -> None:
         if node.attr in _FORBIDDEN_ATTRS:
             self._report(node, f"Access to attribute {node.attr!r} is not allowed")
+        if not self._allow_subprocess and node.attr in _SUBPROCESS_ATTRS:
+            self._report(
+                node,
+                f"Access to subprocess helper {node.attr!r} is not allowed",
+            )
         # Continue descending into the value so chained attributes are checked.
         self.generic_visit(node)
 
@@ -330,6 +350,14 @@ class _Validator(ast.NodeVisitor):
             self._report(node, f"Call to forbidden builtin: {func.id!r}")
         if isinstance(func, ast.Attribute) and func.attr in _FORBIDDEN_ATTRS:
             self._report(node, f"Call to forbidden method: {func.attr!r}")
+        if (
+            not self._allow_subprocess
+            and isinstance(func, ast.Attribute)
+            and func.attr in _SUBPROCESS_ATTRS
+        ):
+            self._report(
+                node, f"Call to subprocess helper is not allowed: {func.attr!r}"
+            )
         self.generic_visit(node)
 
 
@@ -345,7 +373,12 @@ def _import_allowed(dotted_name: str) -> bool:
     return False
 
 
-def validate_skill_source(source: str, skill_name: str) -> None:
+def validate_skill_source(
+    source: str,
+    skill_name: str,
+    *,
+    allow_subprocess: bool = False,
+) -> None:
     """Validate AI-proposed skill *source* code, raising on violations.
 
     Parameters
@@ -354,6 +387,9 @@ def validate_skill_source(source: str, skill_name: str) -> None:
         The full Python source of the proposed skill's ``main.py``.
     skill_name:
         Used for error messages only.
+    allow_subprocess:
+        Permit explicit asyncio subprocess helpers. This is reserved for
+        deliberately dangerous skills that are disabled by default.
 
     Raises
     ------
@@ -371,7 +407,7 @@ def validate_skill_source(source: str, skill_name: str) -> None:
             f"Skill {skill_name!r} has a syntax error: {exc.msg} (line {exc.lineno})"
         ) from exc
 
-    validator = _Validator()
+    validator = _Validator(allow_subprocess=allow_subprocess)
     validator.visit(tree)
 
     if not validator.has_execute:

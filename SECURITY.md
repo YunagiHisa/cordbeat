@@ -45,8 +45,8 @@ the primary attack surface.
 
 | Safety Level | Description | Default | Isolation |
 |---|---|---|---|
-| ``safe`` | No filesystem or network access by declaration | Enabled | In-process |
-| ``requires_confirmation`` | May access filesystem or network; user approval required per call | Enabled | In-process, AST-validated |
+| ``safe`` | May run automatically; must be low-risk and narrowly scoped | Enabled | Subprocess + AST validator + timeout |
+| ``requires_confirmation`` | May access filesystem or perform higher-impact actions; user approval required per call | Enabled | Subprocess + AST validator + timeout |
 | ``dangerous`` | Unrestricted system access | **Disabled by default** | Subprocess + AST validator + ``rlimit`` + timeout |
 
 **Mitigations:**
@@ -60,9 +60,9 @@ the primary attack surface.
   user input or network sources.
 - ``skill.yaml`` declares ``safety_level``, ``sandbox`` mode, and required
   permissions (``network``, ``filesystem``).
-- ``skill_validator.py`` AST-checks every skill at load time against an
-  import allow-list (``ALLOWED_IMPORTS``); ``socket`` / ``ssl`` / direct
-  subprocess use are rejected.
+- ``skill_validator.py`` AST-checks every non-dangerous skill at load time
+  against an import allow-list (``ALLOWED_IMPORTS``); direct subprocess helpers
+  are rejected unless the skill is explicitly marked ``dangerous``.
 - ``skill_runner.py`` is self-contained (no ``cordbeat`` imports) so a
   compromised skill env cannot reach into the host package.
 - ``dangerous`` skills additionally run under ``setrlimit`` (CPU, RSS,
@@ -126,7 +126,7 @@ Identity (``Soul``) mutations are guarded by an explicit caller check.
   config.
 - Adapters authenticate to the Gateway via a shared HMAC token
   (``hmac.compare_digest``). The token is provisioned out-of-band via
-  ``config.yaml`` and is never logged.
+  ``.env`` / environment variables and is never logged.
 - For production / multi-host deployments, place the Gateway behind a
   reverse proxy with TLS and continue to bind locally.
 
@@ -157,7 +157,7 @@ Identity (``Soul``) mutations are guarded by an explicit caller check.
 |---|---|---|
 | User memory DB | Local file exfiltration | OS file permissions; database does not contain platform IDs in plaintext (UUID indirection via ``platform_links``). |
 | User memory DB | Cross-user leakage via search | ``sqlite-vec`` ``user_id PARTITION KEY``; every search is scoped to the calling user. |
-| Host filesystem | Malicious skill writes outside sandbox | ``safe`` skills declare no FS perms; ``requires_confirmation`` requires per-call user approval; ``dangerous`` runs in a subprocess with ``rlimit`` + cwd-restricted temp dir. |
+| Host filesystem | Malicious skill writes/reads outside sandbox | Filesystem-capable built-in skills require per-call user approval; ``dangerous`` skills are disabled by default and run in a subprocess with ``rlimit`` + timeout. |
 | Host process | Skill exhausts memory/CPU | ``setrlimit`` (POSIX) + ``asyncio.wait_for`` timeout in subprocess sandbox. |
 | Internal network | SSRF via ``api_call`` | DNS resolved up front, private/metadata ranges blocked, IP-pinned connect, redirects disabled, ``Host`` header fixed. |
 | Internal network | DNS rebinding to private IP after first lookup | IP pinning ensures the second resolution cannot retarget the connection. |

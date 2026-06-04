@@ -5,9 +5,48 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from collections.abc import Iterable
 from datetime import UTC, datetime
+from typing import Any, cast
 
 import websockets
+
+_CORE_SLASH_COMMANDS = (
+    "/approve",
+    "/reject",
+    "/proposals",
+    "/link",
+    "/unlink",
+    "/name",
+    "/quiet",
+    "/prefer",
+    "/draw",
+)
+
+
+def _build_cli_completion_tree(pending_proposal_ids: Iterable[str]) -> dict[str, Any]:
+    proposal_tree = {proposal_id: None for proposal_id in pending_proposal_ids}
+    return {
+        "/approve": dict(proposal_tree),
+        "/reject": dict(proposal_tree),
+        **{
+            command: None
+            for command in _CORE_SLASH_COMMANDS
+            if command
+            not in {
+                "/approve",
+                "/reject",
+            }
+        },
+    }
+
+
+def _mark_cli_proposal_action_sent(
+    line: str, pending_proposals: dict[str, dict[str, Any]]
+) -> None:
+    parts = line.split(maxsplit=1)
+    if len(parts) == 2 and parts[0].lower() in {"/approve", "/reject"}:
+        pending_proposals.pop(parts[1].strip(), None)
 
 
 async def main(ws_url: str = "ws://localhost:8765", auth_token: str = "") -> None:
@@ -24,6 +63,20 @@ async def main(ws_url: str = "ws://localhost:8765", auth_token: str = "") -> Non
 
         _waiting = False
         _reply_event = asyncio.Event()
+        pending_proposals: dict[str, dict[str, Any]] = {}
+
+        prompt_session: Any = None
+        nested_completer: Any = None
+        if sys.stdin.isatty():
+            try:
+                from prompt_toolkit import PromptSession
+                from prompt_toolkit.completion import NestedCompleter
+
+                prompt_session = PromptSession()
+                nested_completer = NestedCompleter
+            except Exception:
+                prompt_session = None
+                nested_completer = None
 
         # Listen for incoming messages in background
         async def listener() -> None:
@@ -43,6 +96,11 @@ async def main(ws_url: str = "ws://localhost:8765", auth_token: str = "") -> Non
                         skill_name = meta.get("skill_name", "unknown")
                         skill_params = meta.get("skill_params") or {}
                         proposal_id = meta.get("proposal_id", "")
+                        if proposal_id:
+                            pending_proposals[str(proposal_id)] = {
+                                "skill_name": skill_name,
+                                "skill_params": skill_params,
+                            }
                         print("\n┌─────────────────────────────────────────────────┐")
                         print(f"│  🔧  Skill Execution Required: {skill_name:<17}│")
                         print("├─────────────────────────────────────────────────┤")
@@ -52,7 +110,6 @@ async def main(ws_url: str = "ws://localhost:8765", auth_token: str = "") -> Non
                                 print(f"{line_:<51}│")
                         print("├─────────────────────────────────────────────────┤")
                         print(f"│  /approve {proposal_id[:32]}... (once)         │")
-                        print(f"│  /approve_session {proposal_id[:24]}... (session)  │")
                         print(f"│  /reject  {proposal_id[:32]}... (deny)         │")
                         print("└─────────────────────────────────────────────────┘")
                     elif msg_type in ("message", "ack"):
@@ -78,19 +135,29 @@ async def main(ws_url: str = "ws://localhost:8765", auth_token: str = "") -> Non
 
         # Send loop
         loop = asyncio.get_event_loop()
+
+        async def read_line() -> str:
+            if prompt_session is not None and nested_completer is not None:
+                prompt_session.completer = nested_completer.from_nested_dict(
+                    _build_cli_completion_tree(pending_proposals.keys())
+                )
+                return cast(str, await prompt_session.prompt_async("> "))
+            return await loop.run_in_executor(
+                None,
+                lambda: input("> "),
+            )
+
         try:
             while True:
-                line = await loop.run_in_executor(
-                    None,
-                    lambda: input("> "),
-                )
-                if not line.strip():
+                line = (await read_line()).strip()
+                if not line:
                     continue
+                _mark_cli_proposal_action_sent(line, pending_proposals)
                 msg = {
                     "type": "message",
                     "adapter_id": "cli",
                     "platform_user_id": "cli_user",
-                    "content": line.strip(),
+                    "content": line,
                     "timestamp": datetime.now(tz=UTC).isoformat(),
                 }
                 _reply_event.clear()

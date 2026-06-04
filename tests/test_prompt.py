@@ -114,9 +114,7 @@ class TestBuildSoulSystemPrompt:
         assert "stranger" in build_soul_system_prompt(snap, user_message_count=0)
         assert "acquaintance" in build_soul_system_prompt(snap, user_message_count=20)
         assert "friend" in build_soul_system_prompt(snap, user_message_count=200)
-        assert "close friend" in build_soul_system_prompt(
-            snap, user_message_count=1000
-        )
+        assert "close friend" in build_soul_system_prompt(snap, user_message_count=1000)
 
     def test_familiarity_omitted_when_none(self) -> None:
         """Without a message count, no relationship-stage section is added."""

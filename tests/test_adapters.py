@@ -165,6 +165,26 @@ class TestDiscordAdapter:
         await adapter._send_to_discord("123", "hello")
         mock_user.send.assert_awaited_once_with("hello", files=[])
 
+    async def test_send_to_discord_channel_failure_falls_back_to_dm(self) -> None:
+        """Channel send failures should still try DM when fallback is allowed."""
+        from cordbeat.adapters.discord import DiscordAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = DiscordAdapter(config)
+        mock_channel = MagicMock()
+        mock_channel.send = AsyncMock(side_effect=RuntimeError("missing permissions"))
+        mock_user = AsyncMock()
+        adapter._bot = MagicMock()
+        adapter._bot.get_channel = MagicMock(return_value=mock_channel)
+        adapter._bot.fetch_user = AsyncMock(return_value=mock_user)
+        adapter._user_channels["123"] = 456
+
+        await adapter._send_to_discord("123", "hello")
+
+        mock_channel.send.assert_awaited_once_with("hello", files=[])
+        mock_user.send.assert_awaited_once_with("hello", files=[])
+        assert "123" not in adapter._user_channels
+
     async def test_send_to_discord_metadata_channel_id_overrides_cache(self) -> None:
         """Core-supplied channel_id in metadata wins over the in-memory cache."""
         from cordbeat.adapters.discord import DiscordAdapter
@@ -205,12 +225,44 @@ class TestDiscordAdapter:
         )
         mock_user.send.assert_not_awaited()
 
+    async def test_send_to_discord_channel_failure_respects_no_dm_fallback(
+        self,
+    ) -> None:
+        """allow_dm_fallback=False prevents DM after channel send failures too."""
+        from cordbeat.adapters.discord import DiscordAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = DiscordAdapter(config)
+        mock_channel = MagicMock()
+        mock_channel.send = AsyncMock(side_effect=RuntimeError("missing permissions"))
+        mock_user = AsyncMock()
+        adapter._bot = MagicMock()
+        adapter._bot.get_channel = MagicMock(return_value=mock_channel)
+        adapter._bot.fetch_user = AsyncMock(return_value=mock_user)
+        adapter._user_channels["123"] = 456
+
+        await adapter._send_to_discord(
+            "123", "hi", metadata={"allow_dm_fallback": False}
+        )
+
+        mock_channel.send.assert_awaited_once_with("hi", files=[])
+        mock_user.send.assert_not_awaited()
+
 
 class TestTelegramAdapter:
     def test_import(self) -> None:
         from cordbeat.adapters.telegram import TelegramAdapter
 
         assert TelegramAdapter is not None
+
+    def test_normalize_telegram_command_strips_bot_suffix(self) -> None:
+        from cordbeat.adapters.telegram import _normalize_telegram_command_text
+
+        assert (
+            _normalize_telegram_command_text("/approve@CordBeatBot abc-123")
+            == "/approve abc-123"
+        )
+        assert _normalize_telegram_command_text("/proposals") == "/proposals"
 
     def test_init(self) -> None:
         from cordbeat.adapters.telegram import TelegramAdapter

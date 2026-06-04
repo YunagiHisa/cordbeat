@@ -131,6 +131,27 @@ class TestImportRestrictions:
         src = "import socket\ndef execute(**kw): return {}\n"
         validate_skill_source(src, "x")
 
+    def test_asyncio_subprocess_helpers_forbidden_by_default(self) -> None:
+        src = (
+            "import asyncio\n"
+            "async def execute(**kw):\n"
+            "    proc = await asyncio.create_subprocess_shell('echo nope')\n"
+            "    await proc.wait()\n"
+            "    return {}\n"
+        )
+        with pytest.raises(SkillValidationError, match="subprocess helper"):
+            validate_skill_source(src, "x")
+
+    def test_asyncio_subprocess_helpers_allowed_for_dangerous_skills(self) -> None:
+        src = (
+            "import asyncio\n"
+            "async def execute(**kw):\n"
+            "    proc = await asyncio.create_subprocess_shell('echo ok')\n"
+            "    await proc.wait()\n"
+            "    return {}\n"
+        )
+        validate_skill_source(src, "dangerous", allow_subprocess=True)
+
     def test_ctypes_forbidden(self) -> None:
         src = "import ctypes\ndef execute(**kw): return {}\n"
         with pytest.raises(SkillValidationError, match="ctypes"):

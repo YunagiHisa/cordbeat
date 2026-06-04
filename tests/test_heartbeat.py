@@ -1498,8 +1498,47 @@ class TestSkillProposal:
 
         mock_gateway.send_to_adapter.assert_called_once()
         msg = mock_gateway.send_to_adapter.call_args[0][1]
+        assert msg.type == MessageType.SKILL_CONFIRM
         assert "cleanup" in msg.content
         assert "proposal ID:" in msg.content
+        assert msg.metadata["skill_name"] == "cleanup"
+
+    async def test_draw_prompt_text_is_not_stored_as_skill_proposal(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Heartbeat skips natural-language DRAW: text because draw needs DSL."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        skill = Skill(
+            meta=SkillMeta(
+                name="draw",
+                description="Draw",
+                usage="draw",
+                safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
+            ),
+            _test_callable=lambda **kw: {"ok": True},
+        )
+        skills._skills["draw"] = skill
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="draw",
+            skill_params={
+                "commands": ("DRAW: a majestic dragon with translucent icy blue scales")
+            },
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_skill(decision)
+
+        records = await memory.get_certain_records("u1", record_type="proposal")
+        assert records == []
+        mock_gateway.send_to_adapter.assert_not_called()
 
 
 class TestApprovedProposalExecution:

@@ -143,6 +143,24 @@ class TestCoreEngine:
         user_id = await memory.resolve_user("test", "new_user")
         assert user_id is not None
 
+    async def test_handle_message_uses_adapter_display_name(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+    ) -> None:
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="12345",
+            content="First message",
+            metadata={"display_name": "Alice"},
+        )
+        await engine.handle_message(msg)
+        user_id = await memory.resolve_user("test", "12345")
+        assert user_id is not None
+        user = await memory.get_or_create_user(user_id, "ignored")
+        assert user.display_name == "Alice"
+
     async def test_handle_message_ignores_non_message_types(
         self,
         engine: CoreEngine,
@@ -2225,7 +2243,7 @@ class TestReActLoop:
         contents = [c[0][1].content for c in calls]
         assert any("The answer is 42" in c for c in contents)
 
-    async def test_non_safe_skill_skipped(
+    async def test_non_safe_skill_requests_confirmation(
         self,
         mock_ai: AsyncMock,
         soul: Soul,
@@ -2233,7 +2251,7 @@ class TestReActLoop:
         mock_gateway: AsyncMock,
         tmp_path: Path,
     ) -> None:
-        """Non-safe skills are skipped; generate_chat is not called."""
+        """Non-safe skills request confirmation before chat generation."""
 
         async def _generate(**kw: object) -> str:
             prompt = str(kw.get("prompt", ""))
@@ -2268,6 +2286,14 @@ class TestReActLoop:
         await eng.handle_message(msg)
 
         mock_ai.generate_chat.assert_not_awaited()
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        confirm = next(m for m in sent if m.type == MessageType.SKILL_CONFIRM)
+        assert confirm.metadata["skill_name"] == "risky_tool"
+
+        user_id = await memory.resolve_user("test", "user1")
+        assert user_id is not None
+        proposals = await memory.get_certain_records(user_id, record_type="proposal")
+        assert len(proposals) == 1
 
     async def test_react_disabled_strips_tags(
         self,

@@ -6,7 +6,7 @@ author: "cordbeat"
 
 usage: |
   ファイルの内容を確認したいときに使う。
-  サンドボックス内のファイルのみ読み取り可能。
+  ローカルファイルの内容を読むため、実行前にユーザー承認が必要。
 
 parameters:
   - name: path
@@ -19,7 +19,7 @@ parameters:
     description: "読み込む最大行数（デフォルト: 100）"
 
 safety:
-  level: safe
+  level: requires_confirmation
   sandbox: true
   network: false
   filesystem: true

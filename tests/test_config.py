@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -94,6 +95,18 @@ class TestLoadConfig:
         assert config.ai_backend.provider == "openai"
         assert config.ai_backend.model == "gpt-4"
         assert config.ai_backend.options["api_key"] == "sk-test"
+
+    def test_warns_for_ai_backend_options_api_key(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "ai_backend:\n  options:\n    api_key: sk-test\n",
+            encoding="utf-8",
+        )
+        with caplog.at_level(logging.WARNING):
+            load_config(cfg_file)
+        assert "ai_backend.options.api_key" in caplog.text
 
     def test_empty_yaml(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.yaml"

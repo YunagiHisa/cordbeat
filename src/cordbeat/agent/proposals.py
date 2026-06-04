@@ -131,7 +131,7 @@ class ProposalExecutor:
             if platform_user_id:
                 soul_snap = self._soul.get_soul_snapshot()
                 notification = GatewayMessage(
-                    type=MessageType.HEARTBEAT_MESSAGE,
+                    type=MessageType.SKILL_CONFIRM,
                     adapter_id=adapter_id,
                     platform_user_id=platform_user_id,
                     content=(
@@ -140,6 +140,11 @@ class ProposalExecutor:
                         f"Parameters: {json.dumps(decision.skill_params)}\n\n"
                         f"(proposal ID: {proposal_id})"
                     ),
+                    metadata={
+                        "proposal_id": proposal_id,
+                        "skill_name": skill_name,
+                        "skill_params": decision.skill_params,
+                    },
                 )
                 await self._gateway.send_to_adapter(adapter_id, notification)
 

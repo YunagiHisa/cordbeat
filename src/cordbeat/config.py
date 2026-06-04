@@ -307,7 +307,9 @@ def _build_dataclass(cls: type, data: dict[str, Any]) -> Any:
 _SECRET_YAML_PATHS: tuple[tuple[str, ...], ...] = (
     ("gateway", "auth_token"),
     ("ai_backend", "api_key"),
+    ("ai_backend", "options", "api_key"),
     ("ai_decision", "api_key"),
+    ("ai_decision", "options", "api_key"),
     ("stt", "api_key"),
     ("tts", "api_key"),
 )

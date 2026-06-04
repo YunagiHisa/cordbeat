@@ -116,7 +116,12 @@ async def _react_loop(
             continue
 
         if call.requires_user_confirmation(self._session_allowed_skills):
-            await self._request_skill_confirmation(message, call.name, call.params)
+            await self._request_skill_confirmation(
+                user_id=user_id,
+                message=message,
+                skill_name=call.name,
+                skill_params=call.params,
+            )
             return _SKILL_TAG_RE.sub("", response, count=1).strip()  # break loop
 
         result = await self._execute_call_safe(call)
@@ -354,7 +359,7 @@ Wired into `Config.react: ReActConfig = Field(default_factory=ReActConfig)`.
 | D5 | Confirm-required skill mid-loop | **Break loop, queue proposal** | Mid-loop async approval is a state-machine nightmare. Next user message restarts. |
 | D6 | Tool error handling | **Pass `{"error": "..."}` to AI** | AI can decide retry / alternative / abandon. Errors no longer silent. |
 | D7 | Where to store the trace | **Debug log only, NOT memory** | Tool noise pollutes conversation memory; the final reply is the durable artifact. |
-| D8 | HEARTBEAT integration | **Out of scope** | Heartbeat has `HeartbeatDecision.action=SKILL` separate path. Adding ReAct there is v1.2+. |
+| D8 | HEARTBEAT integration | **Separate path** | Heartbeat keeps `HeartbeatDecision.action=SKILL`; ReAct is not added to HEARTBEAT. Skill confirmation still uses the shared proposal/adapter flow. |
 | D9 | Parallel skill calls | **Sequential, but multiple per response allowed** | Causality often matters (fetch_url depends on web_search), so execution stays sequential. But the AI can emit several tags in one response and CordBeat will run them in order before re-prompting — matching Anthropic / OpenAI semantics (D15). True async-parallel is v1.2+. |
 | D10 | Streaming intermediate | **No** | Adapter typing-indicator is enough; partial-stream UX is complex per platform. |
 | D11 | Trace visibility to user | **Hidden by default, opt-in via config** | Clean UX; devs can flip `expose_trace_to_user=True`. |
@@ -475,8 +480,8 @@ PR-set (R-1 → R-4) that removes the old code in R-2.
 ### 7.2 Migration checklist
 
 - ✅ Existing `[SKILL: ...]` syntax unchanged
-- ✅ `requires_confirmation` proposal flow unchanged
-- ✅ HEARTBEAT skill-dispatch path untouched (separate code)
+- ✅ `requires_confirmation` still queues a proposal instead of executing inline
+- ✅ HEARTBEAT skill-dispatch path remains separate from ReAct
 - ✅ Memory storage of final reply only — no change to
   `extract_and_store_memories`
 - ⚠️  Tests that asserted "single skill executed inline" must be

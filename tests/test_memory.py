@@ -158,9 +158,7 @@ class TestConversationHistory:
         discord_msgs = await memory.get_recent_messages("u1", adapter_id="discord")
         assert [m["content"] for m in discord_msgs] == ["from discord"]
 
-        telegram_msgs = await memory.get_recent_messages(
-            "u1", adapter_id="telegram"
-        )
+        telegram_msgs = await memory.get_recent_messages("u1", adapter_id="telegram")
         assert [m["content"] for m in telegram_msgs] == ["from telegram"]
 
         cli_msgs = await memory.get_recent_messages("u1", adapter_id="cli")

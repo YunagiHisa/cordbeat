@@ -27,6 +27,7 @@ from cordbeat.models import (
     GatewayMessage,
     MessageType,
     ProposalStatus,
+    ProposalType,
     SafetyLevel,
     SoulCaller,
     UserSummary,
@@ -131,7 +132,7 @@ class CoreEngine:
 
             # Phase 3: ReAct loop — execute skill tags and re-prompt
             response = await self._react_loop(
-                response, message, system_prompt, user_prompt
+                response, message, system_prompt, user_prompt, user_id
             )
 
             # Phase 4: Send reply immediately — do NOT wait for post-processing
@@ -166,15 +167,21 @@ class CoreEngine:
         """Resolve or create the user and update their summary."""
         adapter_id = message.adapter_id
         platform_user_id = message.platform_user_id
+        display_name = (
+            str(message.metadata.get("display_name") or platform_user_id).strip()
+            or platform_user_id
+        )
 
         user_id = await self._memory.resolve_user(adapter_id, platform_user_id)
         if user_id is None:
             user_id = uuid.uuid4().hex
-            user = await self._memory.get_or_create_user(user_id, platform_user_id)
+            user = await self._memory.get_or_create_user(user_id, display_name)
             await self._memory.link_platform(user_id, adapter_id, platform_user_id)
         else:
-            user = await self._memory.get_or_create_user(user_id, platform_user_id)
+            user = await self._memory.get_or_create_user(user_id, display_name)
 
+        if display_name and user.display_name != display_name:
+            user.display_name = display_name
         user.last_talked_at = datetime.now(tz=UTC)
         user.last_platform = adapter_id
         await self._memory.update_user_summary(user)
@@ -241,6 +248,8 @@ class CoreEngine:
                 " [DRAW: <description in English>] tag in your message."
                 " Example: [DRAW: a red circle on a white background]."
                 " The image will be rendered automatically and sent with your reply."
+                " Do not call the draw skill directly with [SKILL: draw];"
+                " use the [DRAW: ...] tag instead."
             )
 
         # Inject available skill catalog so the AI knows what tools it can call.
@@ -431,12 +440,20 @@ class CoreEngine:
             is_dm_raw = md.get("is_dm")
             is_dm = bool(is_dm_raw) if is_dm_raw is not None else True
             await self._memory.add_message(
-                user_id, "user", message.content, message.adapter_id,
-                channel_id=channel_id, is_dm=is_dm,
+                user_id,
+                "user",
+                message.content,
+                message.adapter_id,
+                channel_id=channel_id,
+                is_dm=is_dm,
             )
             await self._memory.add_message(
-                user_id, "assistant", response, message.adapter_id,
-                channel_id=channel_id, is_dm=is_dm,
+                user_id,
+                "assistant",
+                response,
+                message.adapter_id,
+                channel_id=channel_id,
+                is_dm=is_dm,
             )
             await self._extractor.infer_and_update_emotion(
                 user_id, message.content, response
@@ -453,6 +470,7 @@ class CoreEngine:
         message: GatewayMessage,
         system_prompt: str,
         user_prompt: str,
+        user_id: str,
     ) -> str:
         """ReAct: multi-turn skill execution loop (D1-D16).
 
@@ -519,9 +537,23 @@ class CoreEngine:
                     continue
 
                 if skill.meta.safety_level != SafetyLevel.SAFE:
-                    # D15: skip non-safe skills (same as previous behavior)
                     logger.info(
-                        "ReAct: skill %r requires confirmation; skipping", skill_name
+                        "ReAct: skill %r requires confirmation; requesting approval",
+                        skill_name,
+                    )
+                    proposal_id = await self._request_skill_confirmation(
+                        user_id=user_id,
+                        message=message,
+                        skill_name=skill_name,
+                        skill_params=params,
+                    )
+                    results.append(
+                        ToolCallResult(
+                            skill_name=skill_name,
+                            params=params,
+                            output=f"Approval required: {proposal_id}",
+                            is_error=True,
+                        )
                     )
                     stopped_early = True
                     break
@@ -555,7 +587,11 @@ class CoreEngine:
             trace.iterations = iteration + 1
 
             if stopped_early:
-                return pre_text if pre_text else _SKILL_TAG_RE.sub("", response).strip()
+                return (
+                    "🔧 この操作は承認が必要だよ。"
+                    "表示された確認から許可するか、/approve <proposal_id> "
+                    "で実行してね。"
+                )
 
             if not results:
                 break
@@ -604,6 +640,46 @@ class CoreEngine:
                 "もう一度聞いてくれると嬉しいな)"
             )
         return cleaned_final
+
+    async def _request_skill_confirmation(
+        self,
+        *,
+        user_id: str,
+        message: GatewayMessage,
+        skill_name: str,
+        skill_params: dict[str, Any],
+    ) -> str:
+        """Persist a skill-execution proposal and ask the adapter to confirm it."""
+        metadata: dict[str, Any] = {
+            "status": ProposalStatus.PENDING,
+            "proposal_type": ProposalType.SKILL_EXECUTION,
+            "skill_name": skill_name,
+            "skill_params": skill_params,
+            "adapter_id": message.adapter_id,
+        }
+        content = (
+            f"Skill '{skill_name}' requires confirmation.\n"
+            f"Parameters: {json.dumps(skill_params, ensure_ascii=False)}"
+        )
+        proposal_id = await self._memory.add_certain_record(
+            user_id=user_id,
+            content=content,
+            record_type="proposal",
+            metadata=metadata,
+        )
+        confirm = GatewayMessage(
+            type=MessageType.SKILL_CONFIRM,
+            adapter_id=message.adapter_id,
+            platform_user_id=message.platform_user_id,
+            content=f"🔧 Skill '{skill_name}' requires approval.",
+            metadata={
+                "proposal_id": proposal_id,
+                "skill_name": skill_name,
+                "skill_params": skill_params,
+            },
+        )
+        await self._gateway.send_to_adapter(message.adapter_id, confirm)
+        return proposal_id
 
     async def _maybe_draw(self, response: str) -> tuple[str, list[str]]:
         """Parse [DRAW: ...] tags from LLM response and execute the draw skill.

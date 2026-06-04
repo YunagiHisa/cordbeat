@@ -28,6 +28,7 @@ ADAPTER_ID = "discord"
 # Upper bound on cached user → channel entries. Prevents unbounded growth
 # over long-running bot uptimes; oldest entries are evicted on insertion.
 _USER_CHANNEL_CACHE_MAX = 10_000
+_PENDING_SKILL_CONFIRM_MAX = 1_000
 
 
 class DiscordAdapter(RetryableConnection):
@@ -52,6 +53,7 @@ class DiscordAdapter(RetryableConnection):
         self._running = False
         self._max_backoff = config.reconnect_max_backoff
         self._user_channels: OrderedDict[str, int] = OrderedDict()
+        self._pending_skill_confirms: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._filter = AdapterFilter.from_options(config.options)
 
         # Typing indicator tasks: channel_id → asyncio.Task
@@ -109,6 +111,42 @@ class DiscordAdapter(RetryableConnection):
         @self._tree.command(name="mute", description="Toggle voice mute on/off")
         async def mute_cmd(interaction: Any) -> None:
             await self._handle_mute(interaction)
+
+        async def proposal_id_autocomplete(interaction: Any, current: str) -> list[Any]:
+            choices = self._pending_proposal_choices(str(interaction.user.id), current)
+            return [
+                discord.app_commands.Choice(name=name, value=value)
+                for name, value in choices
+            ]
+
+        @self._tree.command(
+            name="approve",
+            description="Approve a pending CordBeat proposal",
+        )
+        @discord.app_commands.describe(proposal_id="Pending proposal to approve")
+        @discord.app_commands.autocomplete(proposal_id=proposal_id_autocomplete)
+        async def approve_cmd(interaction: Any, proposal_id: str) -> None:
+            await self._forward_core_command_interaction(
+                interaction, f"/approve {proposal_id}"
+            )
+
+        @self._tree.command(
+            name="reject",
+            description="Reject a pending CordBeat proposal",
+        )
+        @discord.app_commands.describe(proposal_id="Pending proposal to reject")
+        @discord.app_commands.autocomplete(proposal_id=proposal_id_autocomplete)
+        async def reject_cmd(interaction: Any, proposal_id: str) -> None:
+            await self._forward_core_command_interaction(
+                interaction, f"/reject {proposal_id}"
+            )
+
+        @self._tree.command(
+            name="proposals",
+            description="List pending CordBeat proposals",
+        )
+        async def proposals_cmd(interaction: Any) -> None:
+            await self._forward_core_command_interaction(interaction, "/proposals")
 
         @self._bot.event
         async def on_ready() -> None:
@@ -192,6 +230,12 @@ class DiscordAdapter(RetryableConnection):
         proposal_id: str = str(meta.get("proposal_id", ""))
         skill_name: str = str(meta.get("skill_name", "unknown"))
         skill_params: dict[str, Any] = meta.get("skill_params") or {}
+        self._cache_pending_skill_confirm(
+            platform_user_id=platform_user_id,
+            proposal_id=proposal_id,
+            skill_name=skill_name,
+            skill_params=skill_params,
+        )
 
         channel_id = self._user_channels.get(platform_user_id)
         if channel_id is None:
@@ -228,6 +272,8 @@ class DiscordAdapter(RetryableConnection):
 
         ws_ref = self._ws
 
+        adapter = self
+
         class SkillConfirmView(discord.ui.View):  # type: ignore[misc]
             def __init__(self) -> None:
                 super().__init__(timeout=300)
@@ -239,35 +285,13 @@ class DiscordAdapter(RetryableConnection):
                 button: discord.ui.Button[Any],  # type: ignore[type-arg]
             ) -> None:
                 if ws_ref is not None:
-                    payload = json.dumps(
-                        {"type": "message", "content": f"/approve {proposal_id}"}
+                    command = f"/approve {proposal_id}"
+                    adapter._mark_proposal_action_sent(command)
+                    await ws_ref.send(
+                        adapter._core_command_payload(command, platform_user_id)
                     )
-                    await ws_ref.send(payload)
                 await interaction.response.edit_message(
                     content=f"✅ Approved once: `{skill_name}`", embed=None, view=None
-                )
-                self.stop()
-
-            @discord.ui.button(  # type: ignore[misc]
-                label="🔁 Allow Session", style=discord.ButtonStyle.primary
-            )
-            async def allow_session(
-                self,
-                interaction: discord.Interaction,
-                button: discord.ui.Button[Any],  # type: ignore[type-arg]
-            ) -> None:
-                if ws_ref is not None:
-                    payload = json.dumps(
-                        {
-                            "type": "message",
-                            "content": f"/approve_session {proposal_id}",
-                        }
-                    )
-                    await ws_ref.send(payload)
-                await interaction.response.edit_message(
-                    content=f"🔁 Approved for this session: `{skill_name}`",
-                    embed=None,
-                    view=None,
                 )
                 self.stop()
 
@@ -278,10 +302,11 @@ class DiscordAdapter(RetryableConnection):
                 button: discord.ui.Button[Any],  # type: ignore[type-arg]
             ) -> None:
                 if ws_ref is not None:
-                    payload = json.dumps(
-                        {"type": "message", "content": f"/reject {proposal_id}"}
+                    command = f"/reject {proposal_id}"
+                    adapter._mark_proposal_action_sent(command)
+                    await ws_ref.send(
+                        adapter._core_command_payload(command, platform_user_id)
                     )
-                    await ws_ref.send(payload)
                 await interaction.response.edit_message(
                     content=f"❌ Denied: `{skill_name}`", embed=None, view=None
                 )
@@ -329,10 +354,7 @@ class DiscordAdapter(RetryableConnection):
             return
         # ─────────────────────────────────────────────────────────────
 
-        self._user_channels[user_id] = channel_id
-        self._user_channels.move_to_end(user_id)
-        if len(self._user_channels) > _USER_CHANNEL_CACHE_MAX:
-            self._user_channels.popitem(last=False)
+        self._remember_user_channel(user_id, channel_id)
 
         # Show typing indicator while core is processing
         self._start_typing(channel_id, message.channel)
@@ -426,6 +448,85 @@ class DiscordAdapter(RetryableConnection):
         except Exception:
             logger.exception("Failed to forward message to Core")
 
+    def _remember_user_channel(self, platform_user_id: str, channel_id: int) -> None:
+        self._user_channels[platform_user_id] = channel_id
+        self._user_channels.move_to_end(platform_user_id)
+        if len(self._user_channels) > _USER_CHANNEL_CACHE_MAX:
+            self._user_channels.popitem(last=False)
+
+    def _cache_pending_skill_confirm(
+        self,
+        *,
+        platform_user_id: str,
+        proposal_id: str,
+        skill_name: str,
+        skill_params: dict[str, Any],
+    ) -> None:
+        if not proposal_id:
+            return
+        self._pending_skill_confirms[proposal_id] = {
+            "platform_user_id": platform_user_id,
+            "skill_name": skill_name,
+            "skill_params": skill_params,
+        }
+        self._pending_skill_confirms.move_to_end(proposal_id)
+        if len(self._pending_skill_confirms) > _PENDING_SKILL_CONFIRM_MAX:
+            self._pending_skill_confirms.popitem(last=False)
+
+    def _pending_proposal_choices(
+        self, platform_user_id: str, current: str = ""
+    ) -> list[tuple[str, str]]:
+        current_lower = current.lower().strip()
+        choices: list[tuple[str, str]] = []
+        for proposal_id, meta in reversed(self._pending_skill_confirms.items()):
+            if meta.get("platform_user_id") != platform_user_id:
+                continue
+            skill_name = str(meta.get("skill_name") or "unknown")
+            haystack = f"{proposal_id} {skill_name}".lower()
+            if current_lower and current_lower not in haystack:
+                continue
+            label = f"{proposal_id[:8]}… {skill_name}"
+            choices.append((label[:100], proposal_id))
+            if len(choices) >= 25:
+                break
+        return choices
+
+    def _mark_proposal_action_sent(self, command: str) -> None:
+        parts = command.split(maxsplit=1)
+        if len(parts) == 2 and parts[0].lower() in {"/approve", "/reject"}:
+            self._pending_skill_confirms.pop(parts[1].strip(), None)
+
+    def _core_command_payload(self, command: str, platform_user_id: str) -> str:
+        return json.dumps(
+            {
+                "type": "message",
+                "adapter_id": ADAPTER_ID,
+                "platform_user_id": platform_user_id,
+                "content": command,
+                "timestamp": datetime.now(tz=UTC).isoformat(),
+            }
+        )
+
+    async def _forward_core_command_interaction(
+        self, interaction: Any, command: str
+    ) -> None:
+        if self._ws is None:
+            await interaction.response.send_message(
+                "CordBeat Core is not connected.", ephemeral=True
+            )
+            return
+
+        platform_user_id = str(interaction.user.id)
+        channel_id = getattr(interaction, "channel_id", None)
+        if channel_id is not None:
+            self._remember_user_channel(platform_user_id, int(channel_id))
+
+        self._mark_proposal_action_sent(command)
+        await self._ws.send(self._core_command_payload(command, platform_user_id))
+        await interaction.response.send_message(
+            "CordBeatにコマンドを送ったよ。", ephemeral=True
+        )
+
     def _start_typing(self, channel_id: int, channel: Any) -> None:
         """Start a background typing indicator loop for the given channel."""
         existing = self._typing_tasks.pop(channel_id, None)
@@ -472,21 +573,24 @@ class DiscordAdapter(RetryableConnection):
         if not self._bot or not platform_user_id:
             return
 
-        discord_files: list[Any] = []
+        decoded_images: list[tuple[bytes, str]] = []
         if images:
             try:
-                import base64  # noqa: PLC0415
-                import io as _io  # noqa: PLC0415
-
-                import discord  # noqa: PLC0415
-
                 for idx, b64 in enumerate(images):
                     raw = base64.b64decode(b64)
-                    discord_files.append(
-                        discord.File(_io.BytesIO(raw), filename=f"draw_{idx + 1}.png")
-                    )
+                    decoded_images.append((raw, f"draw_{idx + 1}.png"))
             except Exception:
                 logger.exception("Failed to decode images for Discord")
+
+        def _make_discord_files() -> list[Any]:
+            if not decoded_images:
+                return []
+            import discord  # noqa: PLC0415
+
+            return [
+                discord.File(io.BytesIO(raw), filename=filename)
+                for raw, filename in decoded_images
+            ]
 
         # Discord 400s on empty string content; use None to allow files-only messages.
         # Discord enforces a 2000-character limit per message — split long content.
@@ -506,8 +610,17 @@ class DiscordAdapter(RetryableConnection):
             if remaining:
                 chunks.append(remaining)
 
-        if not chunks and not discord_files:
+        if not chunks and not decoded_images:
             return
+
+        async def _send_chunks(target: Any) -> None:
+            if chunks:
+                for i, chunk in enumerate(chunks):
+                    # Attach files to the last chunk (or first if no text).
+                    files = _make_discord_files() if i == len(chunks) - 1 else []
+                    await target.send(chunk, files=files)
+                return
+            await target.send(None, files=_make_discord_files())
 
         # Routing precedence:
         #   1. Core-supplied metadata.channel_id (Heartbeat consults
@@ -529,8 +642,8 @@ class DiscordAdapter(RetryableConnection):
         if metadata is not None and "allow_dm_fallback" in metadata:
             allow_dm_fallback = bool(metadata.get("allow_dm_fallback"))
 
-        try:
-            if channel_id:
+        if channel_id:
+            try:
                 self._stop_typing(channel_id)
                 # get_channel() only checks the cache; fall back to fetch_channel()
                 # to reliably reach channels not in the bot's in-memory cache.
@@ -538,30 +651,36 @@ class DiscordAdapter(RetryableConnection):
                     channel_id
                 ) or await self._bot.fetch_channel(channel_id)
                 if channel:
-                    for i, chunk in enumerate(chunks):
-                        # Attach files to the last chunk (or first if no text)
-                        files = discord_files if i == len(chunks) - 1 else []
-                        await channel.send(chunk, files=files)
-                    if not chunks:
-                        await channel.send(None, files=discord_files)
+                    await _send_chunks(channel)
                     return
-
-            if not allow_dm_fallback:
-                logger.info(
-                    "No known channel for user %s and DM fallback disabled; "
-                    "skipping send",
+            except Exception:
+                if not hinted and cached == channel_id:
+                    self._user_channels.pop(platform_user_id, None)
+                if not allow_dm_fallback:
+                    logger.exception(
+                        "Failed to send Discord channel message for user %s; "
+                        "DM fallback disabled",
+                        platform_user_id,
+                    )
+                    return
+                logger.warning(
+                    "Failed to send Discord channel message for user %s; "
+                    "trying DM fallback",
                     platform_user_id,
+                    exc_info=True,
                 )
-                return
 
-            # No channel mapping found → fall back to DM
+        if not allow_dm_fallback:
+            logger.info(
+                "No known channel for user %s and DM fallback disabled; skipping send",
+                platform_user_id,
+            )
+            return
+
+        try:
             user = await self._bot.fetch_user(int(platform_user_id))
             if user:
-                for i, chunk in enumerate(chunks):
-                    files = discord_files if i == len(chunks) - 1 else []
-                    await user.send(chunk, files=files)
-                if not chunks:
-                    await user.send(None, files=discord_files)
+                await _send_chunks(user)
         except Exception:
             logger.exception(
                 "Failed to send message to Discord user %s",

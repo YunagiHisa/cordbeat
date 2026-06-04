@@ -80,6 +80,13 @@ You are executing HEARTBEAT Layer 2 — a detailed evaluation for one user.
 Based on the user's context, conversation history, and memories below,
 decide what action to take for this specific user.
 
+Important skill rule:
+If you choose action=skill, parameters must be directly executable by the
+skill. For the draw skill, skill_params.commands must be line-based Draw DSL
+(e.g. SIZE/CANVAS/CIRCLE/.../OUTPUT). Do NOT put natural-language prompts or
+"DRAW: ..." text into draw.commands. If you only have an image idea, choose
+action=message instead and describe the idea in words.
+
 You MUST respond in valid JSON:
 {{
   "action": "message|skill|propose_improvement|propose_trait_change|propose_skill|none",
@@ -104,6 +111,39 @@ You MUST respond in valid JSON:
 }}
 """
 
+_DRAW_DSL_COMMANDS = frozenset(
+    {
+        "SIZE",
+        "CANVAS",
+        "CIRCLE",
+        "RECT",
+        "ELLIPSE",
+        "LINE",
+        "POLYGON",
+        "TEXT",
+        "ARC",
+        "BEZIER",
+        "GRADIENT",
+        "DOTS",
+        "STAR",
+        "SPIRAL",
+        "TURTLE",
+        "HEADING",
+        "PENCOLOR",
+        "PENWIDTH",
+        "PENUP",
+        "PENDOWN",
+        "FORWARD",
+        "BACKWARD",
+        "RIGHT",
+        "LEFT",
+        "REPEAT",
+        "END",
+        "SAVE",
+        "OUTPUT",
+    }
+)
+
 
 def _parse_time(s: str) -> time:
     parts = s.split(":")
@@ -118,6 +158,19 @@ def _in_quiet_hours(quiet_start: str, quiet_end: str, tz: tzinfo = UTC) -> bool:
         return start <= now <= end
     # Wraps midnight (e.g., 01:00 - 07:00)
     return now >= start or now <= end
+
+
+def _looks_like_draw_dsl(commands: Any) -> bool:
+    """Return True when *commands* looks like executable Draw DSL."""
+    if not isinstance(commands, str):
+        return False
+    lines = [line.strip() for line in commands.splitlines() if line.strip()]
+    if not lines:
+        return False
+    if lines[0].upper().startswith("DRAW:"):
+        return False
+    opcodes = {line.split(maxsplit=1)[0].upper() for line in lines}
+    return bool(opcodes & _DRAW_DSL_COMMANDS) and "OUTPUT" in opcodes
 
 
 class HeartbeatLoop:
@@ -599,8 +652,7 @@ class HeartbeatLoop:
             )
         except Exception:
             logger.exception(
-                "Failed to record heartbeat message as assistant turn "
-                "for user=%s",
+                "Failed to record heartbeat message as assistant turn for user=%s",
                 decision.target_user_id,
             )
 
@@ -612,6 +664,16 @@ class HeartbeatLoop:
         skill = self._skills.get(decision.skill_name)
         if skill is None:
             logger.warning("Unknown skill: %s", decision.skill_name)
+            return
+
+        if skill.meta.name == "draw" and not _looks_like_draw_dsl(
+            decision.skill_params.get("commands")
+        ):
+            logger.warning(
+                "HEARTBEAT skipped draw skill proposal because commands were not "
+                "valid Draw DSL: %r",
+                decision.skill_params.get("commands"),
+            )
             return
 
         if not skill.meta.enabled:

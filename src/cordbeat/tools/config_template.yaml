@@ -18,7 +18,7 @@
 # You can also place a .env file next to config.yaml.
 
 gateway:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 8765
   handshake_timeout: 10.0  # seconds to wait for adapter handshake
 

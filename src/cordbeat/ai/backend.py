@@ -323,9 +323,7 @@ class OpenAICompatBackend(AIBackend):
         # When set, it replaces ``enable_thinking`` while
         # ``is_voice_context()`` is true so VC / voice-message replies stay
         # within real-time latency budgets.  None = use ``_enable_thinking``.
-        self._voice_enable_thinking: bool | None = options.get(
-            "voice_enable_thinking"
-        )
+        self._voice_enable_thinking: bool | None = options.get("voice_enable_thinking")
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"

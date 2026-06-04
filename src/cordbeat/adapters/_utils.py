@@ -265,8 +265,9 @@ class AdapterFilter:
                 temperature=temperature,
             )
         except Exception:  # noqa: BLE001
-            logger.warning("ai_decision_llm backend failed; allowing message",
-                           exc_info=True)
+            logger.warning(
+                "ai_decision_llm backend failed; allowing message", exc_info=True
+            )
             return True
         # Match against ``yes`` rather than the looser ``startswith("y")``
         # so replies like ``y'know`` / ``ya``  don't trigger a reply.  The

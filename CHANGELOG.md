@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Skill approval and safety hardening.** ReAct now creates a
+  `skill_confirm` proposal instead of silently skipping non-safe `[SKILL: ...]`
+  calls, and adapter approval buttons now include the platform user id required
+  by `/approve` / `/reject`. The unsupported `/approve_session` UI was removed.
+  `file_read` now requires confirmation before reading local files, and the
+  skill validator blocks `asyncio.create_subprocess_*` helpers for all
+  non-dangerous skills.
+- **Heartbeat draw proposal guard.** HEARTBEAT now refuses `draw` skill
+  proposals whose `commands` parameter is natural-language text such as
+  `DRAW: ...`; draw proposals must contain executable Draw DSL ending in
+  `OUTPUT`.
+- **Project cleanup.** Empty placeholder docs were filled as draft material, and
+  leftover `.new` / append scratch files were removed.
+
 ### Added
 - **Config validation at startup.** `load_config()` now runs a structural
   validation pass that detects common YAML authoring mistakes — most notably

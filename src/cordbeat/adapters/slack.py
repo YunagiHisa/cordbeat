@@ -101,6 +101,20 @@ class SlackAdapter(RetryableConnection):
             await client.send_socket_mode_response(
                 SocketModeResponse(envelope_id=req.envelope_id)
             )
+            if req.type == "slash_commands":
+                payload = req.payload
+                command = str(payload.get("command", ""))
+                text = str(payload.get("text", "")).strip()
+                content = f"{command} {text}".strip()
+                await self._forward_to_core(
+                    user_id=str(payload.get("user_id", "")),
+                    text=content,
+                    channel=str(payload.get("channel_id", "")),
+                    channel_type=str(payload.get("channel_type", "channel")),
+                    bypass_filter=True,
+                )
+                return
+
             if req.type != "events_api":
                 return
             event = req.payload.get("event", {})
@@ -151,6 +165,7 @@ class SlackAdapter(RetryableConnection):
         text: str,
         channel: str,
         channel_type: str = "channel",
+        bypass_filter: bool = False,
     ) -> None:
         if self._ws is None or not user_id:
             return
@@ -159,7 +174,7 @@ class SlackAdapter(RetryableConnection):
         is_dm = channel_type == "im"
         # For Slack: "mentioned" = <@BOT_USER_ID> present in text
         is_mentioned = bool(self._bot_user_id) and f"<@{self._bot_user_id}>" in text
-        if not await self._filter.should_respond_async(
+        if not bypass_filter and not await self._filter.should_respond_async(
             user_id=user_id,
             channel_id=channel,
             is_dm=is_dm,

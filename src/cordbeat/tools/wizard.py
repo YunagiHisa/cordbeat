@@ -463,7 +463,6 @@ def _render_config_yaml(
     base_url: str,
     model: str,
     adapters: dict[str, str | None],
-    auth_token: str,
 ) -> str:
     """Render the annotated config template with user choices applied.
 
@@ -520,22 +519,6 @@ def _render_config_yaml(
         home.as_posix(),
     )
 
-    # Inject auth_token into the gateway block (after handshake_timeout) when
-    # not already present. The bundled template intentionally omits the line
-    # so that secrets stay in .env; wizard re-runs preserve the token verbatim.
-    if auth_token and "auth_token:" not in text:
-        injection = (
-            f'\n  auth_token: "{auth_token}"'
-            "  # also exported via CORDBEAT_GATEWAY__AUTH_TOKEN in .env"
-        )
-        text = re.sub(
-            r"^(\s*handshake_timeout:.*)$",
-            lambda m: m.group(1) + injection,
-            text,
-            count=1,
-            flags=re.MULTILINE,
-        )
-
     # Flip selected adapters from `enabled: false` to `enabled: true`.
     # The template uses unique 2-space-indented headers (e.g. ``  discord:``)
     # so a non-greedy lookahead reliably matches the *first* `enabled:` line
@@ -556,12 +539,12 @@ def _render_config_yaml(
 
     # CLI adapter is not in the template; append a minimal block at the end of
     # the ``adapters:`` section so users see it exists.
-    if "cli" in adapters and re.search(
-        r"^  cli:\s*$", text, flags=re.MULTILINE
-    ) is None:
+    if (
+        "cli" in adapters
+        and re.search(r"^  cli:\s*$", text, flags=re.MULTILINE) is None
+    ):
         cli_block = (
-            "  cli:\n"
-            "    enabled: true  # local terminal adapter (always available)\n"
+            "  cli:\n    enabled: true  # local terminal adapter (always available)\n"
         )
         text = re.sub(
             r"(\n  signal:\n(?:(?!^[A-Za-z]).*\n)*)",
@@ -736,7 +719,6 @@ def run_wizard(home: Path | None = None) -> tuple[Path, bool]:
         base_url=base_url,
         model=model,
         adapters=selected_adapters,
-        auth_token=auth_token,
     )
     config_path.write_text(rendered, encoding="utf-8")
     _ok(str(config_path))

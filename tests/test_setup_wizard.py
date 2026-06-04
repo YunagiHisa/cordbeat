@@ -440,3 +440,5 @@ class TestWriteEnvFile:
         assert env_path.is_file()
         env = env_path.read_text(encoding="utf-8")
         assert "CORDBEAT_GATEWAY__AUTH_TOKEN=" in env
+        cfg = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+        assert "auth_token" not in cfg["gateway"]

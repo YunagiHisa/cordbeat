@@ -823,7 +823,7 @@ class TestFileReadSkill:
         assert "error" in result
 
     async def test_file_read_sandbox_enforced(self, tmp_path: Path) -> None:
-        """file_read skill is loaded with sandbox=True."""
+        """file_read requires approval and keeps sandbox metadata."""
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()
         _copy_builtin_skill(skills_dir, "file_read")
@@ -831,6 +831,7 @@ class TestFileReadSkill:
         registry = SkillRegistry(skills_dir)
         registry.load_all()
         meta = registry.available_skills["file_read"]
+        assert meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION
         assert meta.sandbox is True
         assert meta.filesystem is True
         assert meta.network is False

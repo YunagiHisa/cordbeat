@@ -7,6 +7,7 @@ these tests run in the default dev environment without extras installed.
 from __future__ import annotations
 
 import builtins
+import json
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -488,6 +489,51 @@ class TestSlashCommands:
         # Second call: unmutes
         await adapter._handle_mute(interaction)
         assert guild_id not in adapter._vc_muted
+
+    def test_pending_proposal_choices_filter_by_user(self) -> None:
+        adapter = self._make_adapter()
+        adapter._cache_pending_skill_confirm(
+            platform_user_id="111",
+            proposal_id="prop-alpha",
+            skill_name="draw",
+            skill_params={},
+        )
+        adapter._cache_pending_skill_confirm(
+            platform_user_id="222",
+            proposal_id="prop-beta",
+            skill_name="cleanup",
+            skill_params={},
+        )
+
+        assert adapter._pending_proposal_choices("111") == [
+            ("prop-alp… draw", "prop-alpha")
+        ]
+        assert adapter._pending_proposal_choices("111", "draw") == [
+            ("prop-alp… draw", "prop-alpha")
+        ]
+        assert adapter._pending_proposal_choices("111", "cleanup") == []
+
+    async def test_forward_core_command_interaction_sends_platform_user(self) -> None:
+        adapter = self._make_adapter()
+        adapter._ws = AsyncMock()
+        adapter._ws.send = AsyncMock()
+
+        interaction = MagicMock()
+        interaction.user.id = 123
+        interaction.channel_id = 456
+        interaction.response = AsyncMock()
+        interaction.response.send_message = AsyncMock()
+
+        await adapter._forward_core_command_interaction(
+            interaction, "/approve prop-alpha"
+        )
+
+        sent = json.loads(adapter._ws.send.await_args.args[0])
+        assert sent["adapter_id"] == "discord"
+        assert sent["platform_user_id"] == "123"
+        assert sent["content"] == "/approve prop-alpha"
+        assert adapter._user_channels["123"] == 456
+        interaction.response.send_message.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

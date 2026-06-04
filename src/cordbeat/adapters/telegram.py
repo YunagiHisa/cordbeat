@@ -23,6 +23,15 @@ logger = logging.getLogger(__name__)
 ADAPTER_ID = "telegram"
 
 
+def _normalize_telegram_command_text(text: str) -> str:
+    parts = text.split(maxsplit=1)
+    if not parts:
+        return ""
+    command = parts[0].split("@", 1)[0]
+    rest = parts[1] if len(parts) > 1 else ""
+    return f"{command} {rest}".strip()
+
+
 class TelegramAdapter(RetryableConnection):
     """Telegram bot that forwards messages to CordBeat Core via WebSocket."""
 
@@ -66,9 +75,10 @@ class TelegramAdapter(RetryableConnection):
 
     async def start(self) -> None:
         try:
-            from telegram import Update
+            from telegram import BotCommand, Update
             from telegram.ext import (
                 ApplicationBuilder,
+                CommandHandler,
                 MessageHandler,
                 filters,
             )
@@ -188,8 +198,31 @@ class TelegramAdapter(RetryableConnection):
                 is_voice=user_id in self._voice_users,
             )
 
+        async def handle_core_command(update: Update, context: Any) -> None:
+            msg = update.message
+            user = update.effective_user
+            if msg is None or user is None:
+                return
+
+            normalized = _normalize_telegram_command_text(msg.text or "")
+            if not normalized:
+                return
+
+            user_id = str(user.id)
+            chat_id = msg.chat_id
+            self._chat_map[user_id] = chat_id
+            await self._forward_to_core(
+                user_id,
+                normalized,
+                display_name=user.full_name or user.username or "",
+                chat_id=chat_id,
+            )
+
         from telegram.ext import CallbackQueryHandler  # noqa: PLC0415
 
+        self._app.add_handler(
+            CommandHandler(["approve", "reject", "proposals"], handle_core_command)
+        )
         self._app.add_handler(
             MessageHandler(
                 (filters.TEXT | filters.PHOTO | filters.Document.IMAGE | filters.VOICE)
@@ -220,7 +253,6 @@ class TelegramAdapter(RetryableConnection):
             action, proposal_id = parts[1], parts[2]
             cmd_map = {
                 "approve": f"/approve {proposal_id}",
-                "approve_session": f"/approve_session {proposal_id}",
                 "reject": f"/reject {proposal_id}",
             }
             cmd = cmd_map.get(action)
@@ -230,13 +262,24 @@ class TelegramAdapter(RetryableConnection):
 
             if self._ws is not None:
                 try:
-                    await self._ws.send(json.dumps({"type": "message", "content": cmd}))
+                    user = update.effective_user
+                    platform_user_id = str(user.id) if user is not None else ""
+                    await self._ws.send(
+                        json.dumps(
+                            {
+                                "type": "message",
+                                "adapter_id": ADAPTER_ID,
+                                "platform_user_id": platform_user_id,
+                                "content": cmd,
+                                "timestamp": datetime.now(tz=UTC).isoformat(),
+                            }
+                        )
+                    )
                 except Exception:
                     logger.warning("Failed to forward skill confirm to Core")
 
             label_map = {
                 "approve": "✅ Approved once",
-                "approve_session": "🔁 Approved for this session",
                 "reject": "❌ Denied",
             }
             await query.answer()
@@ -255,6 +298,17 @@ class TelegramAdapter(RetryableConnection):
 
         # Connect to Core in background
         asyncio.create_task(self._connect_to_core())
+
+        try:
+            await self._app.bot.set_my_commands(
+                [
+                    BotCommand("approve", "Approve a pending CordBeat proposal"),
+                    BotCommand("reject", "Reject a pending CordBeat proposal"),
+                    BotCommand("proposals", "List pending CordBeat proposals"),
+                ]
+            )
+        except Exception:
+            logger.warning("Failed to register Telegram bot commands", exc_info=True)
 
         # Start polling (non-blocking)
         await self._app.initialize()
@@ -314,10 +368,6 @@ class TelegramAdapter(RetryableConnection):
                         InlineKeyboardButton(
                             "✅ Allow Once",
                             callback_data=f"skill_confirm:approve:{proposal_id}",
-                        ),
-                        InlineKeyboardButton(
-                            "🔁 Allow Session",
-                            callback_data=f"skill_confirm:approve_session:{proposal_id}",
                         ),
                     ],
                     [

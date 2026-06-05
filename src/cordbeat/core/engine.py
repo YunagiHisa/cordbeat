@@ -486,8 +486,20 @@ class CoreEngine:
         )
 
         try:
+            if message.images and not self._vision_enabled:
+                logger.warning(
+                    "Ignoring %d image(s) from %s because "
+                    "ai_backend.vision_enabled is false",
+                    len(message.images),
+                    message.adapter_id,
+                )
             if self._vision_enabled and message.images:
                 try:
+                    logger.debug(
+                        "Generating vision response with %d image(s) from %s",
+                        len(message.images),
+                        message.adapter_id,
+                    )
                     raw = await self._ai.generate_with_vision(
                         prompt=prompt,
                         images=message.images,
@@ -497,7 +509,10 @@ class CoreEngine:
                     return cleaned, system_prompt, prompt
                 except Exception:
                     logger.warning(
-                        "Vision generation failed, falling back to text-only response"
+                        "Vision generation failed for %d image(s), "
+                        "falling back to text-only response",
+                        len(message.images),
+                        exc_info=True,
                     )
             raw = await self._ai.generate(prompt=prompt, system=system_prompt)
             cleaned = sanitize_reasoning_artifacts(raw)

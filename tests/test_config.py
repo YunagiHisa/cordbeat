@@ -34,6 +34,7 @@ class TestLoadConfig:
             "gateway:\n"
             "  host: 127.0.0.1\n"
             "  port: 9000\n"
+            "  max_message_bytes: 33554432\n"
             "ai_backend:\n"
             "  provider: ollama\n"
             "  model: mistral\n"
@@ -46,6 +47,7 @@ class TestLoadConfig:
         config = load_config(cfg_file)
         assert config.gateway.host == "127.0.0.1"
         assert config.gateway.port == 9000
+        assert config.gateway.max_message_bytes == 33_554_432
         assert config.ai_backend.model == "mistral"
         assert "discord" in config.adapters
         assert config.adapters["discord"].core_ws_url == "ws://localhost:9000"
@@ -367,6 +369,13 @@ class TestValidateConfig:
     def test_accepts_default(self) -> None:
         # Default config should validate cleanly.
         validate_config(Config())
+
+    def test_rejects_too_small_gateway_message_limit(self) -> None:
+        cfg = Config()
+        cfg.gateway.max_message_bytes = 1024
+        with pytest.raises(ConfigValidationError) as excinfo:
+            validate_config(cfg)
+        assert "gateway.max_message_bytes" in str(excinfo.value)
 
     def test_rejects_string_options_in_ai_backend(self) -> None:
         cfg = Config()

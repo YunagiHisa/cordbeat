@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import logging
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from cordbeat.ai.backend import (
@@ -225,7 +227,7 @@ class TestCoreEngineVision:
         ai.generate_with_vision.assert_called_once()
         ai.generate.assert_not_called()
 
-    async def test_uses_generate_when_vision_disabled(self) -> None:
+    async def test_uses_generate_when_vision_disabled(self, caplog: Any) -> None:
         engine, ai = self._make_engine(vision_enabled=False)
         msg = GatewayMessage(
             type=MessageType.MESSAGE,
@@ -234,9 +236,11 @@ class TestCoreEngineVision:
             content="What is this?",
             images=["imgdata"],
         )
-        await engine.handle_message(msg)
+        with caplog.at_level(logging.WARNING):
+            await engine.handle_message(msg)
         ai.generate.assert_called_once()
         ai.generate_with_vision.assert_not_called()
+        assert "ai_backend.vision_enabled is false" in caplog.text
 
     async def test_uses_generate_when_no_images(self) -> None:
         engine, ai = self._make_engine(vision_enabled=True)

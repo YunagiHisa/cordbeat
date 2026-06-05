@@ -25,6 +25,7 @@ logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
 logging.getLogger("websockets.asyncio.server").setLevel(logging.CRITICAL)
 
 _MAX_BACKOFF = 60
+_DEFAULT_WS_MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 
 
 class BaseAdapter(ABC):
@@ -72,7 +73,14 @@ class RetryableConnection(ABC):
         backoff = 1
         while self._running:
             try:
-                self._ws = await websockets.connect(self._ws_url)
+                self._ws = await websockets.connect(
+                    self._ws_url,
+                    max_size=getattr(
+                        self,
+                        "_ws_max_message_bytes",
+                        _DEFAULT_WS_MAX_MESSAGE_BYTES,
+                    ),
+                )
                 handshake: dict[str, str] = {"adapter_id": self.adapter_id}
                 if getattr(self, "_auth_token", ""):
                     handshake["auth_token"] = self._auth_token
@@ -229,11 +237,13 @@ class GatewayServer:
             self._handle_connection,
             self._config.host,
             self._config.port,
+            max_size=self._config.max_message_bytes,
         )
         logger.info(
-            "Gateway server started on ws://%s:%d",
+            "Gateway server started on ws://%s:%d (max_message_bytes=%d)",
             self._config.host,
             self._config.port,
+            self._config.max_message_bytes,
         )
 
     async def stop(self) -> None:

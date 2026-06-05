@@ -214,6 +214,19 @@ class TestGatewayServer:
         assert server._server is not None
         await server.stop()
 
+    async def test_start_passes_configured_max_message_size(self) -> None:
+        config = GatewayConfig(host="127.0.0.1", port=0, max_message_bytes=1234567)
+        queue = MessageQueue()
+        server = GatewayServer(config, queue)
+        mock_server = AsyncMock()
+        with patch(
+            "cordbeat.core.gateway.websockets.serve",
+            new_callable=AsyncMock,
+        ) as mock_serve:
+            mock_serve.return_value = mock_server
+            await server.start()
+        assert mock_serve.await_args.kwargs["max_size"] == 1_234_567
+
     async def test_stop_when_not_started(self) -> None:
         config = GatewayConfig()
         queue = MessageQueue()

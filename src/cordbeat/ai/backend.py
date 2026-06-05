@@ -717,6 +717,14 @@ class OpenAICompatBackend(AIBackend):
 
         labels = {"backend": "openai_compat", "model": self._model}
         try:
+            logger.debug(
+                "openai_compat vision request: model=%s system=%d chars "
+                "prompt=%d chars images=%d",
+                self._model,
+                len(system),
+                len(prompt),
+                len(images),
+            )
             async with time_block(LLM_GENERATE_LATENCY, labels):
                 resp = await self._client.post(
                     f"{self._base_url}/chat/completions",
@@ -737,7 +745,13 @@ class OpenAICompatBackend(AIBackend):
             raise
         inc_counter(LLM_GENERATE_TOTAL, {"backend": "openai_compat", "outcome": "ok"})
         try:
-            return str(data["choices"][0]["message"]["content"])
+            result = str(data["choices"][0]["message"]["content"])
+            logger.debug(
+                "openai_compat vision response: %d chars: %.300s",
+                len(result),
+                result,
+            )
+            return result
         except (KeyError, IndexError) as exc:
             msg = f"Unexpected vision response format from {self._base_url}"
             raise AIBackendError(msg) from exc

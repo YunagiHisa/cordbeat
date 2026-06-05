@@ -449,6 +449,11 @@ class DiscordAdapter(RetryableConnection):
                         resp = await client.get(str(att.url))
                         resp.raise_for_status()
                         buf.append(base64.b64encode(resp.content).decode("ascii"))
+                        logger.debug(
+                            "Downloaded Discord image attachment: %s (%d bytes)",
+                            getattr(att, "filename", att.url),
+                            len(resp.content),
+                        )
                 except Exception:
                     logger.warning(
                         "Failed to download Discord image attachment: %s", att.url
@@ -512,6 +517,11 @@ class DiscordAdapter(RetryableConnection):
             }
         )
         try:
+            logger.debug(
+                "Forwarding Discord message to Core: payload=%d bytes, images=%d",
+                len(payload.encode("utf-8")),
+                len(images),
+            )
             await self._ws.send(payload)
         except Exception:
             logger.exception("Failed to forward message to Core")

@@ -30,6 +30,7 @@ class GatewayConfig:
     host: str = "127.0.0.1"
     port: int = 8765
     handshake_timeout: float = 10.0
+    max_message_bytes: int = 64 * 1024 * 1024
     auth_token: str = ""
 
 
@@ -491,6 +492,12 @@ def validate_config(cfg: Config) -> None:
         _check_options("ai_decision", cfg.ai_decision.options)
     for name, adapter in cfg.adapters.items():
         _check_options(f"adapters.{name}", adapter.options)
+
+    if cfg.gateway.max_message_bytes < 1_048_576:
+        errors.append(
+            "gateway.max_message_bytes must be at least 1048576 "
+            "(1 MiB). Increase it for image attachments."
+        )
 
     if errors:
         msg = "Invalid config.yaml:\n  - " + "\n  - ".join(errors)

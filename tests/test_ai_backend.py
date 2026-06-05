@@ -132,6 +132,38 @@ class TestOllamaBackend:
         call_kwargs = backend._client.post.call_args
         assert "/api/generate" in call_kwargs[0][0]
 
+    async def test_configured_max_tokens_used_by_default(self) -> None:
+        cfg = AIBackendConfig(provider="ollama", max_tokens=8192)
+        backend = OllamaBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"response": "Hello!"}
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        await backend.generate("test")
+
+        payload = backend._client.post.call_args[1]["json"]
+        assert payload["options"]["num_predict"] == 8192
+
+    async def test_explicit_max_tokens_overrides_configured_default(self) -> None:
+        cfg = AIBackendConfig(provider="ollama", max_tokens=8192)
+        backend = OllamaBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"response": "Hello!"}
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        await backend.generate("test", max_tokens=1200)
+
+        payload = backend._client.post.call_args[1]["json"]
+        assert payload["options"]["num_predict"] == 1200
+
     async def test_generate_empty_response(self) -> None:
         cfg = AIBackendConfig(provider="ollama")
         backend = OllamaBackend(cfg)
@@ -232,6 +264,38 @@ class TestOpenAICompatBackend:
         assert result == "Hi!"
         call_kwargs = backend._client.post.call_args
         assert "/chat/completions" in call_kwargs[0][0]
+
+    async def test_configured_max_tokens_used_by_default(self) -> None:
+        cfg = AIBackendConfig(provider="openai_compat", max_tokens=8192)
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"choices": [{"message": {"content": "Hi!"}}]}
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        await backend.generate("test")
+
+        payload = backend._client.post.call_args[1]["json"]
+        assert payload["max_tokens"] == 8192
+
+    async def test_explicit_max_tokens_overrides_configured_default(self) -> None:
+        cfg = AIBackendConfig(provider="openai_compat", max_tokens=8192)
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"choices": [{"message": {"content": "Hi!"}}]}
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        await backend.generate("test", max_tokens=1200)
+
+        payload = backend._client.post.call_args[1]["json"]
+        assert payload["max_tokens"] == 1200
 
     async def test_generate_strips_orphan_think_close(self) -> None:
         cfg = AIBackendConfig(provider="openai_compat")

@@ -30,6 +30,19 @@ from cordbeat.tools.metrics import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_REASONING_CONTENT_KEYS = ("reasoning_content",)
+_API_DEFAULT_MAX_TOKENS = 1024
+
+
+def _resolve_configured_max_tokens(
+    configured_max_tokens: int | None,
+    requested_max_tokens: int,
+) -> int:
+    if (
+        configured_max_tokens is not None
+        and requested_max_tokens == _API_DEFAULT_MAX_TOKENS
+    ):
+        return configured_max_tokens
+    return requested_max_tokens
 
 
 # ── Voice-context contextvar ─────────────────────────────────────────
@@ -209,6 +222,7 @@ class OllamaBackend(AIBackend):
     def __init__(self, config: AIBackendConfig) -> None:
         self._base_url = config.base_url.rstrip("/")
         self._model = config.model
+        self._default_max_tokens = config.max_tokens
         options = config.options if isinstance(config.options, dict) else {}
         if not isinstance(config.options, dict):
             logger.warning(
@@ -229,6 +243,10 @@ class OllamaBackend(AIBackend):
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ) -> str:
+        max_tokens = _resolve_configured_max_tokens(
+            self._default_max_tokens,
+            max_tokens,
+        )
         payload: dict[str, Any] = {
             "model": self._model,
             "prompt": prompt,
@@ -277,6 +295,10 @@ class OllamaBackend(AIBackend):
         max_tokens: int = 1024,
     ) -> str:
         """Generate using Ollama's chat API with image support (e.g. llava)."""
+        max_tokens = _resolve_configured_max_tokens(
+            self._default_max_tokens,
+            max_tokens,
+        )
         messages: list[dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -317,6 +339,10 @@ class OllamaBackend(AIBackend):
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ) -> str:
+        max_tokens = _resolve_configured_max_tokens(
+            self._default_max_tokens,
+            max_tokens,
+        )
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": messages,
@@ -349,6 +375,7 @@ class OpenAICompatBackend(AIBackend):
     def __init__(self, config: AIBackendConfig) -> None:
         self._base_url = config.base_url.rstrip("/")
         self._model = config.model
+        self._default_max_tokens = config.max_tokens
         options = config.options if isinstance(config.options, dict) else {}
         if not isinstance(config.options, dict):
             logger.warning(
@@ -498,6 +525,10 @@ class OpenAICompatBackend(AIBackend):
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ) -> str:
+        max_tokens = _resolve_configured_max_tokens(
+            self._default_max_tokens,
+            max_tokens,
+        )
         messages: list[dict[str, str]] = []
         effective_thinking = self._effective_enable_thinking()
         effective_system = system
@@ -665,6 +696,10 @@ class OpenAICompatBackend(AIBackend):
         max_tokens: int = 1024,
     ) -> str:
         """Generate using OpenAI vision API (content array with image_url blocks)."""
+        max_tokens = _resolve_configured_max_tokens(
+            self._default_max_tokens,
+            max_tokens,
+        )
         messages: list[dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -713,6 +748,10 @@ class OpenAICompatBackend(AIBackend):
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ) -> str:
+        max_tokens = _resolve_configured_max_tokens(
+            self._default_max_tokens,
+            max_tokens,
+        )
         labels = {"backend": "openai_compat", "model": self._model}
         effective_thinking = self._effective_enable_thinking()
         has_no_think = any(

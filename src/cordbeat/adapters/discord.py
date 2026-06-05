@@ -706,8 +706,11 @@ class DiscordAdapter(RetryableConnection):
         cached = self._user_channels.get(platform_user_id)
         channel_id = hinted or cached
         allow_dm_fallback = True
-        if metadata is not None and "allow_dm_fallback" in metadata:
-            allow_dm_fallback = bool(metadata.get("allow_dm_fallback"))
+        if metadata is not None:
+            if "allow_dm_fallback" in metadata:
+                allow_dm_fallback = bool(metadata.get("allow_dm_fallback"))
+            elif metadata.get("is_dm") is False:
+                allow_dm_fallback = False
 
         if channel_id:
             try:

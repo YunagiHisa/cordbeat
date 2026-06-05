@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from cordbeat.ai.reasoning import sanitize_reasoning_artifacts
+
 # Strip control characters that could manipulate prompt structure
 _SANITIZE_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
@@ -174,19 +176,25 @@ def build_context(
     if semantic_memories:
         parts.append("\n[BEGIN RECALLED FACTS]")
         for mem in semantic_memories:
-            parts.append(f"  - {sanitize(mem['content'], max_len=500)}")
+            content = sanitize_reasoning_artifacts(str(mem["content"]))
+            if content:
+                parts.append(f"  - {sanitize(content, max_len=500)}")
         parts.append("[END RECALLED FACTS]")
 
     if episodic_memories:
         parts.append("\n[BEGIN RECALLED EPISODES]")
         for mem in episodic_memories:
-            parts.append(f"  - {sanitize(mem['content'], max_len=500)}")
+            content = sanitize_reasoning_artifacts(str(mem["content"]))
+            if content:
+                parts.append(f"  - {sanitize(content, max_len=500)}")
         parts.append("[END RECALLED EPISODES]")
 
     if recall_hints:
         parts.append("\n[BEGIN RECALL HINTS]")
         for hint in recall_hints:
-            parts.append(f"  - {sanitize(hint, max_len=500)}")
+            content = sanitize_reasoning_artifacts(str(hint))
+            if content:
+                parts.append(f"  - {sanitize(content, max_len=500)}")
         parts.append("[END RECALL HINTS]")
 
     if history:
@@ -194,7 +202,12 @@ def build_context(
         parts.append("Conversation history:")
         for msg in history:
             prefix = "User" if msg["role"] == "user" else (soul_name or "AI")
-            sanitized = sanitize(msg["content"], max_len=max_user_input_len)
+            content = msg["content"]
+            if msg["role"] != "user":
+                content = sanitize_reasoning_artifacts(content)
+            if not content:
+                continue
+            sanitized = sanitize(content, max_len=max_user_input_len)
             parts.append(f"  {prefix}: {sanitized}")
         parts.append("[END CONVERSATION HISTORY]")
 

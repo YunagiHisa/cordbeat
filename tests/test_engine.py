@@ -127,6 +127,26 @@ class TestCoreEngine:
         assert reply.content == "Hello there!"
         assert reply.adapter_id == "test"
 
+    async def test_channel_reply_disables_dm_fallback(
+        self,
+        engine: CoreEngine,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content="Hi!",
+            metadata={"channel_id": "456", "is_dm": False},
+        )
+
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert reply.metadata["channel_id"] == "456"
+        assert reply.metadata["is_dm"] is False
+        assert reply.metadata["allow_dm_fallback"] is False
+
     async def test_handle_message_creates_user(
         self,
         engine: CoreEngine,
@@ -227,6 +247,33 @@ class TestCoreEngine:
         assert user_id is not None
         msgs = await memory.get_recent_messages(user_id)
         assert len(msgs) == 2
+
+    async def test_post_process_sanitizes_reasoning_response(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+    ) -> None:
+        user = await memory.get_or_create_user("u1", "Alice")
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content="鹿の絵を描いて",
+            metadata={"channel_id": "456", "is_dm": False},
+        )
+        leaked = (
+            "Here's a thinking process:\n"
+            "3. **Formulate Response:**\n"
+            "   [DRAW: internal draft]\n"
+            "   - Text: 奈良の鹿だね✨ 優しい雰囲気で描くよ。\n"
+            "   - Checks: OK"
+        )
+
+        await engine._post_process_message("u1", user, msg, leaked)
+
+        msgs = await memory.get_recent_messages("u1")
+        assistant_msg = next(item for item in msgs if item["role"] == "assistant")
+        assert assistant_msg["content"] == "奈良の鹿だね✨ 優しい雰囲気で描くよ。"
 
     async def test_handle_message_updates_emotion(
         self,

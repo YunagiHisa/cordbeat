@@ -13,6 +13,10 @@ from cordbeat.ai.backend import (
     create_backend,
     strip_thinking_text,
 )
+from cordbeat.ai.reasoning import (
+    looks_like_reasoning_text,
+    sanitize_reasoning_artifacts,
+)
 from cordbeat.config import AIBackendConfig
 from cordbeat.exceptions import AIBackendError
 
@@ -178,6 +182,20 @@ class TestOpenAICompatBackend:
             == "Final answer"
         )
 
+    def test_sanitize_reasoning_artifacts_extracts_final_text(self) -> None:
+        raw = (
+            "Here's a thinking process:\n"
+            "3. **Formulate Response (Mental Draft):**\n"
+            "   [DRAW: internal draft]\n"
+            "   - Text: 奈良の鹿だね✨ 優しい雰囲気で描くよ。\n"
+            "   - Checks: OK"
+        )
+
+        assert looks_like_reasoning_text(raw)
+        assert sanitize_reasoning_artifacts(raw) == (
+            "奈良の鹿だね✨ 優しい雰囲気で描くよ。"
+        )
+
     async def test_generate_calls_chat_completions(self) -> None:
         cfg = AIBackendConfig(
             provider="openai",
@@ -309,6 +327,117 @@ class TestOpenAICompatBackend:
         result = await backend.generate("test")
         assert result == "answer"
         assert backend._client.post.await_count == 2
+        retry_payload = backend._client.post.call_args_list[1][1]["json"]
+        assert retry_payload["enable_thinking"] is False
+        assert "/no_think" in retry_payload["messages"][0]["content"]
+
+    async def test_generate_retries_when_content_continues_reasoning(
+        self,
+    ) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={"enable_thinking": True},
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        leaked_content = (
+            "3. **Formulate Response (Mental Draft in Japanese):**\n"
+            "   奈良の鹿か！いいアイデアだね✨\n"
+            "   [DRAW: a gentle Nara deer]\n"
+            "   - Text: 奈良の鹿だね✨ 優しい雰囲気で描くよ。"
+            " [DRAW: a gentle Nara deer]\n"
+            "   - Checks: 1-3 sentences? Yes."
+        )
+        first_response = MagicMock()
+        first_response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": leaked_content,
+                        "reasoning_content": "Here's a thinking process:\n1. ...",
+                    }
+                }
+            ]
+        }
+        first_response.raise_for_status = MagicMock()
+
+        retry_response = MagicMock()
+        retry_response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            "奈良の鹿だね✨ 優しい雰囲気で描くよ。"
+                            " [DRAW: a gentle Nara deer]"
+                        )
+                    }
+                }
+            ]
+        }
+        retry_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(side_effect=[first_response, retry_response])
+
+        result = await backend.generate("鹿の絵を描いて", system="sys")
+
+        assert result == (
+            "奈良の鹿だね✨ 優しい雰囲気で描くよ。 [DRAW: a gentle Nara deer]"
+        )
+        first_payload = backend._client.post.call_args_list[0][1]["json"]
+        assert first_payload["enable_thinking"] is True
+        retry_payload = backend._client.post.call_args_list[1][1]["json"]
+        assert retry_payload["enable_thinking"] is False
+        assert retry_payload["chat_template_kwargs"]["enable_thinking"] is False
+        assert "/no_think" in retry_payload["messages"][0]["content"]
+
+    async def test_generate_drops_reasoning_like_content_when_retry_fails(
+        self,
+    ) -> None:
+        cfg = AIBackendConfig(provider="openai_compat")
+        backend = OpenAICompatBackend(cfg)
+
+        first_response = MagicMock()
+        first_response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "3. **Formulate Response:**\n- Text: final",
+                        "reasoning_content": "Here's a thinking process:\n1. ...",
+                    }
+                }
+            ]
+        }
+        first_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(
+            side_effect=[first_response, RuntimeError("retry failed")]
+        )
+
+        result = await backend.generate("test")
+        assert result == ""
+        assert backend._client.post.await_count == 2
+
+    async def test_no_think_system_overrides_enable_thinking_true(self) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={"enable_thinking": True},
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"choices": [{"message": {"content": "ok"}}]}
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        await backend.generate("draw", system="/no_think\nDraw DSL only")
+
+        payload = backend._client.post.call_args[1]["json"]
+        assert payload["enable_thinking"] is False
+        assert payload["chat_template_kwargs"]["enable_thinking"] is False
 
     async def test_generate_chat_strips_orphan_think_close(self) -> None:
         cfg = AIBackendConfig(provider="openai_compat")
@@ -380,6 +509,8 @@ class TestOpenAICompatBackend:
         # Inspect the retry call payload — must use >=8192
         retry_call_payload = backend._client.post.call_args_list[1][1]["json"]
         assert retry_call_payload["max_tokens"] >= 8192
+        assert retry_call_payload["enable_thinking"] is False
+        assert "/no_think" in retry_call_payload["messages"][0]["content"]
 
     async def test_reasoning_content_only_returns_empty(self) -> None:
         """When content=null but reasoning_content is present, return empty string.

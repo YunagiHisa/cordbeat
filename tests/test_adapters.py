@@ -263,6 +263,28 @@ class TestDiscordAdapter:
         mock_channel.send.assert_awaited_once_with("hi", files=[])
         mock_user.send.assert_not_awaited()
 
+    async def test_send_to_discord_channel_message_does_not_dm_fallback(
+        self,
+    ) -> None:
+        """Channel-originated replies must not fallback to DM implicitly."""
+        from cordbeat.adapters.discord import DiscordAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = DiscordAdapter(config)
+        mock_channel = MagicMock()
+        mock_channel.send = AsyncMock(side_effect=RuntimeError("missing permissions"))
+        mock_user = AsyncMock()
+        adapter._bot = MagicMock()
+        adapter._bot.get_channel = MagicMock(return_value=mock_channel)
+        adapter._bot.fetch_user = AsyncMock(return_value=mock_user)
+
+        await adapter._send_to_discord(
+            "123", "hi", metadata={"channel_id": "456", "is_dm": False}
+        )
+
+        mock_channel.send.assert_awaited_once_with("hi", files=[])
+        mock_user.send.assert_not_awaited()
+
 
 class TestTelegramAdapter:
     def test_import(self) -> None:

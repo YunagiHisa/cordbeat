@@ -185,6 +185,30 @@ class TestBuildContext:
         assert "CordBeat: Hi!" in result
         assert "[END CONVERSATION HISTORY]" in result
 
+    def test_history_sanitizes_assistant_reasoning_leak(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            history=[
+                {"role": "user", "content": "鹿の絵を描いて"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "Here's a thinking process:\n"
+                        "3. **Formulate Response (Mental Draft):**\n"
+                        "   [DRAW: internal draft]\n"
+                        "   - Text: 奈良の鹿だね✨ 優しい雰囲気で描くよ。\n"
+                        "   - Checks: OK"
+                    ),
+                },
+            ],
+            soul_name="CordBeat",
+        )
+
+        assert "CordBeat: 奈良の鹿だね✨ 優しい雰囲気で描くよ。" in result
+        assert "thinking process" not in result
+        assert "Formulate Response" not in result
+        assert "[DRAW: internal draft]" not in result
+
     def test_none_values_excluded(self) -> None:
         result = build_context(
             user_display_name="Bob",

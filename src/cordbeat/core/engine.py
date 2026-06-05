@@ -13,7 +13,7 @@ from typing import Any
 
 from cordbeat.agent.react_types import ToolCallResult, ToolTrace
 from cordbeat.agent.soul import Soul
-from cordbeat.ai.backend import AIBackend, strip_thinking_text, voice_context_scope
+from cordbeat.ai.backend import AIBackend, voice_context_scope
 from cordbeat.ai.extraction import MemoryExtractor
 from cordbeat.ai.prompt import (
     build_context,
@@ -21,6 +21,7 @@ from cordbeat.ai.prompt import (
     build_soul_system_prompt,
     sanitize,
 )
+from cordbeat.ai.reasoning import sanitize_reasoning_artifacts, strip_thinking_text
 from cordbeat.config import MemoryConfig, ReActConfig
 from cordbeat.memory.core import MemoryStore
 from cordbeat.models import (
@@ -194,6 +195,7 @@ class CoreEngine:
                 adapter_id=message.adapter_id,
                 platform_user_id=message.platform_user_id,
                 content="An internal error occurred. Please try again.",
+                metadata=self._reply_metadata(message),
             )
             try:
                 await self._gateway.send_to_adapter(message.adapter_id, error_reply)
@@ -236,16 +238,26 @@ class CoreEngine:
             platform_user_id=message.platform_user_id,
             content=clean_response,
             images=draw_images,
+            metadata=self._reply_metadata(message),
         )
         await self._gateway.send_to_adapter(message.adapter_id, reply)
 
         # Phase 5: Background post-processing (memory storage + emotion update).
         # Runs concurrently so the user already has the reply.
         task = asyncio.create_task(
-            self._post_process_message(user_id, user, message, response)
+            self._post_process_message(user_id, user, message, clean_response)
         )
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+
+    @staticmethod
+    def _reply_metadata(message: GatewayMessage) -> dict[str, Any]:
+        """Preserve routing metadata while preventing channel replies leaking to DM."""
+
+        metadata = dict(message.metadata or {})
+        if metadata.get("is_dm") is False and "allow_dm_fallback" not in metadata:
+            metadata["allow_dm_fallback"] = False
+        return metadata
 
     async def drain(self) -> None:
         """Wait for all background post-processing tasks to complete.
@@ -504,6 +516,7 @@ class CoreEngine:
                     adapter_id=message.adapter_id,
                     platform_user_id=message.platform_user_id,
                     content="（AIが応答を生成できませんでした。もう一度お試しください）",
+                    metadata=self._reply_metadata(message),
                 )
                 await self._gateway.send_to_adapter(message.adapter_id, error_reply)
                 return None
@@ -515,6 +528,7 @@ class CoreEngine:
                 adapter_id=message.adapter_id,
                 platform_user_id=message.platform_user_id,
                 content="AI generation failed. Please try again later.",
+                metadata=self._reply_metadata(message),
             )
             await self._gateway.send_to_adapter(message.adapter_id, error_reply)
             return None
@@ -540,19 +554,20 @@ class CoreEngine:
                 channel_id=channel_id,
                 is_dm=is_dm,
             )
+            stored_response = sanitize_reasoning_artifacts(response)
             await self._memory.add_message(
                 user_id,
                 "assistant",
-                response,
+                stored_response,
                 message.adapter_id,
                 channel_id=channel_id,
                 is_dm=is_dm,
             )
             await self._extractor.infer_and_update_emotion(
-                user_id, message.content, response
+                user_id, message.content, stored_response
             )
             await self._extractor.extract_and_store_memories(
-                user_id, user.display_name, message.content, response
+                user_id, user.display_name, message.content, stored_response
             )
         except Exception:
             logger.exception("Background post-processing failed for user %s", user_id)
@@ -595,6 +610,7 @@ class CoreEngine:
                     adapter_id=message.adapter_id,
                     platform_user_id=message.platform_user_id,
                     content=pre_text,
+                    metadata=self._reply_metadata(message),
                 )
                 try:
                     await self._gateway.send_to_adapter(message.adapter_id, pre_msg)
@@ -658,6 +674,7 @@ class CoreEngine:
                         adapter_id=message.adapter_id,
                         platform_user_id=message.platform_user_id,
                         content="🔧 ツールを実行中…",
+                        metadata=self._reply_metadata(message),
                     )
                     try:
                         await self._gateway.send_to_adapter(message.adapter_id, status)
@@ -783,6 +800,7 @@ class CoreEngine:
             platform_user_id=message.platform_user_id,
             content=f"🔧 Skill '{skill_name}' requires approval.",
             metadata={
+                **self._reply_metadata(message),
                 "proposal_id": proposal_id,
                 "skill_name": skill_name,
                 "skill_params": skill_params,
@@ -966,6 +984,7 @@ class CoreEngine:
                 "Send this token from your other platform "
                 "using the link confirm command."
             ),
+            metadata=self._reply_metadata(message),
         )
         await self._gateway.send_to_adapter(message.adapter_id, reply)
         logger.info(
@@ -988,6 +1007,7 @@ class CoreEngine:
                 adapter_id=message.adapter_id,
                 platform_user_id=message.platform_user_id,
                 content="Invalid or expired link token.",
+                metadata=self._reply_metadata(message),
             )
             await self._gateway.send_to_adapter(message.adapter_id, reply)
             return
@@ -1002,6 +1022,7 @@ class CoreEngine:
                 adapter_id=message.adapter_id,
                 platform_user_id=message.platform_user_id,
                 content="You must have an existing account to confirm a link.",
+                metadata=self._reply_metadata(message),
             )
             await self._gateway.send_to_adapter(message.adapter_id, reply)
             return
@@ -1023,6 +1044,7 @@ class CoreEngine:
                 f"Account linked! Platform {requester_adapter_id} "
                 "is now connected to your account."
             ),
+            metadata=self._reply_metadata(message),
         )
         await self._gateway.send_to_adapter(message.adapter_id, reply)
         logger.info(
@@ -1409,5 +1431,6 @@ class CoreEngine:
             platform_user_id=message.platform_user_id,
             content=content,
             images=images or [],
+            metadata=self._reply_metadata(message),
         )
         await self._gateway.send_to_adapter(message.adapter_id, reply)

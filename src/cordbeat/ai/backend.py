@@ -13,6 +13,11 @@ from typing import Any
 
 import httpx
 
+from cordbeat.ai.reasoning import (
+    _DEFAULT_REASONING_STRIP_TAGS,
+    looks_like_reasoning_text,
+    strip_thinking_text,
+)
 from cordbeat.config import AIBackendConfig
 from cordbeat.exceptions import AIBackendError
 from cordbeat.tools.metrics import (
@@ -25,7 +30,6 @@ from cordbeat.tools.metrics import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_REASONING_CONTENT_KEYS = ("reasoning_content",)
-_DEFAULT_REASONING_STRIP_TAGS = ("think",)
 
 
 # ── Voice-context contextvar ─────────────────────────────────────────
@@ -85,49 +89,6 @@ def _coerce_marker_pairs(value: Any) -> tuple[tuple[str, str], ...]:
         if start and end:
             pairs.append((start, end))
     return tuple(pairs)
-
-
-def strip_thinking_text(
-    raw: str,
-    *,
-    tags: tuple[str, ...] = _DEFAULT_REASONING_STRIP_TAGS,
-    marker_pairs: tuple[tuple[str, str], ...] = (),
-) -> str:
-    """Remove complete and malformed thinking-tag output from model text.
-
-    Some OpenAI-compatible thinking-model servers split chain-of-thought into
-    ``reasoning_content`` but still leave a dangling ``</think>`` marker in
-    user-facing ``content``.  If a close marker remains, keep only text after
-    the last close marker; that is the actual answer for Qwen/DeepSeek-style
-    outputs.
-    """
-
-    text = raw
-    for start, end in marker_pairs:
-        block_re = re.compile(
-            f"{re.escape(start)}.*?{re.escape(end)}",
-            re.DOTALL | re.IGNORECASE,
-        )
-        text = block_re.sub("", text)
-        if end.lower() in text.lower():
-            text = re.split(re.escape(end), text, flags=re.IGNORECASE)[-1]
-        if start.lower() in text.lower():
-            text = re.split(re.escape(start), text, maxsplit=1, flags=re.IGNORECASE)[0]
-
-    for tag in tags:
-        escaped_tag = re.escape(tag)
-        block_re = re.compile(
-            rf"<{escaped_tag}\b[^>]*>.*?</{escaped_tag}\s*>",
-            re.DOTALL | re.IGNORECASE,
-        )
-        close_re = re.compile(rf"</{escaped_tag}\s*>", re.IGNORECASE)
-        open_re = re.compile(rf"<{escaped_tag}\b[^>]*>", re.IGNORECASE)
-        text = block_re.sub("", text)
-        if close_re.search(text):
-            text = close_re.split(text)[-1]
-        if open_re.search(text):
-            text = open_re.split(text, maxsplit=1)[0]
-    return text.strip()
 
 
 def _detect_image_mime(b64data: str) -> str:
@@ -445,6 +406,88 @@ class OpenAICompatBackend(AIBackend):
             return self._voice_enable_thinking
         return self._enable_thinking
 
+    @staticmethod
+    def _messages_with_no_think(
+        messages: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        retry_messages = [dict(message) for message in messages]
+        no_think_instruction = (
+            "/no_think\n"
+            "Return only the final user-facing answer. "
+            "Do not include analysis, checklists, or private reasoning."
+        )
+        if retry_messages and retry_messages[0].get("role") == "system":
+            retry_messages[0]["content"] = (
+                f"{retry_messages[0].get('content', '')}\n{no_think_instruction}"
+            ).strip()
+        else:
+            retry_messages.insert(
+                0,
+                {"role": "system", "content": no_think_instruction},
+            )
+        return retry_messages
+
+    async def _retry_without_thinking(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        labels: dict[str, str],
+        reason: str,
+    ) -> str:
+        logger.warning("%s Retrying with thinking disabled.", reason)
+        retry_payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": self._messages_with_no_think(messages),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "chat_template_kwargs": {"enable_thinking": False},
+            "enable_thinking": False,
+        }
+        try:
+            async with time_block(LLM_GENERATE_LATENCY, labels):
+                retry_resp = await self._client.post(
+                    f"{self._base_url}/chat/completions",
+                    json=retry_payload,
+                )
+                retry_resp.raise_for_status()
+                retry_data = retry_resp.json()
+        except httpx.ReadTimeout:
+            logger.warning(
+                "openai_compat no-think retry timed out. "
+                "Increase 'ai_backend.timeout' in config.yaml."
+            )
+            return ""
+        except Exception:
+            logger.warning(
+                "openai_compat no-think retry failed",
+                exc_info=True,
+            )
+            return ""
+
+        try:
+            retry_message = retry_data["choices"][0]["message"]
+        except (KeyError, IndexError):
+            logger.warning("openai_compat no-think retry returned bad format")
+            return ""
+        reasoning_content = self._extract_reasoning_content(retry_message)
+        if reasoning_content and self._log_reasoning_content:
+            logger.debug(
+                "openai_compat retry thinking (%d chars):\n%.2000s",
+                len(reasoning_content),
+                reasoning_content,
+            )
+        retry_content = retry_message.get("content") or ""
+        result = self._strip_reasoning_text(str(retry_content))
+        if result and looks_like_reasoning_text(result):
+            logger.warning(
+                "openai_compat no-think retry still looked like reasoning; "
+                "dropping response"
+            )
+            return ""
+        return result
+
     async def aclose(self) -> None:
         await self._client.aclose()
 
@@ -468,6 +511,9 @@ class OpenAICompatBackend(AIBackend):
         if effective_system:
             messages.append({"role": "system", "content": effective_system})
         messages.append({"role": "user", "content": prompt})
+        payload_thinking = (
+            False if "/no_think" in effective_system.lower() else effective_thinking
+        )
 
         logger.debug(
             "openai_compat request: model=%s system=%d chars prompt=%d chars"
@@ -486,13 +532,13 @@ class OpenAICompatBackend(AIBackend):
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             }
-            if effective_thinking is not None:
+            if payload_thinking is not None:
                 # llama.cpp passes template kwargs via chat_template_kwargs;
                 # keep the legacy top-level field for other servers (vLLM etc.)
                 payload["chat_template_kwargs"] = {
-                    "enable_thinking": effective_thinking
+                    "enable_thinking": payload_thinking
                 }
-                payload["enable_thinking"] = effective_thinking
+                payload["enable_thinking"] = payload_thinking
             async with time_block(LLM_GENERATE_LATENCY, labels):
                 resp = await self._client.post(
                     f"{self._base_url}/chat/completions",
@@ -542,49 +588,21 @@ class OpenAICompatBackend(AIBackend):
                         len(reasoning_content),
                         retry_mt,
                     )
-                    retry_payload: dict[str, Any] = {
-                        "model": self._model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": retry_mt,
-                    }
-                    if effective_thinking is not None:
-                        retry_payload["chat_template_kwargs"] = {
-                            "enable_thinking": effective_thinking
-                        }
-                        retry_payload["enable_thinking"] = effective_thinking
-                    try:
-                        async with time_block(LLM_GENERATE_LATENCY, labels):
-                            retry_resp = await self._client.post(
-                                f"{self._base_url}/chat/completions",
-                                json=retry_payload,
-                            )
-                            retry_resp.raise_for_status()
-                            retry_data = retry_resp.json()
-                        retry_message = retry_data["choices"][0]["message"]
-                        retry_content = retry_message.get("content") or ""
-                        if retry_content:
-                            result = self._strip_reasoning_text(str(retry_content))
-                            logger.debug(
-                                "openai_compat retry response: %d chars: %.300s",
-                                len(result),
-                                result,
-                            )
-                            return result
-                        logger.warning(
-                            "openai_compat retry also returned empty content."
+                    retry_result = await self._retry_without_thinking(
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=retry_mt,
+                        labels=labels,
+                        reason="openai_compat: content=null but reasoning_content set.",
+                    )
+                    if retry_result:
+                        logger.debug(
+                            "openai_compat retry response: %d chars: %.300s",
+                            len(retry_result),
+                            retry_result,
                         )
-                    except httpx.ReadTimeout:
-                        logger.warning(
-                            "openai_compat retry timed out. "
-                            "Increase 'ai_backend.timeout' in config.yaml."
-                        )
-                    except Exception as _retry_err:
-                        logger.warning(
-                            "openai_compat retry request failed (%s).",
-                            type(_retry_err).__name__,
-                            exc_info=True,
-                        )
+                        return retry_result
+                    logger.warning("openai_compat retry also returned empty content.")
                 else:
                     logger.warning(
                         "OpenAI-compat backend returned empty content and no "
@@ -605,14 +623,33 @@ class OpenAICompatBackend(AIBackend):
                         combined_thinking,
                     )
                 stripped = self._strip_reasoning_text(raw_content)
-                if not stripped:
+                reasoning_like = bool(
+                    reasoning_content and looks_like_reasoning_text(stripped)
+                )
+                result = ""
+                if reasoning_like:
+                    result = await self._retry_without_thinking(
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max(max_tokens, 1024),
+                        labels=labels,
+                        reason=(
+                            "openai_compat: content looked like reasoning "
+                            "despite separate reasoning_content."
+                        ),
+                    )
+                    if not result:
+                        logger.warning(
+                            "openai_compat: dropping reasoning-like content"
+                        )
+                if not reasoning_like and not stripped:
                     logger.warning(
                         "openai_compat: content was entirely <think> blocks; "
                         "set ai.options.enable_thinking: false in config.yaml"
                     )
-                    result = raw_content
-                else:
-                    result = stripped
+                    result = ""
+                elif not reasoning_like:
+                    result = result or stripped
             logger.debug(
                 "openai_compat response: %d chars: %.300s", len(result), result
             )
@@ -680,6 +717,12 @@ class OpenAICompatBackend(AIBackend):
     ) -> str:
         labels = {"backend": "openai_compat", "model": self._model}
         effective_thinking = self._effective_enable_thinking()
+        has_no_think = any(
+            str(message.get("content", "")).lower().find("/no_think") >= 0
+            for message in messages
+            if message.get("role") == "system"
+        )
+        payload_thinking = False if has_no_think else effective_thinking
         try:
             payload: dict[str, Any] = {
                 "model": self._model,
@@ -687,11 +730,11 @@ class OpenAICompatBackend(AIBackend):
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             }
-            if effective_thinking is not None:
+            if payload_thinking is not None:
                 payload["chat_template_kwargs"] = {
-                    "enable_thinking": effective_thinking
+                    "enable_thinking": payload_thinking
                 }
-                payload["enable_thinking"] = effective_thinking
+                payload["enable_thinking"] = payload_thinking
             async with time_block(LLM_GENERATE_LATENCY, labels):
                 resp = await self._client.post(
                     f"{self._base_url}/chat/completions",
@@ -707,9 +750,29 @@ class OpenAICompatBackend(AIBackend):
             raise
         inc_counter(LLM_GENERATE_TOTAL, {"backend": "openai_compat", "outcome": "ok"})
         try:
-            content = data["choices"][0]["message"].get("content") or ""
+            message = data["choices"][0]["message"]
+            reasoning_content = self._extract_reasoning_content(message)
+            content = message.get("content") or ""
             raw_content = str(content)
             stripped = self._strip_reasoning_text(raw_content)
+            if reasoning_content and looks_like_reasoning_text(stripped):
+                retry_messages: list[dict[str, str]] = [
+                    {
+                        "role": str(item.get("role", "user")),
+                        "content": str(item.get("content", "")),
+                    }
+                    for item in messages
+                ]
+                return await self._retry_without_thinking(
+                    messages=retry_messages,
+                    temperature=temperature,
+                    max_tokens=max(max_tokens, 1024),
+                    labels=labels,
+                    reason=(
+                        "openai_compat chat content looked like reasoning "
+                        "despite separate reasoning_content."
+                    ),
+                )
             return stripped if stripped else raw_content
         except (KeyError, IndexError) as exc:
             msg = f"Unexpected response format from {self._base_url}"

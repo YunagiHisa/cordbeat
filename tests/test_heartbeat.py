@@ -1510,7 +1510,7 @@ class TestSkillProposal:
         skills: SkillRegistry,
         mock_gateway: AsyncMock,
     ) -> None:
-        """Heartbeat skips natural-language DRAW: text because draw needs DSL."""
+        """Heartbeat never proposes/executes draw skill autonomously."""
         await memory.get_or_create_user("u1", "Alice")
         await memory.link_platform("u1", "discord", "discord_123")
 
@@ -1538,6 +1538,40 @@ class TestSkillProposal:
 
         records = await memory.get_certain_records("u1", record_type="proposal")
         assert records == []
+        mock_gateway.send_to_adapter.assert_not_called()
+
+    async def test_draw_skill_is_not_executed_even_with_dsl(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+        execute = AsyncMock(return_value={"output": "image"})
+        skills._skills["draw"] = Skill(
+            meta=SkillMeta(
+                name="draw",
+                description="Draw",
+                usage="draw",
+                safety_level=SafetyLevel.SAFE,
+            ),
+            _test_callable=execute,
+        )
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="draw",
+            skill_params={
+                "commands": "SIZE 64 64\nCANVAS white\nCIRCLE 32 32 20 red\nOUTPUT"
+            },
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_skill(decision)
+
+        execute.assert_not_awaited()
         mock_gateway.send_to_adapter.assert_not_called()
 
 
@@ -2531,6 +2565,25 @@ class TestSendHeartbeatMessagePlatformLink:
         )
         await heartbeat._send_heartbeat_message(decision)
         mock_gateway.send_to_adapter.assert_not_awaited()
+
+    async def test_draw_tag_content_skips_send(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.link_platform("uid-1", "discord", "snowflake-123")
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.MESSAGE,
+            content="描くね [DRAW: a gentle deer]",
+            target_user_id="uid-1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._send_heartbeat_message(decision)
+
+        mock_gateway.send_to_adapter.assert_not_awaited()
+        history = await memory.get_recent_messages("uid-1", limit=5)
+        assert history == []
 
 
 class TestSendHeartbeatMessageDmPolicy:

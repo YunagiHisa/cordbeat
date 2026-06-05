@@ -348,11 +348,15 @@ class CoreEngine:
         )
         if self._skills.get("draw") is not None:
             system_prompt += (
-                "\n\nYou can create images for the user. When drawing would enhance"
-                " your response, include exactly one"
+                "\n\nYou can create simple vector-style drawings for the user"
+                " through CordBeat's Draw DSL renderer. This is not a"
+                " photorealistic image-generation model. When a simple"
+                " poster/icon-like drawing would enhance your response,"
+                " include exactly one"
                 " [DRAW: <description in English>] tag in your message."
                 " Example: [DRAW: a red circle on a white background]."
-                " The image will be rendered automatically and sent with your reply."
+                " The tag will be converted to Draw DSL, rendered, and sent"
+                " with your reply."
                 " Do not call the draw skill directly with [SKILL: draw];"
                 " use the [DRAW: ...] tag instead."
             )

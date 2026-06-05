@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import zoneinfo
 from datetime import UTC, datetime, time, tzinfo
 from typing import Any
@@ -84,6 +85,10 @@ Important skill rule:
 If you choose action=skill, parameters must be directly executable by that
 skill. Do not put natural-language prompts into skill parameters.
 
+Drawing rule:
+Do not use the draw skill and do not include [DRAW: ...] tags in HEARTBEAT
+messages. HEARTBEAT is text-only; drawing requests must wait for direct chat.
+
 You MUST respond in valid JSON:
 {{
   "action": "message|skill|propose_improvement|propose_trait_change|propose_skill|none",
@@ -108,38 +113,7 @@ You MUST respond in valid JSON:
 }}
 """
 
-_DRAW_DSL_COMMANDS = frozenset(
-    {
-        "SIZE",
-        "CANVAS",
-        "CIRCLE",
-        "RECT",
-        "ELLIPSE",
-        "LINE",
-        "POLYGON",
-        "TEXT",
-        "ARC",
-        "BEZIER",
-        "GRADIENT",
-        "DOTS",
-        "STAR",
-        "SPIRAL",
-        "TURTLE",
-        "HEADING",
-        "PENCOLOR",
-        "PENWIDTH",
-        "PENUP",
-        "PENDOWN",
-        "FORWARD",
-        "BACKWARD",
-        "RIGHT",
-        "LEFT",
-        "REPEAT",
-        "END",
-        "SAVE",
-        "OUTPUT",
-    }
-)
+_DRAW_TAG_RE = re.compile(r"\[DRAW:\s*.+?\]", re.DOTALL | re.IGNORECASE)
 
 
 def _parse_time(s: str) -> time:
@@ -155,19 +129,6 @@ def _in_quiet_hours(quiet_start: str, quiet_end: str, tz: tzinfo = UTC) -> bool:
         return start <= now <= end
     # Wraps midnight (e.g., 01:00 - 07:00)
     return now >= start or now <= end
-
-
-def _looks_like_draw_dsl(commands: Any) -> bool:
-    """Return True when *commands* looks like executable Draw DSL."""
-    if not isinstance(commands, str):
-        return False
-    lines = [line.strip() for line in commands.splitlines() if line.strip()]
-    if not lines:
-        return False
-    if lines[0].upper().startswith("DRAW:"):
-        return False
-    opcodes = {line.split(maxsplit=1)[0].upper() for line in lines}
-    return bool(opcodes & _DRAW_DSL_COMMANDS) and "OUTPUT" in opcodes
 
 
 class HeartbeatLoop:
@@ -621,6 +582,15 @@ class HeartbeatLoop:
                 )
                 return
 
+        if _DRAW_TAG_RE.search(decision.content):
+            logger.warning(
+                "HEARTBEAT skipped message containing DRAW tag "
+                "because proactive drawing is disabled: user=%s adapter=%s",
+                decision.target_user_id,
+                decision.target_adapter_id,
+            )
+            return
+
         message = GatewayMessage(
             type=MessageType.HEARTBEAT_MESSAGE,
             adapter_id=decision.target_adapter_id,
@@ -667,13 +637,9 @@ class HeartbeatLoop:
             logger.warning("Unknown skill: %s", decision.skill_name)
             return
 
-        if skill.meta.name == "draw" and not _looks_like_draw_dsl(
-            decision.skill_params.get("commands")
-        ):
+        if skill.meta.name == "draw":
             logger.warning(
-                "HEARTBEAT skipped draw skill proposal because commands were not "
-                "valid Draw DSL: %r",
-                decision.skill_params.get("commands"),
+                "HEARTBEAT skipped draw skill because proactive drawing is disabled"
             )
             return
 

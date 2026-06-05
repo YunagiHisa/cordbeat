@@ -24,9 +24,8 @@ from cordbeat.tools.metrics import (
 
 logger = logging.getLogger(__name__)
 
-_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
-_THINK_OPEN_RE = re.compile(r"<think\b[^>]*>", re.IGNORECASE)
-_THINK_CLOSE_RE = re.compile(r"</think\s*>", re.IGNORECASE)
+_DEFAULT_REASONING_CONTENT_KEYS = ("reasoning_content",)
+_DEFAULT_REASONING_STRIP_TAGS = ("think",)
 
 
 # ── Voice-context contextvar ─────────────────────────────────────────
@@ -56,7 +55,44 @@ def is_voice_context() -> bool:
     return _voice_context.get()
 
 
-def strip_thinking_text(raw: str) -> str:
+def _coerce_string_tuple(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
+    if value is None:
+        return default
+    items: tuple[Any, ...]
+    if isinstance(value, str):
+        items = (value,)
+    elif isinstance(value, list | tuple):
+        items = tuple(value)
+    else:
+        return default
+    cleaned = tuple(str(item).strip() for item in items if str(item).strip())
+    return cleaned or default
+
+
+def _coerce_marker_pairs(value: Any) -> tuple[tuple[str, str], ...]:
+    if not isinstance(value, list | tuple):
+        return ()
+    pairs: list[tuple[str, str]] = []
+    for item in value:
+        start = ""
+        end = ""
+        if isinstance(item, dict):
+            start = str(item.get("start", "")).strip()
+            end = str(item.get("end", "")).strip()
+        elif isinstance(item, list | tuple) and len(item) == 2:
+            start = str(item[0]).strip()
+            end = str(item[1]).strip()
+        if start and end:
+            pairs.append((start, end))
+    return tuple(pairs)
+
+
+def strip_thinking_text(
+    raw: str,
+    *,
+    tags: tuple[str, ...] = _DEFAULT_REASONING_STRIP_TAGS,
+    marker_pairs: tuple[tuple[str, str], ...] = (),
+) -> str:
     """Remove complete and malformed thinking-tag output from model text.
 
     Some OpenAI-compatible thinking-model servers split chain-of-thought into
@@ -66,11 +102,31 @@ def strip_thinking_text(raw: str) -> str:
     outputs.
     """
 
-    text = _THINK_BLOCK_RE.sub("", raw)
-    if _THINK_CLOSE_RE.search(text):
-        text = _THINK_CLOSE_RE.split(text)[-1]
-    if _THINK_OPEN_RE.search(text):
-        text = _THINK_OPEN_RE.split(text, maxsplit=1)[0]
+    text = raw
+    for start, end in marker_pairs:
+        block_re = re.compile(
+            f"{re.escape(start)}.*?{re.escape(end)}",
+            re.DOTALL | re.IGNORECASE,
+        )
+        text = block_re.sub("", text)
+        if end.lower() in text.lower():
+            text = re.split(re.escape(end), text, flags=re.IGNORECASE)[-1]
+        if start.lower() in text.lower():
+            text = re.split(re.escape(start), text, maxsplit=1, flags=re.IGNORECASE)[0]
+
+    for tag in tags:
+        escaped_tag = re.escape(tag)
+        block_re = re.compile(
+            rf"<{escaped_tag}\b[^>]*>.*?</{escaped_tag}\s*>",
+            re.DOTALL | re.IGNORECASE,
+        )
+        close_re = re.compile(rf"</{escaped_tag}\s*>", re.IGNORECASE)
+        open_re = re.compile(rf"<{escaped_tag}\b[^>]*>", re.IGNORECASE)
+        text = block_re.sub("", text)
+        if close_re.search(text):
+            text = close_re.split(text)[-1]
+        if open_re.search(text):
+            text = open_re.split(text, maxsplit=1)[0]
     return text.strip()
 
 
@@ -93,6 +149,9 @@ def _detect_image_mime(b64data: str) -> str:
 
 class AIBackend(ABC):
     """Abstract interface for AI inference backends."""
+
+    def _strip_reasoning_text(self, raw: str) -> str:
+        return strip_thinking_text(raw)
 
     @abstractmethod
     async def generate(
@@ -158,7 +217,7 @@ class AIBackend(ABC):
             )
         logger.debug("generate_json raw(%d chars): %.500s", len(raw), raw)
         # Strip reasoning blocks/fragments (Qwen3, DeepSeek-R1, etc.)
-        text = strip_thinking_text(raw)
+        text = self._strip_reasoning_text(raw)
         # If thinking model put ALL output inside <think> (e.g. JSON-only prompts),
         # fall back to extracting the outermost {...} from the raw response.
         if not text:
@@ -346,10 +405,39 @@ class OpenAICompatBackend(AIBackend):
         # ``is_voice_context()`` is true so VC / voice-message replies stay
         # within real-time latency budgets.  None = use ``_enable_thinking``.
         self._voice_enable_thinking: bool | None = options.get("voice_enable_thinking")
+        self._reasoning_content_keys = _coerce_string_tuple(
+            options.get("reasoning_content_keys"),
+            _DEFAULT_REASONING_CONTENT_KEYS,
+        )
+        self._reasoning_strip_tags = _coerce_string_tuple(
+            options.get("reasoning_strip_tags"),
+            _DEFAULT_REASONING_STRIP_TAGS,
+        )
+        self._reasoning_strip_markers = _coerce_marker_pairs(
+            options.get("reasoning_strip_markers")
+        )
+        self._log_reasoning_content = bool(options.get("log_reasoning_content", True))
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         self._client = httpx.AsyncClient(timeout=config.timeout, headers=headers)
+
+    def _strip_reasoning_text(self, raw: str) -> str:
+        return strip_thinking_text(
+            raw,
+            tags=self._reasoning_strip_tags,
+            marker_pairs=self._reasoning_strip_markers,
+        )
+
+    def _extract_reasoning_content(self, message: dict[str, Any]) -> str:
+        parts: list[str] = []
+        for key in self._reasoning_content_keys:
+            value = message.get(key)
+            if isinstance(value, str) and value:
+                parts.append(value)
+            elif value:
+                parts.append(json.dumps(value, ensure_ascii=False))
+        return "\n---\n".join(parts)
 
     def _effective_enable_thinking(self) -> bool | None:
         """Return ``enable_thinking`` accounting for voice-context override."""
@@ -423,10 +511,10 @@ class OpenAICompatBackend(AIBackend):
             message = data["choices"][0]["message"]
             content = message.get("content")
 
-            # Log reasoning_content (chain-of-thought) at DEBUG level so it
+            # Log reasoning content at DEBUG level so it
             # appears in logs when log.level=DEBUG without polluting responses.
-            reasoning_content: str = message.get("reasoning_content") or ""
-            if reasoning_content:
+            reasoning_content = self._extract_reasoning_content(message)
+            if reasoning_content and self._log_reasoning_content:
                 logger.debug(
                     "openai_compat thinking (%d chars):\n%.2000s",
                     len(reasoning_content),
@@ -476,7 +564,7 @@ class OpenAICompatBackend(AIBackend):
                         retry_message = retry_data["choices"][0]["message"]
                         retry_content = retry_message.get("content") or ""
                         if retry_content:
-                            result = strip_thinking_text(str(retry_content))
+                            result = self._strip_reasoning_text(str(retry_content))
                             logger.debug(
                                 "openai_compat retry response: %d chars: %.300s",
                                 len(result),
@@ -516,7 +604,7 @@ class OpenAICompatBackend(AIBackend):
                         len(combined_thinking),
                         combined_thinking,
                     )
-                stripped = strip_thinking_text(raw_content)
+                stripped = self._strip_reasoning_text(raw_content)
                 if not stripped:
                     logger.warning(
                         "openai_compat: content was entirely <think> blocks; "
@@ -621,7 +709,7 @@ class OpenAICompatBackend(AIBackend):
         try:
             content = data["choices"][0]["message"].get("content") or ""
             raw_content = str(content)
-            stripped = strip_thinking_text(raw_content)
+            stripped = self._strip_reasoning_text(raw_content)
             return stripped if stripped else raw_content
         except (KeyError, IndexError) as exc:
             msg = f"Unexpected response format from {self._base_url}"

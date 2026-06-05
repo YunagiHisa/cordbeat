@@ -164,6 +164,20 @@ class TestOpenAICompatBackend:
         )
         assert strip_thinking_text(raw) == "奈良旅行！？いいね。"
 
+    def test_strip_thinking_text_supports_custom_tags(self) -> None:
+        raw = "<analysis>private notes</analysis>\nFinal answer"
+        assert strip_thinking_text(raw, tags=("analysis",)) == "Final answer"
+
+    def test_strip_thinking_text_supports_custom_marker_pairs(self) -> None:
+        raw = "<|START_THINKING|>private<|END_THINKING|>\nFinal answer"
+        assert (
+            strip_thinking_text(
+                raw,
+                marker_pairs=(("<|START_THINKING|>", "<|END_THINKING|>"),),
+            )
+            == "Final answer"
+        )
+
     async def test_generate_calls_chat_completions(self) -> None:
         cfg = AIBackendConfig(
             provider="openai",
@@ -212,6 +226,89 @@ class TestOpenAICompatBackend:
 
         result = await backend.generate("test")
         assert result == "奈良旅行！？いいね。"
+
+    async def test_generate_strips_configured_reasoning_tag(self) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={"reasoning_strip_tags": ["analysis"]},
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [
+                {"message": {"content": "<analysis>private</analysis>\nAnswer"}}
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        result = await backend.generate("test")
+        assert result == "Answer"
+
+    async def test_generate_strips_configured_reasoning_marker_pair(self) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={
+                "reasoning_strip_markers": [
+                    {
+                        "start": "<|START_THINKING|>",
+                        "end": "<|END_THINKING|>",
+                    }
+                ],
+            },
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            "<|START_THINKING|>private<|END_THINKING|>\nAnswer"
+                        )
+                    }
+                }
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        result = await backend.generate("test")
+        assert result == "Answer"
+
+    async def test_generate_uses_configured_reasoning_content_key_for_retry(
+        self,
+    ) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={"reasoning_content_keys": ["reasoning"]},
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        first_response = MagicMock()
+        first_response.json.return_value = {
+            "choices": [{"message": {"content": None, "reasoning": "thinking"}}]
+        }
+        first_response.raise_for_status = MagicMock()
+
+        retry_response = MagicMock()
+        retry_response.json.return_value = {
+            "choices": [{"message": {"content": "answer"}}]
+        }
+        retry_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(side_effect=[first_response, retry_response])
+
+        result = await backend.generate("test")
+        assert result == "answer"
+        assert backend._client.post.await_count == 2
 
     async def test_generate_chat_strips_orphan_think_close(self) -> None:
         cfg = AIBackendConfig(provider="openai_compat")

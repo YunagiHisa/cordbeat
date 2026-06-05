@@ -41,7 +41,9 @@ ai_backend:
   # options:                 # provider-specific options
   #   api_key: ""           # required for openai/openai_compat
 
-  # --- Alternative: llama.cpp server (e.g. Qwen3 thinking model) ---
+  # --- Alternative: llama.cpp server (e.g. Qwen3/DeepSeek thinking model) ---
+  # Start llama-server with `--reasoning-format deepseek` when supported so
+  # reasoning is returned in `message.reasoning_content` instead of content.
   # provider: openai_compat
   # base_url: "http://localhost:8080/v1"
   # model: "default"
@@ -53,6 +55,13 @@ ai_backend:
   #   voice_enable_thinking: false  # OPTIONAL per-context override: disable
   #                          # <think> only for voice messages (VC / audio).
   #                          # Falls back to enable_thinking when unset.
+  #   reasoning_content_keys: ["reasoning_content"]  # debug-log these fields only
+  #   log_reasoning_content: true                    # DEBUG logs only
+  #   reasoning_strip_tags: ["think"]                # strip <tag>...</tag> leaks
+  #   # For non-XML reasoning markers from other servers:
+  #   # reasoning_strip_markers:
+  #   #   - start: "<|START_THINKING|>"
+  #   #     end: "<|END_THINKING|>"
 
   # --- Alternative: OpenAI API ---
   # provider: openai

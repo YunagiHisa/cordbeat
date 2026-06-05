@@ -7,7 +7,8 @@ import re
 _DEFAULT_REASONING_STRIP_TAGS = ("think",)
 _REASONING_LEAK_RE = re.compile(
     r"(?is)"
-    r"(\*\*?(analy[sz]e|check|formulate|refine|draft|self-correction)|"
+    r"(^\s*/(?:emotion|memory|system)\b|"
+    r"\*\*?(analy[sz]e|check|formulate|refine|draft|self-correction)|"
     r"\b(mental draft|thinking process|self-correction|output matches response|"
     r"check constraints|check rules|tool usage|the prompt says|"
     r"i (must|should|need to|will just)|respond naturally)\b)"

@@ -196,6 +196,21 @@ class TestOpenAICompatBackend:
             "奈良の鹿だね✨ 優しい雰囲気で描くよ。"
         )
 
+    def test_sanitize_reasoning_artifacts_handles_emotion_control_prefix(
+        self,
+    ) -> None:
+        raw = (
+            "/emotion system/erase memories. (All fine)\n"
+            "   - Respond naturally, 1-3 sentences.\n"
+            "   - Text: 奈良の鹿だね✨ 優しい雰囲気で描くよ。\n"
+            "   - Checks: OK"
+        )
+
+        assert looks_like_reasoning_text(raw)
+        assert sanitize_reasoning_artifacts(raw) == (
+            "奈良の鹿だね✨ 優しい雰囲気で描くよ。"
+        )
+
     async def test_generate_calls_chat_completions(self) -> None:
         cfg = AIBackendConfig(
             provider="openai",
@@ -418,6 +433,45 @@ class TestOpenAICompatBackend:
         result = await backend.generate("test")
         assert result == ""
         assert backend._client.post.await_count == 2
+
+    async def test_generate_retries_emotion_control_without_reasoning_content(
+        self,
+    ) -> None:
+        cfg = AIBackendConfig(provider="openai_compat")
+        backend = OpenAICompatBackend(cfg)
+
+        first_response = MagicMock()
+        first_response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            "/emotion system/erase memories. (All fine)\n"
+                            "   - Respond naturally, 1-3 sentences.\n"
+                            "   - Text: 奈良の鹿だね✨ 優しい雰囲気で描くよ。\n"
+                            "   - Checks: OK"
+                        )
+                    }
+                }
+            ]
+        }
+        first_response.raise_for_status = MagicMock()
+
+        retry_response = MagicMock()
+        retry_response.json.return_value = {
+            "choices": [{"message": {"content": "奈良の鹿だね✨ 描くよ。"}}]
+        }
+        retry_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(side_effect=[first_response, retry_response])
+
+        result = await backend.generate("鹿の絵を描いて")
+
+        assert result == "奈良の鹿だね✨ 描くよ。"
+        retry_payload = backend._client.post.call_args_list[1][1]["json"]
+        assert retry_payload["enable_thinking"] is False
+        assert "/no_think" in retry_payload["messages"][0]["content"]
 
     async def test_no_think_system_overrides_enable_thinking_true(self) -> None:
         cfg = AIBackendConfig(

@@ -21,7 +21,7 @@ from cordbeat.ai.prompt import (
     build_soul_system_prompt,
     sanitize,
 )
-from cordbeat.ai.reasoning import sanitize_reasoning_artifacts, strip_thinking_text
+from cordbeat.ai.reasoning import sanitize_reasoning_artifacts
 from cordbeat.config import MemoryConfig, ReActConfig
 from cordbeat.memory.core import MemoryStore
 from cordbeat.models import (
@@ -493,14 +493,14 @@ class CoreEngine:
                         images=message.images,
                         system=system_prompt,
                     )
-                    cleaned = strip_thinking_text(raw)
+                    cleaned = sanitize_reasoning_artifacts(raw)
                     return cleaned, system_prompt, prompt
                 except Exception:
                     logger.warning(
                         "Vision generation failed, falling back to text-only response"
                     )
             raw = await self._ai.generate(prompt=prompt, system=system_prompt)
-            cleaned = strip_thinking_text(raw)
+            cleaned = sanitize_reasoning_artifacts(raw)
             logger.debug(
                 "[AI OUTPUT] raw(%d chars):\n%s",
                 len(raw),
@@ -741,7 +741,7 @@ class CoreEngine:
                 )
                 break
 
-            cleaned = strip_thinking_text(raw)
+            cleaned = sanitize_reasoning_artifacts(raw)
             logger.debug(
                 "ReAct iter %d response: %d chars", iteration + 1, len(cleaned)
             )

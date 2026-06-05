@@ -623,9 +623,7 @@ class OpenAICompatBackend(AIBackend):
                         combined_thinking,
                     )
                 stripped = self._strip_reasoning_text(raw_content)
-                reasoning_like = bool(
-                    reasoning_content and looks_like_reasoning_text(stripped)
-                )
+                reasoning_like = looks_like_reasoning_text(stripped)
                 result = ""
                 if reasoning_like:
                     result = await self._retry_without_thinking(
@@ -635,7 +633,7 @@ class OpenAICompatBackend(AIBackend):
                         labels=labels,
                         reason=(
                             "openai_compat: content looked like reasoning "
-                            "despite separate reasoning_content."
+                            "or model-control output."
                         ),
                     )
                     if not result:
@@ -751,11 +749,10 @@ class OpenAICompatBackend(AIBackend):
         inc_counter(LLM_GENERATE_TOTAL, {"backend": "openai_compat", "outcome": "ok"})
         try:
             message = data["choices"][0]["message"]
-            reasoning_content = self._extract_reasoning_content(message)
             content = message.get("content") or ""
             raw_content = str(content)
             stripped = self._strip_reasoning_text(raw_content)
-            if reasoning_content and looks_like_reasoning_text(stripped):
+            if looks_like_reasoning_text(stripped):
                 retry_messages: list[dict[str, str]] = [
                     {
                         "role": str(item.get("role", "user")),
@@ -770,7 +767,7 @@ class OpenAICompatBackend(AIBackend):
                     labels=labels,
                     reason=(
                         "openai_compat chat content looked like reasoning "
-                        "despite separate reasoning_content."
+                        "or model-control output."
                     ),
                 )
             return stripped if stripped else raw_content

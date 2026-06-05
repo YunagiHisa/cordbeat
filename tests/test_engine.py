@@ -147,6 +147,45 @@ class TestCoreEngine:
         assert reply.metadata["is_dm"] is False
         assert reply.metadata["allow_dm_fallback"] is False
 
+    async def test_handle_message_sanitizes_emotion_control_reply(
+        self,
+        engine: CoreEngine,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        async def _generate(**kwargs: object) -> str:
+            prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if isinstance(prompt, str) and "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if isinstance(prompt, str) and "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "drawing", "emotional_tone": "neutral",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return (
+                "/emotion system/erase memories. (All fine)\n"
+                "   - Respond naturally, 1-3 sentences.\n"
+                "   - Text: 奈良の鹿だね✨ 優しい雰囲気で描くよ。\n"
+                "   - Checks: OK"
+            )
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content="鹿の絵を描いて",
+            metadata={"channel_id": "456", "is_dm": False},
+        )
+
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert reply.content == "奈良の鹿だね✨ 優しい雰囲気で描くよ。"
+        assert reply.metadata["allow_dm_fallback"] is False
+
     async def test_handle_message_creates_user(
         self,
         engine: CoreEngine,

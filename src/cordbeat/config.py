@@ -57,6 +57,9 @@ class HeartbeatConfig:
     default_interval_minutes: int = 60
     min_interval_minutes: int = 5
     max_interval_minutes: int = 1440
+    proactive_user_cooldown_minutes: int = 1440
+    proactive_destination_cooldown_minutes: int = 360
+    max_proactive_messages_per_tick: int = 1
     quiet_hours_start: str = "01:00"
     quiet_hours_end: str = "07:00"
     timezone: str = "UTC"
@@ -498,6 +501,14 @@ def validate_config(cfg: Config) -> None:
             "gateway.max_message_bytes must be at least 1048576 "
             "(1 MiB). Increase it for image attachments."
         )
+    if cfg.heartbeat.proactive_user_cooldown_minutes < 0:
+        errors.append("heartbeat.proactive_user_cooldown_minutes must be >= 0")
+    if cfg.heartbeat.proactive_destination_cooldown_minutes < 0:
+        errors.append(
+            "heartbeat.proactive_destination_cooldown_minutes must be >= 0"
+        )
+    if cfg.heartbeat.max_proactive_messages_per_tick < 1:
+        errors.append("heartbeat.max_proactive_messages_per_tick must be >= 1")
 
     if errors:
         msg = "Invalid config.yaml:\n  - " + "\n  - ".join(errors)

@@ -64,12 +64,20 @@ class TestLoadConfig:
     def test_heartbeat_config(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(
-            "heartbeat:\n  default_interval_minutes: 30\n  min_interval_minutes: 10\n",
+            "heartbeat:\n"
+            "  default_interval_minutes: 30\n"
+            "  min_interval_minutes: 10\n"
+            "  proactive_user_cooldown_minutes: 720\n"
+            "  proactive_destination_cooldown_minutes: 180\n"
+            "  max_proactive_messages_per_tick: 2\n",
             encoding="utf-8",
         )
         config = load_config(cfg_file)
         assert config.heartbeat.default_interval_minutes == 30
         assert config.heartbeat.min_interval_minutes == 10
+        assert config.heartbeat.proactive_user_cooldown_minutes == 720
+        assert config.heartbeat.proactive_destination_cooldown_minutes == 180
+        assert config.heartbeat.max_proactive_messages_per_tick == 2
 
     def test_memory_config(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.yaml"
@@ -376,6 +384,18 @@ class TestValidateConfig:
         with pytest.raises(ConfigValidationError) as excinfo:
             validate_config(cfg)
         assert "gateway.max_message_bytes" in str(excinfo.value)
+
+    def test_rejects_invalid_heartbeat_proactive_limits(self) -> None:
+        cfg = Config()
+        cfg.heartbeat.proactive_user_cooldown_minutes = -1
+        cfg.heartbeat.proactive_destination_cooldown_minutes = -1
+        cfg.heartbeat.max_proactive_messages_per_tick = 0
+        with pytest.raises(ConfigValidationError) as excinfo:
+            validate_config(cfg)
+        message = str(excinfo.value)
+        assert "proactive_user_cooldown_minutes" in message
+        assert "proactive_destination_cooldown_minutes" in message
+        assert "max_proactive_messages_per_tick" in message
 
     def test_rejects_string_options_in_ai_backend(self) -> None:
         cfg = Config()

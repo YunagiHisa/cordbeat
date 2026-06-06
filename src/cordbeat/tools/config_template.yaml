@@ -98,6 +98,9 @@ heartbeat:
   default_interval_minutes: 60
   min_interval_minutes: 5
   max_interval_minutes: 1440
+  proactive_user_cooldown_minutes: 1440        # max one proactive message/user/day
+  proactive_destination_cooldown_minutes: 360  # max one proactive message/channel/6h
+  max_proactive_messages_per_tick: 1           # prevent bursts to shared channels
   quiet_hours_start: "01:00"
   quiet_hours_end: "07:00"
   timezone: "UTC"  # IANA timezone (e.g. "Asia/Tokyo")

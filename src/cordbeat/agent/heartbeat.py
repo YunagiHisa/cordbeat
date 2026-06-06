@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import zoneinfo
@@ -114,6 +115,12 @@ You MUST respond in valid JSON:
 """
 
 _DRAW_TAG_RE = re.compile(r"\[DRAW:\s*.+?\]", re.DOTALL | re.IGNORECASE)
+_PARENTHETICAL_ONLY_RE = re.compile(
+    r"^\s*(?:\([^()]*\)|（[^（）]*）)\s*$",
+    re.DOTALL,
+)
+_HEARTBEAT_USER_SENT_RECORD = "heartbeat_user_sent"
+_HEARTBEAT_DESTINATION_SENT_RECORD = "heartbeat_destination_sent"
 
 
 def _parse_time(s: str) -> time:
@@ -157,6 +164,7 @@ class HeartbeatLoop:
         self._adapters_options = adapters_options or {}
         self._running = False
         self._sleep_done_today = False
+        self._proactive_messages_sent_this_tick = 0
         self._task: asyncio.Task[None] | None = None
 
         self._proposals = ProposalExecutor(
@@ -212,6 +220,7 @@ class HeartbeatLoop:
 
     async def _tick(self) -> int:
         """Execute one HEARTBEAT cycle. Returns next interval in minutes."""
+        self._proactive_messages_sent_this_tick = 0
         if self._queue.is_busy():
             logger.info(
                 "HEARTBEAT skipped: message queue is busy "
@@ -297,11 +306,30 @@ class HeartbeatLoop:
         user_map = {u.user_id: u for u in users}
         min_interval = triage_interval
         for entry in selected_ids:
+            if (
+                self._proactive_messages_sent_this_tick
+                >= self._config.max_proactive_messages_per_tick
+            ):
+                logger.info(
+                    "Layer 2 stopped: proactive message limit reached for this tick"
+                )
+                break
+
             uid = entry.get("user_id", "")
             reason = entry.get("reason", "")
             user = user_map.get(uid)
             if user is None:
                 logger.warning("Layer 1 selected unknown user_id: %s", uid)
+                continue
+            if await self._heartbeat_cooldown_active(
+                uid,
+                _HEARTBEAT_USER_SENT_RECORD,
+                self._config.proactive_user_cooldown_minutes,
+            ):
+                logger.info(
+                    "Layer 2 skipped user %s: proactive user cooldown active",
+                    uid,
+                )
                 continue
 
             logger.info("Layer 2: evaluating user %s (reason: %s)", uid, reason)
@@ -495,6 +523,31 @@ class HeartbeatLoop:
         if not decision.target_user_id or not decision.target_adapter_id:
             logger.warning("HEARTBEAT message missing target")
             return
+        if (
+            self._proactive_messages_sent_this_tick
+            >= self._config.max_proactive_messages_per_tick
+        ):
+            logger.info("HEARTBEAT skipped: proactive message limit reached")
+            return
+
+        content = decision.content.strip()
+        if not content or _PARENTHETICAL_ONLY_RE.fullmatch(content):
+            logger.info(
+                "HEARTBEAT skipped non-message content for user=%s: %r",
+                decision.target_user_id,
+                decision.content,
+            )
+            return
+        if await self._heartbeat_cooldown_active(
+            decision.target_user_id,
+            _HEARTBEAT_USER_SENT_RECORD,
+            self._config.proactive_user_cooldown_minutes,
+        ):
+            logger.info(
+                "HEARTBEAT skipped: proactive user cooldown active user=%s",
+                decision.target_user_id,
+            )
+            return
 
         # ── dm_policy: gate proactive sends based on last known channel ──
         opts = self._adapters_options.get(decision.target_adapter_id, {})
@@ -582,6 +635,24 @@ class HeartbeatLoop:
                 )
                 return
 
+        destination_key = self._heartbeat_destination_key(
+            decision.target_adapter_id,
+            platform_user_id,
+            metadata,
+        )
+        if await self._heartbeat_cooldown_active(
+            "__system__",
+            _HEARTBEAT_DESTINATION_SENT_RECORD,
+            self._config.proactive_destination_cooldown_minutes,
+            destination_key=destination_key,
+        ):
+            logger.info(
+                "HEARTBEAT skipped: proactive destination cooldown active "
+                "destination=%s",
+                destination_key,
+            )
+            return
+
         if _DRAW_TAG_RE.search(decision.content):
             logger.warning(
                 "HEARTBEAT skipped message containing DRAW tag "
@@ -602,6 +673,7 @@ class HeartbeatLoop:
             decision.target_adapter_id,
             message,
         )
+        self._proactive_messages_sent_this_tick += 1
         logger.info(
             "HEARTBEAT sent message to %s via %s (channel=%s, is_dm=%s)",
             decision.target_user_id,
@@ -609,6 +681,28 @@ class HeartbeatLoop:
             metadata.get("channel_id"),
             metadata.get("is_dm"),
         )
+
+        try:
+            cooldown_metadata = {
+                "adapter_id": decision.target_adapter_id,
+                "destination_key": destination_key,
+                "channel_id": str(metadata.get("channel_id") or ""),
+                "is_dm": bool(metadata.get("is_dm", True)),
+            }
+            await self._memory.add_certain_record(
+                decision.target_user_id,
+                content,
+                _HEARTBEAT_USER_SENT_RECORD,
+                cooldown_metadata,
+            )
+            await self._memory.add_certain_record(
+                "__system__",
+                content,
+                _HEARTBEAT_DESTINATION_SENT_RECORD,
+                cooldown_metadata,
+            )
+        except Exception:
+            logger.exception("Failed to persist HEARTBEAT cooldown record")
 
         # Record the proactive utterance in conversation memory so the next
         # user message has full context that "the assistant spoke first".
@@ -626,6 +720,56 @@ class HeartbeatLoop:
                 "Failed to record heartbeat message as assistant turn for user=%s",
                 decision.target_user_id,
             )
+
+    async def _heartbeat_cooldown_active(
+        self,
+        user_id: str,
+        record_type: str,
+        cooldown_minutes: int,
+        *,
+        destination_key: str | None = None,
+    ) -> bool:
+        if cooldown_minutes <= 0:
+            return False
+        try:
+            records = await self._memory.get_certain_records(
+                user_id,
+                record_type=record_type,
+                limit=50 if destination_key else 1,
+            )
+        except Exception:
+            logger.exception("Failed to read HEARTBEAT cooldown records")
+            return True
+
+        now = datetime.now(tz=UTC)
+        for record in records:
+            if destination_key is not None:
+                try:
+                    metadata = json.loads(record.get("metadata") or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if metadata.get("destination_key") != destination_key:
+                    continue
+            try:
+                created_at = datetime.fromisoformat(str(record["created_at"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=UTC)
+            elapsed_minutes = (now - created_at).total_seconds() / 60
+            return elapsed_minutes < cooldown_minutes
+        return False
+
+    @staticmethod
+    def _heartbeat_destination_key(
+        adapter_id: str,
+        platform_user_id: str,
+        metadata: dict[str, Any],
+    ) -> str:
+        channel_id = str(metadata.get("channel_id") or "")
+        if channel_id:
+            return f"{adapter_id}:channel:{channel_id}"
+        return f"{adapter_id}:user:{platform_user_id}"
 
     async def _execute_skill(self, decision: HeartbeatDecision) -> None:
         if not decision.skill_name:

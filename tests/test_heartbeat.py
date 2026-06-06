@@ -2585,6 +2585,108 @@ class TestSendHeartbeatMessagePlatformLink:
         history = await memory.get_recent_messages("uid-1", limit=5)
         assert history == []
 
+    async def test_parenthetical_only_content_skips_send(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.link_platform("uid-1", "discord", "snowflake-123")
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.MESSAGE,
+            content="（静かに見守る）",
+            target_user_id="uid-1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._send_heartbeat_message(decision)
+
+        mock_gateway.send_to_adapter.assert_not_awaited()
+
+    async def test_user_cooldown_blocks_repeated_proactive_message(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.link_platform("uid-1", "discord", "snowflake-123")
+        await memory.record_last_seen_channel("uid-1", "discord", "555", False)
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.MESSAGE,
+            content="First message",
+            target_user_id="uid-1",
+            target_adapter_id="discord",
+        )
+
+        await heartbeat._send_heartbeat_message(decision)
+        heartbeat._proactive_messages_sent_this_tick = 0
+        await heartbeat._send_heartbeat_message(decision)
+
+        mock_gateway.send_to_adapter.assert_awaited_once()
+
+    async def test_destination_cooldown_blocks_other_user_in_shared_channel(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        for user_id in ("uid-1", "uid-2"):
+            await memory.link_platform(user_id, "discord", f"snowflake-{user_id}")
+            await memory.record_last_seen_channel(user_id, "discord", "555", False)
+
+        await heartbeat._send_heartbeat_message(
+            HeartbeatDecision(
+                action=HeartbeatAction.MESSAGE,
+                content="First user message",
+                target_user_id="uid-1",
+                target_adapter_id="discord",
+            )
+        )
+        heartbeat._proactive_messages_sent_this_tick = 0
+        await heartbeat._send_heartbeat_message(
+            HeartbeatDecision(
+                action=HeartbeatAction.MESSAGE,
+                content="Second user message",
+                target_user_id="uid-2",
+                target_adapter_id="discord",
+            )
+        )
+
+        mock_gateway.send_to_adapter.assert_awaited_once()
+
+    async def test_tick_message_limit_blocks_burst(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        for user_id, channel_id in (("uid-1", "555"), ("uid-2", "777")):
+            await memory.link_platform(user_id, "discord", f"snowflake-{user_id}")
+            await memory.record_last_seen_channel(
+                user_id,
+                "discord",
+                channel_id,
+                False,
+            )
+
+        await heartbeat._send_heartbeat_message(
+            HeartbeatDecision(
+                action=HeartbeatAction.MESSAGE,
+                content="First user message",
+                target_user_id="uid-1",
+                target_adapter_id="discord",
+            )
+        )
+        await heartbeat._send_heartbeat_message(
+            HeartbeatDecision(
+                action=HeartbeatAction.MESSAGE,
+                content="Second user message",
+                target_user_id="uid-2",
+                target_adapter_id="discord",
+            )
+        )
+
+        mock_gateway.send_to_adapter.assert_awaited_once()
+
 
 class TestSendHeartbeatMessageDmPolicy:
     """``dm_policy`` gates whether the loop may speak proactively.

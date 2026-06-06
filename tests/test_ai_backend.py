@@ -345,6 +345,29 @@ class TestOpenAICompatBackend:
         result = await backend.generate("test")
         assert result == "Answer"
 
+    async def test_generate_does_not_log_inline_thinking_by_default(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cfg = AIBackendConfig(provider="openai_compat")
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [
+                {"message": {"content": "<think>private reasoning</think>\nAnswer"}}
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        result = await backend.generate("test")
+
+        assert result == "Answer"
+        assert "private reasoning" not in caplog.text
+        assert "inline thinking" not in caplog.text
+
     async def test_generate_strips_configured_reasoning_marker_pair(self) -> None:
         cfg = AIBackendConfig(
             provider="openai_compat",

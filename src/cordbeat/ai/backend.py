@@ -404,7 +404,7 @@ class OpenAICompatBackend(AIBackend):
         self._reasoning_strip_markers = _coerce_marker_pairs(
             options.get("reasoning_strip_markers")
         )
-        self._log_reasoning_content = bool(options.get("log_reasoning_content", True))
+        self._log_reasoning_content = bool(options.get("log_reasoning_content", False))
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
@@ -646,7 +646,7 @@ class OpenAICompatBackend(AIBackend):
                 think_blocks = re.findall(
                     r"<think>(.*?)</think>", raw_content, flags=re.DOTALL
                 )
-                if think_blocks:
+                if think_blocks and self._log_reasoning_content:
                     combined_thinking = "\n---\n".join(think_blocks)
                     logger.debug(
                         "openai_compat inline thinking (%d chars):\n%.2000s",

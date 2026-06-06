@@ -57,7 +57,7 @@ ai_backend:
   #                          # <think> only for voice messages (VC / audio).
   #                          # Falls back to enable_thinking when unset.
   #   reasoning_content_keys: ["reasoning_content"]  # debug-log these fields only
-  #   log_reasoning_content: true                    # DEBUG logs only
+  #   log_reasoning_content: false                   # opt in for DEBUG logs only
   #   reasoning_strip_tags: ["think"]                # strip <tag>...</tag> leaks
   #   # For non-XML reasoning markers from other servers:
   #   # reasoning_strip_markers:

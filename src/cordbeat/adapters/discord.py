@@ -33,6 +33,10 @@ _MAX_IMAGES_PER_MESSAGE = 4
 _IMAGE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024
 _AUDIO_SIZE_LIMIT_BYTES = 25 * 1024 * 1024
 _DISCORD_MESSAGE_LIMIT = 2000
+_REQUIRED_VOICE_PERMISSIONS = (
+    ("view_channel", "View Channel"),
+    ("connect", "Connect"),
+)
 _CORE_SLASH_COMMAND_NAMES = (
     "approve",
     "reject",
@@ -857,13 +861,31 @@ class DiscordAdapter(RetryableConnection):
 
         channel = voice_state.channel
         guild_id: int = interaction.guild_id
+        guild = getattr(interaction, "guild", None)
+        bot_member = getattr(guild, "me", None)
+        if bot_member is not None:
+            permissions = channel.permissions_for(bot_member)
+            missing_permissions = [
+                label
+                for attribute, label in _REQUIRED_VOICE_PERMISSIONS
+                if not getattr(permissions, attribute, False)
+            ]
+            if missing_permissions:
+                missing = ", ".join(f"**{name}**" for name in missing_permissions)
+                await interaction.response.send_message(
+                    f"❌ I need the {missing} permission(s) in **{channel.name}**.",
+                    ephemeral=True,
+                )
+                return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
 
         try:
             from discord.ext.voice_recv import (
                 VoiceRecvClient,  # type: ignore[import-not-found]
             )
         except ImportError:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Voice receive support is not installed "
                 "(run `uv sync --extra discord` to reinstall with voice support).",
                 ephemeral=True,
@@ -874,9 +896,17 @@ class DiscordAdapter(RetryableConnection):
 
         try:
             vc = await channel.connect(cls=VoiceRecvClient)
+        except TimeoutError:
+            logger.exception("Timed out connecting to voice channel %s", channel)
+            await interaction.followup.send(
+                "❌ Timed out joining the voice channel. Check that the bot has "
+                "**View Channel** and **Connect** permissions.",
+                ephemeral=True,
+            )
+            return
         except Exception:
             logger.exception("Failed to connect to voice channel %s", channel)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Failed to join the voice channel.", ephemeral=True
             )
             return
@@ -890,7 +920,7 @@ class DiscordAdapter(RetryableConnection):
         await receiver.start()
         self._vc_receivers[guild_id] = receiver
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ Joined **{channel.name}**. Listening…", ephemeral=True
         )
         logger.info("Joined VC guild=%d channel=%s", guild_id, channel.name)

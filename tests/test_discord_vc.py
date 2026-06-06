@@ -427,8 +427,9 @@ class TestSlashCommands:
         interaction = MagicMock()
         interaction.user.voice.channel = MagicMock()
         interaction.guild_id = 123
+        interaction.guild = None
         interaction.response = AsyncMock()
-        interaction.response.send_message = AsyncMock()
+        interaction.followup = AsyncMock()
 
         with patch.dict(
             "sys.modules",
@@ -444,7 +445,62 @@ class TestSlashCommands:
             with patch("builtins.__import__", side_effect=mock_import):
                 await adapter._handle_join(interaction)
 
-        interaction.response.send_message.assert_called()
+        interaction.response.defer.assert_awaited_once_with(
+            ephemeral=True, thinking=True
+        )
+        interaction.followup.send.assert_awaited_once()
+
+    async def test_handle_join_reports_missing_voice_permissions(self) -> None:
+        adapter = self._make_adapter()
+        channel = MagicMock()
+        channel.name = "Private VC"
+        permissions = MagicMock()
+        permissions.view_channel = False
+        permissions.connect = True
+        channel.permissions_for.return_value = permissions
+
+        interaction = MagicMock()
+        interaction.user.voice.channel = channel
+        interaction.guild_id = 123
+        interaction.guild.me = MagicMock()
+        interaction.response = AsyncMock()
+
+        await adapter._handle_join(interaction)
+
+        interaction.response.defer.assert_not_awaited()
+        interaction.response.send_message.assert_awaited_once()
+        message: str = interaction.response.send_message.call_args.args[0]
+        assert "View Channel" in message
+        channel.connect.assert_not_called()
+
+    async def test_handle_join_defers_then_reports_timeout(self) -> None:
+        adapter = self._make_adapter()
+        channel = MagicMock()
+        channel.name = "Voice"
+        permissions = MagicMock()
+        permissions.view_channel = True
+        permissions.connect = True
+        channel.permissions_for.return_value = permissions
+        channel.connect = AsyncMock(side_effect=TimeoutError)
+
+        interaction = MagicMock()
+        interaction.user.voice.channel = channel
+        interaction.guild_id = 123
+        interaction.guild.me = MagicMock()
+        interaction.response = AsyncMock()
+        interaction.followup = AsyncMock()
+
+        voice_recv_module = MagicMock()
+        voice_recv_module.VoiceRecvClient = MagicMock()
+        with patch.dict("sys.modules", {"discord.ext.voice_recv": voice_recv_module}):
+            await adapter._handle_join(interaction)
+
+        interaction.response.defer.assert_awaited_once_with(
+            ephemeral=True, thinking=True
+        )
+        interaction.followup.send.assert_awaited_once()
+        message: str = interaction.followup.send.call_args.args[0]
+        assert "Timed out" in message
 
     async def test_handle_leave_cleans_up(self) -> None:
         adapter = self._make_adapter()

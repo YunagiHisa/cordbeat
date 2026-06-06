@@ -86,7 +86,7 @@ class WhisperLocalSTT(STTBackend):
             if self._model is None:
                 self._model = WhisperModel(self._model_size, device="cpu")
 
-            with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as f:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 f.write(audio_bytes)
                 tmp_path = f.name
             try:
@@ -118,7 +118,7 @@ class WhisperOpenAISTT(STTBackend):
         data: dict[str, str] = {"model": self._model}
         if lang:
             data["language"] = lang
-        files = {"file": ("audio.ogg", audio_bytes, "audio/ogg")}
+        files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
@@ -156,7 +156,7 @@ class OpenAICompatSTT(STTBackend):
         data: dict[str, str] = {"model": self._model}
         if lang:
             data["language"] = lang
-        files = {"file": ("audio.ogg", audio_bytes, "audio/ogg")}
+        files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(

@@ -290,8 +290,8 @@ class DiscordAdapter(RetryableConnection):
     ) -> None:
         guild_id = self._vc_user_guild.get(platform_user_id)
         if guild_id is not None and guild_id in self._vc_receivers:
-            await self._speak_in_vc(guild_id, content)
-            return
+            if await self._speak_in_vc(guild_id, content):
+                return
         await self._send_to_discord(
             platform_user_id, content, images, metadata=metadata
         )
@@ -817,27 +817,27 @@ class DiscordAdapter(RetryableConnection):
         except Exception:
             logger.exception("Failed to forward VC speech to Core")
 
-    async def _speak_in_vc(self, guild_id: int, text: str) -> None:
+    async def _speak_in_vc(self, guild_id: int, text: str) -> bool:
         """Synthesise *text* to audio and play it in the guild's voice channel."""
         if not self._tts or not self._bot:
-            return
+            return False
 
         guild = self._bot.get_guild(guild_id)
         if guild is None:
-            return
+            return False
 
         vc = guild.voice_client
         if not vc or not vc.is_connected():
-            return
+            return False
 
         try:
             audio = await self._tts.synthesize(text)
         except Exception:
             logger.exception("TTS synthesis failed for VC guild %d", guild_id)
-            return
+            return False
 
         if not audio:
-            return
+            return False
 
         try:
             import discord
@@ -846,8 +846,23 @@ class DiscordAdapter(RetryableConnection):
             if vc.is_playing():
                 vc.stop()
             vc.play(source)
+            return True
         except Exception:
             logger.exception("Failed to play TTS audio in VC guild %d", guild_id)
+            return False
+
+    def _voice_join_message(self, channel_name: str) -> str:
+        if self._stt is None:
+            return (
+                f"⚠️ Joined **{channel_name}**, but STT is disabled. "
+                "I can receive audio packets but cannot understand speech."
+            )
+        if self._tts is None:
+            return (
+                f"✅ Joined **{channel_name}**. Listening… "
+                "TTS is disabled, so replies will be sent as text."
+            )
+        return f"✅ Joined **{channel_name}**. Listening and ready to talk."
 
     async def _handle_join(self, interaction: Any) -> None:
         """Slash command: join the user's voice channel."""
@@ -921,7 +936,7 @@ class DiscordAdapter(RetryableConnection):
         self._vc_receivers[guild_id] = receiver
 
         await interaction.followup.send(
-            f"✅ Joined **{channel.name}**. Listening…", ephemeral=True
+            self._voice_join_message(channel.name), ephemeral=True
         )
         logger.info("Joined VC guild=%d channel=%s", guild_id, channel.name)
 

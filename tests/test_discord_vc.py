@@ -320,10 +320,25 @@ class TestDiscordAdapterVC:
         adapter = self._make_adapter()
         adapter._vc_user_guild["42"] = 999
         adapter._vc_receivers[999] = MagicMock()
-        adapter._speak_in_vc = AsyncMock()  # type: ignore[method-assign]
+        adapter._speak_in_vc = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        adapter._send_to_discord = AsyncMock()  # type: ignore[method-assign]
 
         await adapter._dispatch_core_message("42", "hello from core", [])
         adapter._speak_in_vc.assert_called_once_with(999, "hello from core")
+        adapter._send_to_discord.assert_not_called()
+
+    async def test_dispatch_falls_back_to_text_when_tts_unavailable(self) -> None:
+        adapter = self._make_adapter()
+        adapter._vc_user_guild["42"] = 999
+        adapter._vc_receivers[999] = MagicMock()
+        adapter._speak_in_vc = AsyncMock(return_value=False)  # type: ignore[method-assign]
+        adapter._send_to_discord = AsyncMock()  # type: ignore[method-assign]
+
+        await adapter._dispatch_core_message("42", "hello from core", [])
+
+        adapter._send_to_discord.assert_called_once_with(
+            "42", "hello from core", [], metadata=None
+        )
 
     async def test_dispatch_falls_through_to_text_when_no_vc(self) -> None:
         adapter = self._make_adapter()
@@ -337,21 +352,20 @@ class TestDiscordAdapterVC:
     async def test_speak_in_vc_no_tts(self) -> None:
         adapter = self._make_adapter()
         adapter._tts = None
-        # Should return silently
-        await adapter._speak_in_vc(111, "test")
+        assert await adapter._speak_in_vc(111, "test") is False
 
     async def test_speak_in_vc_no_bot(self) -> None:
         adapter = self._make_adapter()
         adapter._tts = AsyncMock()
         adapter._bot = None
-        await adapter._speak_in_vc(111, "test")
+        assert await adapter._speak_in_vc(111, "test") is False
 
     async def test_speak_in_vc_guild_not_found(self) -> None:
         adapter = self._make_adapter()
         adapter._tts = AsyncMock()
         adapter._bot = MagicMock()
         adapter._bot.get_guild.return_value = None
-        await adapter._speak_in_vc(111, "test")
+        assert await adapter._speak_in_vc(111, "test") is False
         adapter._tts.synthesize.assert_not_called()
 
     async def test_speak_in_vc_not_connected(self) -> None:
@@ -361,7 +375,7 @@ class TestDiscordAdapterVC:
         guild_mock.voice_client = None
         adapter._bot = MagicMock()
         adapter._bot.get_guild.return_value = guild_mock
-        await adapter._speak_in_vc(111, "test")
+        assert await adapter._speak_in_vc(111, "test") is False
         adapter._tts.synthesize.assert_not_called()
 
     async def test_speak_in_vc_plays_audio(self) -> None:
@@ -388,14 +402,24 @@ class TestDiscordAdapterVC:
         old = sys.modules.get("discord")
         sys.modules["discord"] = discord_mock
         try:
-            await adapter._speak_in_vc(111, "hello")
+            result = await adapter._speak_in_vc(111, "hello")
         finally:
             if old is None:
                 sys.modules.pop("discord", None)
             else:
                 sys.modules["discord"] = old
 
+        assert result is True
         vc_mock.play.assert_called_once_with(ffmpeg_source)
+
+    def test_voice_join_message_reports_disabled_stt(self) -> None:
+        adapter = self._make_adapter()
+        assert "STT is disabled" in adapter._voice_join_message("Voice")
+
+    def test_voice_join_message_reports_text_fallback_without_tts(self) -> None:
+        adapter = self._make_adapter()
+        adapter._stt = MagicMock()
+        assert "replies will be sent as text" in adapter._voice_join_message("Voice")
 
 
 # ---------------------------------------------------------------------------

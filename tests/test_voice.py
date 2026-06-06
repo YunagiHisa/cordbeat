@@ -123,6 +123,9 @@ async def test_whisper_openai_stt_transcribes() -> None:
         result = await stt.transcribe(b"fake_audio", language="en")
 
     assert result == "hello world"
+    files = mock_client.post.call_args.kwargs["files"]
+    assert files["file"][0] == "audio.wav"
+    assert files["file"][2] == "audio/wav"
 
 
 async def test_whisper_openai_stt_uses_configured_api_model() -> None:
@@ -198,6 +201,9 @@ async def test_openai_compat_stt_transcribes() -> None:
         result = await stt.transcribe(b"audio")
 
     assert result == "transcribed text"
+    files = mock_client.post.call_args.kwargs["files"]
+    assert files["file"][0] == "audio.wav"
+    assert files["file"][2] == "audio/wav"
 
 
 async def test_openai_compat_stt_uses_configured_api_model() -> None:

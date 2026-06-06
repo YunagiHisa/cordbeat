@@ -123,6 +123,8 @@ memory:
   chain_link_episode_results: 5        # today's episodes for chain link building
   chain_link_related_results: 3        # related memories per episode for chain linking
   recall_keyword_search_results: 2     # results per recall keyword search
+  voice_recall_keywords_enabled: false # run extra LLM recall before voice replies
+  voice_memory_extraction_enabled: false # run emotion/memory LLM calls after voice replies
   emotion_recall_search_results: 2     # results for emotion-based recall
   chain_recall_max_depth: 2            # max depth for chain recall traversal
   recall_hints_limit: 20               # max recall hints per user

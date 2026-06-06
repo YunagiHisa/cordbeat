@@ -89,6 +89,20 @@ class TestLoadConfig:
         # Relative paths are resolved against the config file's directory
         assert config.memory.sqlite_path == str((tmp_path / "custom.db").resolve())
         assert config.memory.decay_rate == 0.5
+        assert config.memory.voice_recall_keywords_enabled is False
+        assert config.memory.voice_memory_extraction_enabled is False
+
+    def test_voice_memory_latency_options(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "memory:\n"
+            "  voice_recall_keywords_enabled: true\n"
+            "  voice_memory_extraction_enabled: true\n",
+            encoding="utf-8",
+        )
+        config = load_config(cfg_file)
+        assert config.memory.voice_recall_keywords_enabled is True
+        assert config.memory.voice_memory_extraction_enabled is True
 
     def test_ai_backend_config(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.yaml"

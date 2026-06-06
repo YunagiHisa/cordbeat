@@ -287,6 +287,62 @@ class TestCoreEngine:
         msgs = await memory.get_recent_messages(user_id)
         assert len(msgs) == 2
 
+    async def test_voice_message_skips_optional_llm_memory_calls(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="voice-user",
+            content="聞こえる？",
+            is_voice=True,
+            metadata={"guild_id": "123", "channel_id": "vc", "is_dm": False},
+        )
+
+        await engine.handle_message(msg)
+        await engine.drain()
+
+        assert mock_ai.generate.await_count == 1
+        user_id = await memory.resolve_user("discord", "voice-user")
+        assert user_id is not None
+        assert len(await memory.get_recent_messages(user_id)) == 2
+
+    async def test_voice_message_can_enable_optional_llm_memory_calls(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+        mock_ai: AsyncMock,
+    ) -> None:
+        engine = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=skills,
+            gateway=mock_gateway,
+            memory_config=MemoryConfig(
+                voice_recall_keywords_enabled=True,
+                voice_memory_extraction_enabled=True,
+            ),
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="voice-user",
+            content="覚えてる？",
+            is_voice=True,
+            metadata={"guild_id": "123", "channel_id": "vc", "is_dm": False},
+        )
+
+        await engine.handle_message(msg)
+        await engine.drain()
+
+        assert mock_ai.generate.await_count == 4
+
     async def test_post_process_sanitizes_reasoning_response(
         self,
         engine: CoreEngine,

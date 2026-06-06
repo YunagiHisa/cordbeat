@@ -9,6 +9,7 @@ import json
 import logging
 from collections import OrderedDict
 from datetime import UTC, datetime
+from time import monotonic
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -786,11 +787,21 @@ class DiscordAdapter(RetryableConnection):
             logger.debug("STT not configured; ignoring VC speech")
             return
 
+        started_at = monotonic()
         try:
             transcribed = await self._stt.transcribe(wav_data)
         except Exception:
             logger.exception("STT transcription error for VC user %d", user_id)
             return
+        logger.debug(
+            "VC STT completed guild=%d user=%d audio_bytes=%d text_chars=%d "
+            "elapsed=%.3fs",
+            guild_id,
+            user_id,
+            len(wav_data),
+            len(transcribed or ""),
+            monotonic() - started_at,
+        )
 
         if not transcribed or not transcribed.strip():
             return
@@ -830,11 +841,19 @@ class DiscordAdapter(RetryableConnection):
         if not vc or not vc.is_connected():
             return False
 
+        started_at = monotonic()
         try:
             audio = await self._tts.synthesize(text)
         except Exception:
             logger.exception("TTS synthesis failed for VC guild %d", guild_id)
             return False
+        logger.debug(
+            "VC TTS completed guild=%d text_chars=%d audio_bytes=%d elapsed=%.3fs",
+            guild_id,
+            len(text),
+            len(audio or b""),
+            monotonic() - started_at,
+        )
 
         if not audio:
             return False

@@ -170,6 +170,7 @@ class CoreEngine:
         self._timezone_name = timezone_name
         self._extractor = MemoryExtractor(ai, soul, memory, self._memory_config)
         self._background_tasks: set[asyncio.Task[None]] = set()
+        self._post_process_lock = asyncio.Lock()
 
     async def handle_message(self, message: GatewayMessage) -> None:
         """Handle a single incoming message from the queue."""
@@ -398,10 +399,16 @@ class CoreEngine:
             n_results=self._memory_config.memory_search_results,
         )
 
-        # Phase 2: Context inference recall (AI extracts keywords → search)
-        recall_keywords = await self._extractor.extract_recall_keywords(
-            message.content, history or None
-        )
+        # Phase 2: Context inference recall (AI extracts keywords → search).
+        # Voice replies skip this extra LLM round-trip by default to preserve
+        # conversational latency; direct vector and history recall still run.
+        recall_keywords: list[str] = []
+        if not message.is_voice or self._memory_config.voice_recall_keywords_enabled:
+            recall_keywords = await self._extractor.extract_recall_keywords(
+                message.content, history or None
+            )
+        else:
+            logger.debug("Skipping LLM recall-keyword extraction for voice message")
         seen_ids = {m["id"] for m in semantic_memories + episodic_memories}
         for keyword in recall_keywords:
             for mem in await self._memory.search_semantic(
@@ -582,12 +589,24 @@ class CoreEngine:
                 channel_id=channel_id,
                 is_dm=is_dm,
             )
-            await self._extractor.infer_and_update_emotion(
-                user_id, message.content, stored_response
-            )
-            await self._extractor.extract_and_store_memories(
-                user_id, user.display_name, message.content, stored_response
-            )
+            if (
+                message.is_voice
+                and not self._memory_config.voice_memory_extraction_enabled
+            ):
+                logger.debug(
+                    "Stored voice conversation without LLM emotion/memory extraction"
+                )
+                return
+
+            # Background tasks from rapid messages must not fan out into
+            # concurrent calls against a single local LLM server.
+            async with self._post_process_lock:
+                await self._extractor.infer_and_update_emotion(
+                    user_id, message.content, stored_response
+                )
+                await self._extractor.extract_and_store_memories(
+                    user_id, user.display_name, message.content, stored_response
+                )
         except Exception:
             logger.exception("Background post-processing failed for user %s", user_id)
 

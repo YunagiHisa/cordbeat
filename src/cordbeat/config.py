@@ -84,6 +84,8 @@ class MemoryConfig:
     chain_link_episode_results: int = 5
     chain_link_related_results: int = 3
     recall_keyword_search_results: int = 2
+    voice_recall_keywords_enabled: bool = False
+    voice_memory_extraction_enabled: bool = False
     emotion_recall_search_results: int = 2
     chain_recall_max_depth: int = 2
     recall_hints_limit: int = 20

@@ -70,6 +70,7 @@ _DRAW_CONTENT_OPCODES = _DRAW_SAFE_OPCODES - {"SIZE", "CANVAS", "OUTPUT"}
 _DRAW_MAX_AUTO_LINES = 80
 _DRAW_MAX_SIMPLE_DESCRIPTION_CHARS = 120
 _DRAW_MAX_SIMPLE_DESCRIPTION_WORDS = 16
+_DRAW_MAX_AUTO_ATTEMPTS = 3
 
 # Pattern for inline skill-invocation tags.
 # Example: [SKILL: web_search | query=latest AI news]
@@ -985,18 +986,19 @@ class CoreEngine:
                 description,
             )
             limitation = (
-                "⚠️ I skipped the drawing attachment because Draw only supports "
+                "⚠️ I couldn't attach a drawing because Draw only supports "
                 "simple vector-style DSL sketches, not complex image-generation "
-                "prompts."
+                "prompts. Please ask for a simpler sketch, diagram, icon, or "
+                "geometric drawing."
             )
-            return f"{clean_text}\n\n{limitation}".strip(), []
+            return limitation, []
 
         skill = self._skills.get("draw")
         if skill is None:
             return clean_text, []
 
         retry_reason: str | None = None
-        for attempt in range(2):
+        for attempt in range(_DRAW_MAX_AUTO_ATTEMPTS):
             raw_dsl = await self._generate_draw_dsl(
                 description,
                 retry_reason=retry_reason,
@@ -1014,18 +1016,34 @@ class CoreEngine:
                 )
                 continue
 
-            output = await self._execute_auto_draw(
+            output, result = await self._execute_auto_draw(
                 skill,
                 dsl,
                 description=description,
                 source=source,
             )
             if output:
-                return clean_text, [output]
+                review_reason = await self._review_auto_draw(
+                    description=description,
+                    dsl=dsl,
+                    image_b64=output,
+                    warnings=result.get("warnings") if isinstance(result, dict) else [],
+                )
+                if not review_reason:
+                    return clean_text, [output]
+                retry_reason = review_reason
+                logger.info(
+                    "Auto-draw review requested retry "
+                    "(source=%s, description=%r, reason=%s)",
+                    source,
+                    description,
+                    retry_reason,
+                )
+                continue
             retry_reason = "previous Draw DSL executed but produced no image"
 
         failure_note = "⚠️ Drawing failed, so I couldn't attach an image."
-        return f"{clean_text}\n\n{failure_note}".strip(), []
+        return failure_note, []
 
     async def _execute_auto_draw(
         self,
@@ -1034,8 +1052,8 @@ class CoreEngine:
         *,
         description: str,
         source: str,
-    ) -> str:
-        """Execute Draw DSL for auto-draw and return a base64 image if present."""
+    ) -> tuple[str, dict[str, Any]]:
+        """Execute Draw DSL for auto-draw and return (base64 image, raw result)."""
 
         try:
             result = await skill.execute({"commands": dsl}, memory=self._memory)
@@ -1047,7 +1065,7 @@ class CoreEngine:
                 description,
                 len(dsl),
             )
-            return ""
+            return "", {"error": "skill execution failed"}
 
         if not isinstance(result, dict):
             logger.warning(
@@ -1057,7 +1075,7 @@ class CoreEngine:
                 description,
                 result,
             )
-            return ""
+            return "", {"error": "non-dict skill result"}
 
         output = result.get("output")
         if isinstance(output, str) and output and "error" not in result:
@@ -1069,7 +1087,7 @@ class CoreEngine:
                     description,
                     warnings,
                 )
-            return output
+            return output, result
 
         logger.warning(
             "Auto-draw produced no image "
@@ -1080,7 +1098,85 @@ class CoreEngine:
             result.get("warnings"),
             len(dsl),
         )
-        return ""
+        return "", result
+
+    async def _review_auto_draw(
+        self,
+        *,
+        description: str,
+        dsl: str,
+        image_b64: str,
+        warnings: Any,
+    ) -> str | None:
+        """Return a retry reason when the rendered Draw image should be redone."""
+
+        severe_warnings = [
+            str(w)
+            for w in warnings or []
+            if any(
+                marker in str(w).lower()
+                for marker in (
+                    "unknown command",
+                    "requires",
+                    "error",
+                    "invalid",
+                    "raised",
+                )
+            )
+        ]
+        if severe_warnings:
+            return (
+                "previous Draw DSL rendered with execution warnings: "
+                f"{sanitize('; '.join(severe_warnings), strict=True, max_len=180)}"
+            )
+
+        if not self._vision_enabled:
+            return None
+
+        system = (
+            "/no_think\n"
+            "You review simple Draw DSL renderings. Return ONLY compact JSON: "
+            '{"verdict":"pass"} or {"verdict":"retry","reason":"short reason"}. '
+            "Retry only when the image is blank, broken, unreadable, or clearly "
+            "does not match the requested simple drawing. Do not request style "
+            "polish or complex image-generation details."
+        )
+        prompt = (
+            "Requested drawing:\n"
+            f"{sanitize(description, max_len=300)}\n\n"
+            "Draw DSL used:\n"
+            f"{sanitize(dsl, strict=True, max_len=1400)}\n\n"
+            "Check whether the attached image is an acceptable simple "
+            "vector-style rendering of the request."
+        )
+        try:
+            raw = await self._ai.generate_with_vision(
+                prompt=prompt,
+                images=[image_b64],
+                system=system,
+                temperature=0.0,
+                max_tokens=160,
+            )
+        except Exception:
+            logger.warning(
+                "Auto-draw vision review failed; accepting image",
+                exc_info=True,
+            )
+            return None
+
+        cleaned = sanitize_reasoning_artifacts(raw).strip()
+        try:
+            review = json.loads(cleaned)
+        except json.JSONDecodeError:
+            if "retry" not in cleaned.lower():
+                return None
+            return "vision review requested retry"
+
+        verdict = str(review.get("verdict", "")).strip().lower()
+        if verdict != "retry":
+            return None
+        reason = str(review.get("reason") or "vision review requested retry")
+        return sanitize(reason, strict=True, max_len=180)
 
     async def _generate_draw_dsl(
         self,

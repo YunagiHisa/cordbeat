@@ -2604,6 +2604,101 @@ class TestAutoDraw:
         retry_prompt = mock_ai.generate.await_args.kwargs["prompt"]
         assert "Previous attempt failed" in retry_prompt
 
+    async def test_maybe_draw_retries_when_draw_result_has_severe_warning(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Rendered images with serious Draw warnings are regenerated."""
+        from unittest.mock import MagicMock
+
+        mock_skill = MagicMock()
+        mock_skill.execute = AsyncMock(
+            side_effect=[
+                {
+                    "output": "warnedimgdata",
+                    "warnings": ["Line 2: unknown command 'BAD'"],
+                },
+                {"output": "cleanimgdata", "warnings": []},
+            ]
+        )
+
+        fake_skills = MagicMock()
+        fake_skills.get = lambda name: mock_skill if name == "draw" else None
+        mock_ai.generate = AsyncMock(
+            side_effect=[
+                "SIZE 400 400\nCANVAS white\nBAD command\nCIRCLE 200 200 80 red",
+                "SIZE 400 400\nCANVAS white\nCIRCLE 200 200 80 red",
+            ]
+        )
+
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=fake_skills,
+            gateway=mock_gateway,
+        )
+        text, images = await eng._maybe_draw("Here [DRAW: a red circle]")
+
+        assert "[DRAW:" not in text
+        assert images == ["cleanimgdata"]
+        assert mock_ai.generate.await_count == 2
+        retry_prompt = mock_ai.generate.await_args.kwargs["prompt"]
+        assert "execution warnings" in retry_prompt
+
+    async def test_maybe_draw_uses_vision_review_to_retry(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Vision review can reject a rendered image and trigger regeneration."""
+        from unittest.mock import MagicMock
+
+        mock_skill = MagicMock()
+        mock_skill.execute = AsyncMock(
+            side_effect=[
+                {"output": "wrongimgdata", "warnings": []},
+                {"output": "goodimgdata", "warnings": []},
+            ]
+        )
+
+        fake_skills = MagicMock()
+        fake_skills.get = lambda name: mock_skill if name == "draw" else None
+        mock_ai.generate = AsyncMock(
+            side_effect=[
+                "SIZE 400 400\nCANVAS white\nRECT 20 20 120 120 blue FILL",
+                "SIZE 400 400\nCANVAS white\nCIRCLE 200 200 80 red FILL",
+            ]
+        )
+        mock_ai.generate_with_vision = AsyncMock(
+            side_effect=[
+                '{"verdict":"retry","reason":"image shows a blue square"}',
+                '{"verdict":"pass"}',
+            ]
+        )
+
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=fake_skills,
+            gateway=mock_gateway,
+            vision_enabled=True,
+        )
+        text, images = await eng._maybe_draw("Here [DRAW: a red circle]")
+
+        assert "[DRAW:" not in text
+        assert images == ["goodimgdata"]
+        assert mock_ai.generate.await_count == 2
+        assert mock_ai.generate_with_vision.await_count == 2
+        retry_prompt = mock_ai.generate.await_args.kwargs["prompt"]
+        assert "blue square" in retry_prompt
+
     async def test_maybe_draw_skill_error_falls_back(
         self,
         mock_ai: AsyncMock,

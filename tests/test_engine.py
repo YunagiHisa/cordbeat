@@ -2455,6 +2455,41 @@ class TestAutoDraw:
         mock_ai.generate.assert_not_awaited()
         mock_skill.execute.assert_not_awaited()
 
+    async def test_maybe_draw_handles_malformed_a_draw_tag(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Malformed ``[A DRAW: ...]`` tags are stripped and guarded too."""
+        from unittest.mock import MagicMock
+
+        mock_skill = MagicMock()
+        mock_skill.execute = AsyncMock(return_value={"output": "base64imgdata"})
+
+        fake_skills = MagicMock()
+        fake_skills.get = lambda name: mock_skill if name == "draw" else None
+
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=fake_skills,
+            gateway=mock_gateway,
+        )
+        text, images = await eng._maybe_draw(
+            "[A DRAW: A simple vector drawing of a cute Nara deer sitting down, "
+            "with a small hat on its head, on a green grassy background]\n\n"
+            "I drew a cute deer."
+        )
+
+        assert "[A DRAW:" not in text
+        assert images == []
+        assert "image-generation prompts" in text
+        mock_ai.generate.assert_not_awaited()
+        mock_skill.execute.assert_not_awaited()
+
     async def test_maybe_draw_appends_output_to_truncated_dsl(
         self,
         mock_ai: AsyncMock,

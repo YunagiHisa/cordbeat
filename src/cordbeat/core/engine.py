@@ -41,8 +41,11 @@ from .gateway import GatewayServer
 logger = logging.getLogger(__name__)
 
 # Pattern for inline draw-intent tags the AI may emit in chat responses.
-# Example: [DRAW: a red circle on a white background]
-_DRAW_TAG_RE = re.compile(r"\[DRAW:\s*(.+?)\]", re.DOTALL | re.IGNORECASE)
+# Examples: [DRAW: a red circle], [A DRAW: a red circle]
+_DRAW_TAG_RE = re.compile(
+    r"\[(?:A\s+)?DRAW:\s*(.+?)\]",
+    re.DOTALL | re.IGNORECASE,
+)
 
 _DRAW_SAFE_OPCODES = frozenset(
     {

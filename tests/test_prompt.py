@@ -36,6 +36,12 @@ class TestSanitize:
         )
         assert result == "I'll draw it."
 
+    def test_sanitize_tool_artifacts_strips_malformed_a_draw_tags(self) -> None:
+        result = sanitize_tool_artifacts(
+            "Reply [A DRAW: A simple vector drawing with prompt-like details]"
+        )
+        assert result == "Reply"
+
 
 class TestBuildSoulSystemPrompt:
     def test_includes_name_and_traits(self) -> None:

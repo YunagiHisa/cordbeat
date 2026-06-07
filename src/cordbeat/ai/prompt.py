@@ -14,7 +14,10 @@ _SANITIZE_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 # Stricter pattern that also strips # and newlines (for embedded user data)
 _SANITIZE_STRICT_RE = re.compile(r"[#\n\r\x00-\x1f]")
-_DRAW_TAG_RE = re.compile(r"\[DRAW:\s*.*?(?:\]|$)", re.DOTALL | re.IGNORECASE)
+_DRAW_TAG_RE = re.compile(
+    r"\[(?:A\s+)?DRAW:\s*.*?(?:\]|$)",
+    re.DOTALL | re.IGNORECASE,
+)
 _SKILL_TAG_RE = re.compile(r"\[SKILL:\s*.*?(?:\]|$)", re.DOTALL | re.IGNORECASE)
 
 MAX_USER_INPUT_LEN = 2000

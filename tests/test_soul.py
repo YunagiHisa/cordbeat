@@ -30,12 +30,12 @@ class TestSoul:
     def test_persistence(self, tmp_path: Path) -> None:
         soul_dir = tmp_path / "soul"
         soul = Soul(soul_dir)
-        soul.update_name("テスト", caller=SoulCaller.USER)
+        soul.update_name("Test", caller=SoulCaller.USER)
         soul.update_emotion(Emotion.EXCITEMENT, 0.8, caller=SoulCaller.AI)
 
         # Reload
         soul2 = Soul(soul_dir)
-        assert soul2.name == "テスト"
+        assert soul2.name == "Test"
         assert soul2.emotion.primary == Emotion.EXCITEMENT
 
     def test_trait_proposal(self, tmp_path: Path) -> None:

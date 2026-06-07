@@ -7,7 +7,8 @@ import base64
 import io
 import json
 import logging
-from collections import OrderedDict
+import uuid
+from collections import OrderedDict, deque
 from datetime import UTC, datetime
 from time import monotonic
 from typing import TYPE_CHECKING, Any
@@ -34,6 +35,11 @@ _MAX_IMAGES_PER_MESSAGE = 4
 _IMAGE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024
 _AUDIO_SIZE_LIMIT_BYTES = 25 * 1024 * 1024
 _DISCORD_MESSAGE_LIMIT = 2000
+_VC_BUFFER_MAX_FRAGMENTS = 5
+_VC_CONTEXT_MAX_LINES_DEFAULT = 8
+_VC_FOLLOWUP_SECONDS_DEFAULT = 20.0
+_VC_PENDING_TIMEOUT_SECONDS_DEFAULT = 120.0
+_VC_WAKE_WORDS_DEFAULT = ("cordbeat",)
 _REQUIRED_VOICE_PERMISSIONS = (
     ("view_channel", "View Channel"),
     ("connect", "Connect"),
@@ -49,6 +55,34 @@ _CORE_SLASH_COMMAND_NAMES = (
     "prefer",
     "draw",
 )
+
+
+def _bounded_float_option(
+    options: dict[str, Any],
+    key: str,
+    default: float,
+    *,
+    minimum: float,
+) -> float:
+    try:
+        return max(minimum, float(options.get(key, default)))
+    except (TypeError, ValueError):
+        logger.warning("Invalid Discord option %s; using %s", key, default)
+        return default
+
+
+def _bounded_int_option(
+    options: dict[str, Any],
+    key: str,
+    default: int,
+    *,
+    minimum: int,
+) -> int:
+    try:
+        return max(minimum, int(options.get(key, default)))
+    except (TypeError, ValueError):
+        logger.warning("Invalid Discord option %s; using %s", key, default)
+        return default
 
 
 class DiscordAdapter(RetryableConnection):
@@ -83,6 +117,41 @@ class DiscordAdapter(RetryableConnection):
         self._vc_receivers: dict[int, Any] = {}
         self._vc_muted: set[int] = set()
         self._vc_user_guild: dict[str, int] = {}
+        self._vc_pending_guilds: set[int] = set()
+        self._vc_pending_since: dict[int, float] = {}
+        self._vc_buffered_speech: dict[int, list[str]] = {}
+        self._vc_room_context: dict[int, deque[str]] = {}
+        self._vc_followup_until: dict[int, float] = {}
+        self._vc_session_ids: dict[int, str] = {}
+        raw_wake_words = config.options.get("vc_wake_words", _VC_WAKE_WORDS_DEFAULT)
+        if isinstance(raw_wake_words, str):
+            raw_wake_words = [raw_wake_words]
+        elif not isinstance(raw_wake_words, (list, tuple, set)):
+            logger.warning("Invalid Discord option vc_wake_words; using defaults")
+            raw_wake_words = _VC_WAKE_WORDS_DEFAULT
+        self._vc_wake_words = tuple(
+            str(word).strip().casefold()
+            for word in raw_wake_words
+            if str(word).strip()
+        ) or _VC_WAKE_WORDS_DEFAULT
+        self._vc_followup_seconds = _bounded_float_option(
+            config.options,
+            "vc_followup_seconds",
+            _VC_FOLLOWUP_SECONDS_DEFAULT,
+            minimum=0.0,
+        )
+        self._vc_context_max_lines = _bounded_int_option(
+            config.options,
+            "vc_context_max_lines",
+            _VC_CONTEXT_MAX_LINES_DEFAULT,
+            minimum=1,
+        )
+        self._vc_pending_timeout_seconds = _bounded_float_option(
+            config.options,
+            "vc_pending_timeout_seconds",
+            _VC_PENDING_TIMEOUT_SECONDS_DEFAULT,
+            minimum=1.0,
+        )
 
         self._stt: STTBackend | None = None
         self._tts: TTSBackend | None = None
@@ -269,6 +338,24 @@ class DiscordAdapter(RetryableConnection):
                 return
             await self._forward_to_core(message)
 
+        @self._bot.event
+        async def on_voice_state_update(
+            member: discord.Member,
+            before: discord.VoiceState,
+            after: discord.VoiceState,
+        ) -> None:
+            if (
+                self._bot.user is not None
+                and member.id == self._bot.user.id
+                and before.channel is not None
+                and after.channel is None
+            ):
+                await self._cleanup_vc_state(member.guild.id)
+                logger.warning(
+                    "Discord externally disconnected bot from VC guild=%d",
+                    member.guild.id,
+                )
+
         try:
             await self._bot.start(self._token)
         except Exception:
@@ -289,10 +376,37 @@ class DiscordAdapter(RetryableConnection):
         *,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        guild_id = self._vc_user_guild.get(platform_user_id)
-        if guild_id is not None and guild_id in self._vc_receivers:
-            if await self._speak_in_vc(guild_id, content):
+        if metadata and metadata.get("via_vc"):
+            raw_guild_id = metadata.get("guild_id")
+            try:
+                guild_id = int(raw_guild_id)
+            except (TypeError, ValueError):
+                logger.warning("VC reply missing valid guild_id; dropping")
                 return
+
+            if metadata.get("vc_session_id") != self._vc_session_ids.get(guild_id):
+                logger.info("Dropping stale VC reply for guild=%d", guild_id)
+                return
+
+            if (
+                guild_id in self._vc_receivers
+                and await self._speak_in_vc(guild_id, content)
+            ):
+                self._vc_followup_until[guild_id] = (
+                    monotonic() + self._vc_followup_seconds
+                )
+                await self._flush_buffered_vc_speech(guild_id)
+                return
+
+            self._vc_pending_guilds.discard(guild_id)
+            self._vc_pending_since.pop(guild_id, None)
+            self._vc_buffered_speech.pop(guild_id, None)
+            logger.warning(
+                "VC reply could not be delivered for guild %d; skipping DM fallback",
+                guild_id,
+            )
+            return
+
         await self._send_to_discord(
             platform_user_id, content, images, metadata=metadata
         )
@@ -607,7 +721,7 @@ class DiscordAdapter(RetryableConnection):
         self._mark_proposal_action_sent(command)
         await self._ws.send(self._core_command_payload(command, platform_user_id))
         await interaction.response.send_message(
-            "CordBeatにコマンドを送ったよ。", ephemeral=True
+            "Command sent to CordBeat.", ephemeral=True
         )
 
     def _start_typing(self, channel_id: int, channel: Any) -> None:
@@ -806,13 +920,60 @@ class DiscordAdapter(RetryableConnection):
         if not transcribed or not transcribed.strip():
             return
 
-        self._vc_user_guild[str(user_id)] = guild_id
+        platform_user_id = str(user_id)
+        self._vc_user_guild[platform_user_id] = guild_id
+        if guild_id not in self._vc_receivers:
+            logger.debug("Dropping STT result after VC disconnect guild=%d", guild_id)
+            return
 
+        speaker_name = self._vc_speaker_name(guild_id, user_id)
+        speech_line = f"{speaker_name}: {transcribed.strip()}"
+        if self._vc_reply_pending(guild_id):
+            buffered = self._vc_buffered_speech.setdefault(guild_id, [])
+            buffered.append(speech_line)
+            if len(buffered) > _VC_BUFFER_MAX_FRAGMENTS:
+                del buffered[:-_VC_BUFFER_MAX_FRAGMENTS]
+            logger.debug(
+                "Buffered shared VC speech while reply is pending guild=%d "
+                "fragments=%d",
+                guild_id,
+                len(buffered),
+            )
+            return
+
+        room_context = self._vc_room_context.setdefault(
+            guild_id,
+            deque(maxlen=self._vc_context_max_lines),
+        )
+        room_context.append(speech_line)
+        wake_detected = self._vc_has_wake_word(transcribed)
+        followup_active = monotonic() <= self._vc_followup_until.get(guild_id, 0.0)
+        if not wake_detected and not followup_active:
+            logger.debug(
+                "Ignoring shared VC speech without wake word guild=%d user=%d",
+                guild_id,
+                user_id,
+            )
+            return
+
+        transcript = "\n".join(room_context)
+        room_context.clear()
+        await self._forward_vc_transcript(guild_id, transcript)
+
+    async def _forward_vc_transcript(
+        self, guild_id: int, transcribed: str
+    ) -> None:
+        """Forward one consolidated VC turn to Core."""
+        if self._ws is None:
+            return
+        session_id = self._vc_session_ids.get(guild_id)
+        if session_id is None:
+            return
         payload = json.dumps(
             {
                 "type": "message",
                 "adapter_id": ADAPTER_ID,
-                "platform_user_id": str(user_id),
+                "platform_user_id": f"vc:{guild_id}",
                 "content": transcribed,
                 "timestamp": datetime.now(UTC).isoformat(),
                 "is_voice": True,
@@ -820,13 +981,75 @@ class DiscordAdapter(RetryableConnection):
                     "guild_id": str(guild_id),
                     "channel_id": "vc",
                     "via_vc": True,
+                    "shared_voice": True,
+                    "ephemeral": True,
+                    "vc_session_id": session_id,
+                    "display_name": "shared Discord voice channel",
                 },
             }
         )
+        self._vc_pending_guilds.add(guild_id)
+        self._vc_pending_since[guild_id] = monotonic()
         try:
             await self._ws.send(payload)
         except Exception:
+            self._vc_pending_guilds.discard(guild_id)
+            self._vc_pending_since.pop(guild_id, None)
             logger.exception("Failed to forward VC speech to Core")
+
+    async def _flush_buffered_vc_speech(self, guild_id: int) -> None:
+        """Retain pending-room speech and only send an explicit wake request."""
+        self._vc_pending_guilds.discard(guild_id)
+        self._vc_pending_since.pop(guild_id, None)
+        buffered = self._vc_buffered_speech.pop(guild_id, [])
+        if not buffered:
+            return
+        room_context = self._vc_room_context.setdefault(
+            guild_id,
+            deque(maxlen=self._vc_context_max_lines),
+        )
+        room_context.extend(buffered)
+        if not any(self._vc_line_has_wake_word(line) for line in buffered):
+            return
+        transcript = "\n".join(room_context)
+        room_context.clear()
+        await self._forward_vc_transcript(guild_id, transcript)
+
+    def _vc_reply_pending(self, guild_id: int) -> bool:
+        if guild_id not in self._vc_pending_guilds:
+            return False
+        started_at = self._vc_pending_since.get(guild_id)
+        if (
+            started_at is not None
+            and monotonic() - started_at <= self._vc_pending_timeout_seconds
+        ):
+            return True
+        self._vc_pending_guilds.discard(guild_id)
+        self._vc_pending_since.pop(guild_id, None)
+        self._vc_buffered_speech.pop(guild_id, None)
+        logger.warning(
+            "VC reply wait timed out for guild=%d; accepting new speech",
+            guild_id,
+        )
+        return False
+
+    def _vc_has_wake_word(self, transcribed: str) -> bool:
+        text = transcribed.casefold()
+        return any(word in text for word in self._vc_wake_words)
+
+    def _vc_line_has_wake_word(self, speech_line: str) -> bool:
+        _, separator, transcribed = speech_line.partition(": ")
+        return bool(separator) and self._vc_has_wake_word(transcribed)
+
+    def _vc_speaker_name(self, guild_id: int, user_id: int) -> str:
+        if self._bot is not None:
+            guild = self._bot.get_guild(guild_id)
+            member = guild.get_member(user_id) if guild is not None else None
+            if member is not None:
+                name = str(getattr(member, "display_name", "") or "").strip()
+                if name:
+                    return name.replace("\n", " ")[:80]
+        return f"participant-{user_id}"
 
     async def _speak_in_vc(self, guild_id: int, text: str) -> bool:
         """Synthesise *text* to audio and play it in the guild's voice channel."""
@@ -863,7 +1086,11 @@ class DiscordAdapter(RetryableConnection):
 
             source = discord.FFmpegPCMAudio(io.BytesIO(audio), pipe=True)
             if vc.is_playing():
-                vc.stop()
+                logger.warning(
+                    "VC is already playing audio for guild=%d; dropping overlap",
+                    guild_id,
+                )
+                return False
             vc.play(source)
             return True
         except Exception:
@@ -878,10 +1105,14 @@ class DiscordAdapter(RetryableConnection):
             )
         if self._tts is None:
             return (
-                f"✅ Joined **{channel_name}**. Listening… "
-                "TTS is disabled, so replies will be sent as text."
+                f"⚠️ Joined **{channel_name}** and listening, but TTS is disabled. "
+                "I cannot safely deliver VC replies without speech output."
             )
-        return f"✅ Joined **{channel_name}**. Listening and ready to talk."
+        wake_words = ", ".join(self._vc_wake_words)
+        return (
+            f"✅ Joined **{channel_name}**. Say one of: **{wake_words}** to invite "
+            "me into the conversation. Recent room context is temporary."
+        )
 
     async def _handle_join(self, interaction: Any) -> None:
         """Slash command: join the user's voice channel."""
@@ -953,6 +1184,12 @@ class DiscordAdapter(RetryableConnection):
         )
         await receiver.start()
         self._vc_receivers[guild_id] = receiver
+        self._vc_session_ids[guild_id] = uuid.uuid4().hex
+        self._vc_pending_guilds.discard(guild_id)
+        self._vc_pending_since.pop(guild_id, None)
+        self._vc_buffered_speech.pop(guild_id, None)
+        self._vc_room_context[guild_id] = deque(maxlen=self._vc_context_max_lines)
+        self._vc_followup_until.pop(guild_id, None)
 
         await interaction.followup.send(
             self._voice_join_message(channel.name), ephemeral=True
@@ -962,23 +1199,36 @@ class DiscordAdapter(RetryableConnection):
     async def _handle_leave(self, interaction: Any) -> None:
         """Slash command: leave the voice channel."""
         guild_id: int = interaction.guild_id
-        receiver = self._vc_receivers.pop(guild_id, None)
-        if receiver is not None:
-            await receiver.stop()
+        await self._cleanup_vc_state(guild_id)
 
         guild = self._bot.get_guild(guild_id) if self._bot else None
         if guild and guild.voice_client:
             await guild.voice_client.disconnect()
 
-        stale = [uid for uid, gid in self._vc_user_guild.items() if gid == guild_id]
-        for uid in stale:
-            del self._vc_user_guild[uid]
-        self._vc_muted.discard(guild_id)
-
         await interaction.response.send_message(
             "👋 Left the voice channel.", ephemeral=True
         )
         logger.info("Left VC guild=%d", guild_id)
+
+    async def _cleanup_vc_state(self, guild_id: int) -> None:
+        """Stop receiving and clear shared-room state for one VC guild."""
+        receiver = self._vc_receivers.pop(guild_id, None)
+        if receiver is not None:
+            try:
+                await receiver.stop()
+            except Exception:
+                logger.exception("Failed to stop VC receiver for guild=%d", guild_id)
+
+        stale = [uid for uid, gid in self._vc_user_guild.items() if gid == guild_id]
+        for uid in stale:
+            del self._vc_user_guild[uid]
+        self._vc_pending_guilds.discard(guild_id)
+        self._vc_pending_since.pop(guild_id, None)
+        self._vc_buffered_speech.pop(guild_id, None)
+        self._vc_room_context.pop(guild_id, None)
+        self._vc_followup_until.pop(guild_id, None)
+        self._vc_session_ids.pop(guild_id, None)
+        self._vc_muted.discard(guild_id)
 
     async def _handle_mute(self, interaction: Any) -> None:
         """Slash command: toggle voice mute."""

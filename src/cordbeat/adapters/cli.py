@@ -122,9 +122,9 @@ async def main(ws_url: str = "ws://localhost:8765", auth_token: str = "") -> Non
                         for idx, b64 in enumerate(images):
                             try:
                                 size = len(_b64.b64decode(b64))
-                                print(f"  [🖼️ 画像 {idx + 1}: PNG, {size:,} bytes]")
+                                print(f"  [🖼️ Image {idx + 1}: PNG, {size:,} bytes]")
                             except Exception:
-                                print(f"  [🖼️ 画像 {idx + 1}: (decode error)]")
+                                print(f"  [🖼️ Image {idx + 1}: (decode error)]")
                     print("> ", end="", flush=True)
             except websockets.ConnectionClosed:
                 print("\nDisconnected from Core.")

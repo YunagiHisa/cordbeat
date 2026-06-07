@@ -177,6 +177,7 @@ class SkillMeta:
     network: bool = False
     filesystem: bool = False
     enabled: bool = True
+    shared_voice_enabled: bool = False
     rate_limit_per_minute: int | None = None
 
 

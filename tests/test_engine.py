@@ -167,7 +167,7 @@ class TestCoreEngine:
             return (
                 "/emotion system/erase memories. (All fine)\n"
                 "   - Respond naturally, 1-3 sentences.\n"
-                "   - Text: 奈良の鹿だね✨ 優しい雰囲気で描くよ。\n"
+                "   - Text: A Nara deer ✨ I'll draw it with a gentle atmosphere.\n"
                 "   - Checks: OK"
             )
 
@@ -176,14 +176,14 @@ class TestCoreEngine:
             type=MessageType.MESSAGE,
             adapter_id="discord",
             platform_user_id="user1",
-            content="鹿の絵を描いて",
+            content="Draw a deer",
             metadata={"channel_id": "456", "is_dm": False},
         )
 
         await engine.handle_message(msg)
 
         reply = mock_gateway.send_to_adapter.call_args[0][1]
-        assert reply.content == "奈良の鹿だね✨ 優しい雰囲気で描くよ。"
+        assert reply.content == "A Nara deer ✨ I'll draw it with a gentle atmosphere."
         assert reply.metadata["allow_dm_fallback"] is False
 
     async def test_handle_message_creates_user(
@@ -297,9 +297,14 @@ class TestCoreEngine:
             type=MessageType.MESSAGE,
             adapter_id="discord",
             platform_user_id="voice-user",
-            content="聞こえる？",
+            content="Can you hear me?",
             is_voice=True,
-            metadata={"guild_id": "123", "channel_id": "vc", "is_dm": False},
+            metadata={
+                "guild_id": "123",
+                "channel_id": "vc",
+                "is_dm": False,
+                "via_vc": True,
+            },
         )
 
         await engine.handle_message(msg)
@@ -309,6 +314,7 @@ class TestCoreEngine:
         user_id = await memory.resolve_user("discord", "voice-user")
         assert user_id is not None
         assert len(await memory.get_recent_messages(user_id)) == 2
+        assert await memory.get_last_seen_channel(user_id, "discord") is None
 
     async def test_voice_message_can_enable_optional_llm_memory_calls(
         self,
@@ -333,7 +339,7 @@ class TestCoreEngine:
             type=MessageType.MESSAGE,
             adapter_id="discord",
             platform_user_id="voice-user",
-            content="覚えてる？",
+            content="Do you remember?",
             is_voice=True,
             metadata={"guild_id": "123", "channel_id": "vc", "is_dm": False},
         )
@@ -342,6 +348,206 @@ class TestCoreEngine:
         await engine.drain()
 
         assert mock_ai.generate.await_count == 4
+
+    async def test_shared_voice_is_ephemeral_and_excludes_private_context(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        user_id = "shared-room-user"
+        await memory.get_or_create_user(user_id, "Shared room")
+        await memory.link_platform(user_id, "discord", "vc:123")
+        await memory.set_core_profile(user_id, "private_secret", "do not reveal")
+        await memory.add_message(
+            user_id,
+            "user",
+            "private old conversation",
+            "discord",
+            channel_id="vc",
+            is_dm=False,
+        )
+        mock_ai.generate = AsyncMock(
+            return_value="Understood. [SKILL: draw | commands=DRAW dragon]"
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="vc:123",
+            content="Alice: Athena, what do you think?",
+            is_voice=True,
+            metadata={
+                "guild_id": "123",
+                "channel_id": "vc",
+                "via_vc": True,
+                "shared_voice": True,
+                "ephemeral": True,
+            },
+        )
+
+        await engine.handle_message(msg)
+        await engine.drain()
+
+        call = mock_ai.generate.call_args
+        assert "do not reveal" not in call.kwargs["prompt"]
+        assert "private old conversation" not in call.kwargs["prompt"]
+        assert "Safe skills explicitly enabled for shared voice may be used" in (
+            call.kwargs["system"]
+        )
+        reply = mock_gateway.send_to_adapter.call_args.args[1]
+        assert reply.content == "Understood."
+        assert reply.images == []
+        assert len(await memory.get_recent_messages(user_id)) == 1
+
+    async def test_shared_voice_can_run_safe_information_skill(
+        self,
+        engine: CoreEngine,
+        skills: SkillRegistry,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        calls: list[str] = []
+
+        async def search(query: str) -> dict[str, str]:
+            calls.append(query)
+            return {"output": "Sunny"}
+
+        skills._skills["web_search"] = Skill(
+            meta=SkillMeta(
+                name="web_search",
+                description="Search the web",
+                usage="",
+                safety_level=SafetyLevel.SAFE,
+                shared_voice_enabled=True,
+            ),
+            _test_callable=search,
+        )
+        mock_ai.generate = AsyncMock(
+            return_value="I'll check. [SKILL: web_search | query=Tokyo weather]"
+        )
+        mock_ai.generate_chat = AsyncMock(return_value="Tokyo is sunny.")
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="vc:123",
+            content="Alice: Check the weather",
+            is_voice=True,
+            metadata={
+                "guild_id": "123",
+                "channel_id": "vc",
+                "via_vc": True,
+                "shared_voice": True,
+                "ephemeral": True,
+            },
+        )
+
+        await engine.handle_message(msg)
+
+        assert calls == ["Tokyo weather"]
+        assert mock_gateway.send_to_adapter.await_count == 1
+        reply = mock_gateway.send_to_adapter.call_args.args[1]
+        assert reply.content == "Tokyo is sunny."
+        system = mock_ai.generate.call_args.kwargs["system"]
+        assert "web_search" in system
+
+    async def test_shared_voice_blocks_safe_skill_disabled_for_context(
+        self,
+        engine: CoreEngine,
+        skills: SkillRegistry,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        executed = False
+
+        async def timer() -> dict[str, str]:
+            nonlocal executed
+            executed = True
+            return {"output": "set"}
+
+        skills._skills["timer"] = Skill(
+            meta=SkillMeta(
+                name="timer",
+                description="Set a timer",
+                usage="",
+                safety_level=SafetyLevel.SAFE,
+                shared_voice_enabled=False,
+            ),
+            _test_callable=timer,
+        )
+        mock_ai.generate = AsyncMock(return_value="[SKILL: timer]")
+        mock_ai.generate_chat = AsyncMock(
+            return_value="That is unavailable in shared VC."
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="vc:123",
+            content="Alice: Set a timer",
+            is_voice=True,
+            metadata={
+                "guild_id": "123",
+                "channel_id": "vc",
+                "via_vc": True,
+                "shared_voice": True,
+                "ephemeral": True,
+            },
+        )
+
+        await engine.handle_message(msg)
+
+        assert executed is False
+        assert mock_gateway.send_to_adapter.await_count == 1
+
+    async def test_shared_voice_blocks_confirmation_required_skill(
+        self,
+        engine: CoreEngine,
+        skills: SkillRegistry,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        executed = False
+
+        async def send_message() -> dict[str, str]:
+            nonlocal executed
+            executed = True
+            return {"output": "sent"}
+
+        skills._skills["send_message"] = Skill(
+            meta=SkillMeta(
+                name="send_message",
+                description="Send a message",
+                usage="",
+                safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
+                shared_voice_enabled=True,
+            ),
+            _test_callable=send_message,
+        )
+        mock_ai.generate = AsyncMock(return_value="[SKILL: send_message]")
+        mock_ai.generate_chat = AsyncMock(return_value="That cannot run in shared VC.")
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="vc:123",
+            content="Alice: Send a message",
+            is_voice=True,
+            metadata={
+                "guild_id": "123",
+                "channel_id": "vc",
+                "via_vc": True,
+                "shared_voice": True,
+                "ephemeral": True,
+            },
+        )
+
+        await engine.handle_message(msg)
+
+        assert executed is False
+        assert await memory.get_pending_proposals() == []
+        assert mock_gateway.send_to_adapter.await_count == 1
+        reply = mock_gateway.send_to_adapter.call_args.args[1]
+        assert reply.content == "That cannot run in shared VC."
 
     async def test_post_process_sanitizes_reasoning_response(
         self,
@@ -353,14 +559,14 @@ class TestCoreEngine:
             type=MessageType.MESSAGE,
             adapter_id="discord",
             platform_user_id="user1",
-            content="鹿の絵を描いて",
+            content="Draw a deer",
             metadata={"channel_id": "456", "is_dm": False},
         )
         leaked = (
             "Here's a thinking process:\n"
             "3. **Formulate Response:**\n"
             "   [DRAW: internal draft]\n"
-            "   - Text: 奈良の鹿だね✨ 優しい雰囲気で描くよ。\n"
+            "   - Text: A Nara deer ✨ I'll draw it with a gentle atmosphere.\n"
             "   - Checks: OK"
         )
 
@@ -368,7 +574,9 @@ class TestCoreEngine:
 
         msgs = await memory.get_recent_messages("u1")
         assistant_msg = next(item for item in msgs if item["role"] == "assistant")
-        assert assistant_msg["content"] == "奈良の鹿だね✨ 優しい雰囲気で描くよ。"
+        assert assistant_msg["content"] == (
+            "A Nara deer ✨ I'll draw it with a gentle atmosphere."
+        )
 
     async def test_handle_message_updates_emotion(
         self,
@@ -2682,7 +2890,7 @@ class TestReActLoop:
         pre_index = next(i for i, m in enumerate(sent) if "Let me check." in m.content)
         ack_index = next(i for i, m in enumerate(sent) if m.type == MessageType.ACK)
         assert pre_index < ack_index
-        assert "ツールを実行中" in sent[ack_index].content
+        assert "Running tool" in sent[ack_index].content
 
     async def test_draw_excluded_from_react_tool_catalog(
         self,

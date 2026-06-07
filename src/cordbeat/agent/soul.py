@@ -126,7 +126,7 @@ class Soul:
 
     @property
     def pronoun(self) -> str:
-        return str(self._soul.get("identity", {}).get("pronoun", "わたし"))
+        return str(self._soul.get("identity", {}).get("pronoun", "I"))
 
     @property
     def language(self) -> str:

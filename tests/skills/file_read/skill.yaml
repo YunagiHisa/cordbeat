@@ -1,22 +1,25 @@
 name: file_read
-description: "指定されたファイルの内容を読み込む"
+description: "Read the contents of a specified file"
 description_en: "Read the contents of a specified file"
 version: "1.0.0"
 author: "cordbeat"
 
 usage: |
-  ファイルの内容を確認したいときに使う。
-  ローカルファイルの内容を読むため、実行前にユーザー承認が必要。
+  Use this skill to inspect file contents.
+  Reading local files requires user approval before execution.
 
 parameters:
   - name: path
     type: string
     required: true
-    description: "読み込むファイルパス"
+    description: "Path of the file to read"
   - name: max_lines
     type: integer
     required: false
-    description: "読み込む最大行数（デフォルト: 100）"
+    description: "Maximum number of lines to read (default: 100)"
+
+contexts:
+  shared_voice: false
 
 safety:
   level: requires_confirmation

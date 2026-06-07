@@ -55,6 +55,7 @@ ai_backend:
   #                          # reduce latency, and avoid token-budget exhaustion.
   #   voice_enable_thinking: false  # OPTIONAL per-context override: disable
   #                          # <think> only for voice messages (VC / audio).
+  #   voice_max_tokens: 512  # OPTIONAL shorter output budget for voice replies.
   #                          # Falls back to enable_thinking when unset.
   #   reasoning_content_keys: ["reasoning_content"]  # debug-log these fields only
   #   log_reasoning_content: false                   # opt in for DEBUG logs only
@@ -110,6 +111,7 @@ memory:
   decay_rate: 0.1
   archive_threshold: 0.05
   conversation_history_limit: 20     # recent messages loaded into context
+  voice_conversation_history_limit: 6 # shorter context for real-time voice replies
   memory_search_results: 3           # vector search results per query
   diary_max_tokens: 512              # max tokens for diary generation
   facts_per_message_limit: 5         # max facts extracted per message
@@ -203,6 +205,12 @@ adapters:
       #                    (pre-1.0 behaviour — opt back in here).
       #   never           : never send proactive Heartbeat messages at all.
       dm_policy: "reply_only"
+      # Shared voice-channel participation:
+      # listen passively, reply only after a wake word, then allow short follow-ups.
+      vc_wake_words: ["cordbeat"]
+      vc_followup_seconds: 20
+      vc_context_max_lines: 8
+      vc_pending_timeout_seconds: 120
       # guild_id: 123456789012345678 # set for instant slash-command sync (dev/single-server).
       #                              # leave unset for global sync (up to 1 hour to propagate)
     # -- Example: mention-only bot in a busy server --

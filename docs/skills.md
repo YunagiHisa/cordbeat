@@ -46,12 +46,36 @@ parameters:
     required: false
     default: 5
 
+contexts:
+  shared_voice: true
+
 safety:
   level: safe
   sandbox: false
   network: true
   filesystem: false
 ```
+
+---
+
+## Context Availability
+
+Skill availability is configured independently from safety:
+
+```yaml
+contexts:
+  shared_voice: true
+```
+
+- `shared_voice: true` advertises and permits the skill in shared voice channels.
+- Missing or `false` keeps the skill unavailable in shared voice channels.
+- `requires_confirmation` and `dangerous` skills are still blocked in shared voice,
+  because a shared room has no single user who can safely approve the action.
+
+This lets information-only skills such as web search and weather work in VC while
+keeping private-memory, filesystem, drawing, and side-effecting skills unavailable.
+On startup, built-in skills missing this setting receive the bundled default; an
+explicit user-defined `true` or `false` value is never overwritten.
 
 ---
 

@@ -71,6 +71,7 @@ class MemoryConfig:
     decay_rate: float = 0.1
     archive_threshold: float = 0.05
     conversation_history_limit: int = 20
+    voice_conversation_history_limit: int = 6
     memory_search_results: int = 3
     diary_max_tokens: int = 512
     facts_per_message_limit: int = 5

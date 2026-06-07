@@ -1,25 +1,28 @@
 name: draw
-description: "シンプルなDSLで画像を描画する（円・矩形・テキスト・タートルグラフィクス等）"
+description: "Draw images using a line-based DSL for shapes, text, turtle graphics, and more"
 description_en: "Draw images using a rich line-based DSL (circles, rects, text, turtle graphics, bezier, gradients, etc.)"
 version: "1.1.0"
 author: "cordbeat"
 
 usage: |
-  テキスト形式のDSLコマンドで画像を生成する。
+  Generate an image using text-based DSL commands.
   SIZE, CANVAS, CIRCLE, RECT, ELLIPSE, LINE, POLYGON, TEXT,
   ARC, BEZIER, GRADIENT, DOTS, STAR, SPIRAL,
   TURTLE, HEADING, PENCOLOR, PENWIDTH, PENUP, PENDOWN,
   FORWARD, BACKWARD, RIGHT, LEFT, REPEAT ... END,
-  SAVE, OUTPUT の各コマンドが使用可能。
-  OUTPUT コマンドで base64 画像を返す。
-  HSL カラーは hsl(h,s%,l%) 形式でサポート。
-  REPEAT n ... END でブロックを繰り返す（最大 1000 回, ネスト 10 段）。
+  SAVE and OUTPUT commands are also available.
+  OUTPUT returns a base64-encoded image.
+  HSL colors are supported in hsl(h,s%,l%) format.
+  REPEAT n ... END repeats a block up to 1000 times with up to 10 nesting levels.
 
 parameters:
   - name: commands
     type: string
     required: true
-    description: "改行区切りのDSLコマンド文字列"
+    description: "Newline-separated DSL command string"
+
+contexts:
+  shared_voice: false
 
 safety:
   level: requires_confirmation

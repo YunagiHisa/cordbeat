@@ -224,6 +224,9 @@ class SkillRegistry:
             raw: dict[str, Any] = yaml.safe_load(f) or {}
 
         safety_raw = raw.get("safety", {})
+        contexts_raw = raw.get("contexts", {})
+        if not isinstance(contexts_raw, dict):
+            contexts_raw = {}
         params_raw = raw.get("parameters") or []
         parameters = [
             SkillParam(
@@ -253,6 +256,7 @@ class SkillRegistry:
             network=safety_raw.get("network", False),
             filesystem=safety_raw.get("filesystem", False),
             enabled=raw.get("enabled", True),
+            shared_voice_enabled=contexts_raw.get("shared_voice", False) is True,
             rate_limit_per_minute=rate_limit_per_minute,
         )
 
@@ -305,7 +309,10 @@ class SkillRegistry:
         ]
 
     def get_skill_descriptions_for_prompt(
-        self, exclude_names: Iterable[str] | None = None
+        self,
+        exclude_names: Iterable[str] | None = None,
+        *,
+        context: str | None = None,
     ) -> str:
         """Build a skill catalog string for AI prompts."""
         excluded = set(exclude_names or ())
@@ -315,6 +322,11 @@ class SkillRegistry:
                 continue
             if not skill.meta.enabled:
                 continue
+            if context == "shared_voice":
+                if not skill.meta.shared_voice_enabled:
+                    continue
+                if skill.meta.safety_level != SafetyLevel.SAFE:
+                    continue
             params_str = ", ".join(f"{p.name}: {p.type}" for p in skill.meta.parameters)
             lines.append(
                 f"- {name}: {skill.meta.description} "

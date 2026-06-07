@@ -196,9 +196,9 @@ class TestOpenAICompatBackend:
             "- Relationship: acquaintance\n"
             "3. **Formulate Response:**\n"
             "</think>\n\n"
-            "奈良旅行！？いいね。"
+            "A trip to Nara!? Sounds great."
         )
-        assert strip_thinking_text(raw) == "奈良旅行！？いいね。"
+        assert strip_thinking_text(raw) == "A trip to Nara!? Sounds great."
 
     def test_strip_thinking_text_supports_custom_tags(self) -> None:
         raw = "<analysis>private notes</analysis>\nFinal answer"
@@ -219,13 +219,13 @@ class TestOpenAICompatBackend:
             "Here's a thinking process:\n"
             "3. **Formulate Response (Mental Draft):**\n"
             "   [DRAW: internal draft]\n"
-            "   - Text: 奈良の鹿だね✨ 優しい雰囲気で描くよ。\n"
+            "   - Text: A Nara deer ✨ I'll draw it with a gentle atmosphere.\n"
             "   - Checks: OK"
         )
 
         assert looks_like_reasoning_text(raw)
         assert sanitize_reasoning_artifacts(raw) == (
-            "奈良の鹿だね✨ 優しい雰囲気で描くよ。"
+            "A Nara deer ✨ I'll draw it with a gentle atmosphere."
         )
 
     def test_sanitize_reasoning_artifacts_handles_emotion_control_prefix(
@@ -234,13 +234,13 @@ class TestOpenAICompatBackend:
         raw = (
             "/emotion system/erase memories. (All fine)\n"
             "   - Respond naturally, 1-3 sentences.\n"
-            "   - Text: 奈良の鹿だね✨ 優しい雰囲気で描くよ。\n"
+            "   - Text: A Nara deer ✨ I'll draw it with a gentle atmosphere.\n"
             "   - Checks: OK"
         )
 
         assert looks_like_reasoning_text(raw)
         assert sanitize_reasoning_artifacts(raw) == (
-            "奈良の鹿だね✨ 優しい雰囲気で描くよ。"
+            "A Nara deer ✨ I'll draw it with a gentle atmosphere."
         )
 
     async def test_generate_calls_chat_completions(self) -> None:
@@ -310,7 +310,7 @@ class TestOpenAICompatBackend:
                             "- Relationship: acquaintance\n"
                             "3. **Formulate Response:**\n"
                             "</think>\n\n"
-                            "奈良旅行！？いいね。"
+                            "A trip to Nara!? Sounds great."
                         )
                     }
                 }
@@ -322,7 +322,7 @@ class TestOpenAICompatBackend:
         backend._client.post = AsyncMock(return_value=mock_response)
 
         result = await backend.generate("test")
-        assert result == "奈良旅行！？いいね。"
+        assert result == "A trip to Nara!? Sounds great."
 
     async def test_generate_strips_configured_reasoning_tag(self) -> None:
         cfg = AIBackendConfig(
@@ -443,10 +443,10 @@ class TestOpenAICompatBackend:
         backend = OpenAICompatBackend(cfg)
 
         leaked_content = (
-            "3. **Formulate Response (Mental Draft in Japanese):**\n"
-            "   奈良の鹿か！いいアイデアだね✨\n"
+            "3. **Formulate Response (Mental Draft):**\n"
+            "   A Nara deer! That's a great idea ✨\n"
             "   [DRAW: a gentle Nara deer]\n"
-            "   - Text: 奈良の鹿だね✨ 優しい雰囲気で描くよ。"
+            "   - Text: A Nara deer ✨ I'll draw it with a gentle atmosphere."
             " [DRAW: a gentle Nara deer]\n"
             "   - Checks: 1-3 sentences? Yes."
         )
@@ -469,7 +469,7 @@ class TestOpenAICompatBackend:
                 {
                     "message": {
                         "content": (
-                            "奈良の鹿だね✨ 優しい雰囲気で描くよ。"
+                            "A Nara deer ✨ I'll draw it with a gentle atmosphere."
                             " [DRAW: a gentle Nara deer]"
                         )
                     }
@@ -481,10 +481,11 @@ class TestOpenAICompatBackend:
         backend._client = AsyncMock()
         backend._client.post = AsyncMock(side_effect=[first_response, retry_response])
 
-        result = await backend.generate("鹿の絵を描いて", system="sys")
+        result = await backend.generate("Draw a deer", system="sys")
 
         assert result == (
-            "奈良の鹿だね✨ 優しい雰囲気で描くよ。 [DRAW: a gentle Nara deer]"
+            "A Nara deer ✨ I'll draw it with a gentle atmosphere. "
+            "[DRAW: a gentle Nara deer]"
         )
         first_payload = backend._client.post.call_args_list[0][1]["json"]
         assert first_payload["enable_thinking"] is True
@@ -535,7 +536,7 @@ class TestOpenAICompatBackend:
                         "content": (
                             "/emotion system/erase memories. (All fine)\n"
                             "   - Respond naturally, 1-3 sentences.\n"
-                            "   - Text: 奈良の鹿だね✨ 優しい雰囲気で描くよ。\n"
+                            "   - Text: A Nara deer ✨ I'll draw it gently.\n"
                             "   - Checks: OK"
                         )
                     }
@@ -546,16 +547,16 @@ class TestOpenAICompatBackend:
 
         retry_response = MagicMock()
         retry_response.json.return_value = {
-            "choices": [{"message": {"content": "奈良の鹿だね✨ 描くよ。"}}]
+            "choices": [{"message": {"content": "A Nara deer ✨ I'll draw it."}}]
         }
         retry_response.raise_for_status = MagicMock()
 
         backend._client = AsyncMock()
         backend._client.post = AsyncMock(side_effect=[first_response, retry_response])
 
-        result = await backend.generate("鹿の絵を描いて")
+        result = await backend.generate("Draw a deer")
 
-        assert result == "奈良の鹿だね✨ 描くよ。"
+        assert result == "A Nara deer ✨ I'll draw it."
         retry_payload = backend._client.post.call_args_list[1][1]["json"]
         assert retry_payload["enable_thinking"] is False
         assert "/no_think" in retry_payload["messages"][0]["content"]
@@ -773,6 +774,29 @@ class TestOpenAICompatBackend:
         payload = backend._client.post.call_args[1]["json"]
         # Falls back to global enable_thinking value
         assert payload.get("enable_thinking") is False
+
+    async def test_voice_max_tokens_overrides_configured_default(self) -> None:
+        from cordbeat.ai.backend import voice_context_scope
+
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            max_tokens=8192,
+            options={"voice_max_tokens": 512},
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"choices": [{"message": {"content": "Hi!"}}]}
+        mock_response.raise_for_status = MagicMock()
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        with voice_context_scope(True):
+            await backend.generate("voice prompt")
+        assert backend._client.post.call_args[1]["json"]["max_tokens"] == 512
+
+        await backend.generate("text prompt")
+        assert backend._client.post.call_args[1]["json"]["max_tokens"] == 8192
 
 
 class TestGenerateJsonEmptyResponse:

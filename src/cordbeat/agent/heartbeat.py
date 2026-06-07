@@ -579,6 +579,15 @@ class HeartbeatLoop:
         metadata: dict[str, Any] = {"allow_dm_fallback": False}
         if last_seen is not None:
             last_channel_id, last_is_dm = last_seen
+            if (
+                decision.target_adapter_id == "discord"
+                and last_channel_id == "vc"
+            ):
+                logger.info(
+                    "HEARTBEAT skipped non-routable Discord VC history user=%s",
+                    decision.target_user_id,
+                )
+                return
             metadata["channel_id"] = last_channel_id
             metadata["is_dm"] = last_is_dm
             if dm_policy == "reply_only" and last_is_dm:

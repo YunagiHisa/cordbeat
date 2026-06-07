@@ -1,24 +1,27 @@
 name: web_search
-description: "検索キーワードを渡してWeb検索を行い、関連ページのタイトル・URL・要約のリストを返す（URLを直接開く用途には fetch_url を使うこと）"
+description: "Search the web by keyword and return related page titles, URLs, and snippets; use fetch_url to open a URL"
 description_en: "Search the web by keyword and return a list of related pages (title/URL/snippet). To open a specific URL, use fetch_url instead."
 version: "1.0.0"
 author: "cordbeat"
 
 usage: |
-  ウェブ上の情報をキーワードで検索したいときに使う。
-  最新情報・ニュース・一般的な知識の確認に有効。
-  注意: queryには「検索キーワード」を渡すこと。URLを直接開きたい場合は
-  fetch_url スキルを使うこと（web_searchにURLを渡しても何も返らない）。
+  Use this skill to search the web by keyword.
+  It is useful for checking current information, news, and general knowledge.
+  Pass search keywords to query. To open a URL directly, use fetch_url;
+  passing a URL to web_search may return no results.
 
 parameters:
   - name: query
     type: string
     required: true
-    description: "検索キーワード（URLではなく自然言語の検索語を渡すこと）"
+    description: "Natural-language search keywords, not a URL"
   - name: max_results
     type: integer
     required: false
-    description: "取得する最大件数（デフォルト: 5）"
+    description: "Maximum number of results to retrieve (default: 5)"
+
+contexts:
+  shared_voice: true
 
 safety:
   level: safe

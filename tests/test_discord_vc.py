@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import builtins
 import json
+from collections import deque
+from time import monotonic
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -255,12 +257,29 @@ class TestRVCWrappedTTS:
 
 
 class TestDiscordAdapterVC:
-    def _make_adapter(self) -> DiscordAdapter:
+    def _make_adapter(
+        self, options: dict[str, object] | None = None
+    ) -> DiscordAdapter:
         from cordbeat.adapters.discord import DiscordAdapter
 
-        config = AdapterConfig(options={"token": "test-token"})
+        config = AdapterConfig(options={"token": "test-token", **(options or {})})
         adapter = DiscordAdapter(config)
         return adapter
+
+    def test_invalid_shared_vc_options_use_safe_defaults(self) -> None:
+        adapter = self._make_adapter(
+            options={
+                "vc_wake_words": 123,
+                "vc_followup_seconds": "invalid",
+                "vc_context_max_lines": None,
+                "vc_pending_timeout_seconds": "invalid",
+            }
+        )
+
+        assert adapter._vc_wake_words == ("cordbeat",)
+        assert adapter._vc_followup_seconds == 20.0
+        assert adapter._vc_context_max_lines == 8
+        assert adapter._vc_pending_timeout_seconds == 120.0
 
     async def test_on_vc_speech_no_ws(self) -> None:
         adapter = self._make_adapter()
@@ -291,22 +310,60 @@ class TestDiscordAdapterVC:
         adapter = self._make_adapter()
         adapter._ws = AsyncMock()
         adapter._stt = AsyncMock()
-        adapter._stt.transcribe = AsyncMock(return_value="hello world")
+        adapter._stt.transcribe = AsyncMock(return_value="cordbeat hello world")
+        adapter._vc_receivers[111] = MagicMock()
+        adapter._vc_session_ids[111] = "session"
         await adapter._on_vc_speech(111, 222, b"wav")
 
         adapter._ws.send.assert_called_once()
         payload = json.loads(adapter._ws.send.call_args[0][0])
-        assert payload["content"] == "hello world"
-        assert payload["platform_user_id"] == "222"
+        assert payload["content"] == "participant-222: cordbeat hello world"
+        assert payload["platform_user_id"] == "vc:111"
         assert payload["metadata"]["via_vc"] is True
+        assert payload["metadata"]["shared_voice"] is True
+        assert payload["metadata"]["ephemeral"] is True
 
     async def test_on_vc_speech_updates_vc_user_guild(self) -> None:
         adapter = self._make_adapter()
         adapter._ws = AsyncMock()
         adapter._stt = AsyncMock()
         adapter._stt.transcribe = AsyncMock(return_value="test")
+        adapter._vc_receivers[555] = MagicMock()
         await adapter._on_vc_speech(555, 777, b"wav")
         assert adapter._vc_user_guild["777"] == 555
+        adapter._ws.send.assert_not_called()
+
+    async def test_on_vc_speech_ignores_chat_without_wake_word(self) -> None:
+        adapter = self._make_adapter(options={"vc_wake_words": ["athena"]})
+        adapter._ws = AsyncMock()
+        adapter._stt = AsyncMock()
+        adapter._stt.transcribe = AsyncMock(return_value="The weather is nice today")
+        adapter._vc_receivers[111] = MagicMock()
+        adapter._vc_session_ids[111] = "session"
+
+        await adapter._on_vc_speech(111, 222, b"wav")
+
+        adapter._ws.send.assert_not_called()
+        assert list(adapter._vc_room_context[111]) == [
+            "participant-222: The weather is nice today"
+        ]
+
+    async def test_on_vc_speech_wake_word_includes_recent_room_context(self) -> None:
+        adapter = self._make_adapter(options={"vc_wake_words": ["athena"]})
+        adapter._ws = AsyncMock()
+        adapter._stt = AsyncMock()
+        adapter._vc_receivers[111] = MagicMock()
+        adapter._vc_session_ids[111] = "session"
+        adapter._stt.transcribe = AsyncMock(
+            side_effect=["Where should we travel?", "Athena, what do you think?"]
+        )
+
+        await adapter._on_vc_speech(111, 222, b"wav1")
+        await adapter._on_vc_speech(111, 333, b"wav2")
+
+        payload = json.loads(adapter._ws.send.call_args[0][0])
+        assert "participant-222: Where should we travel?" in payload["content"]
+        assert "participant-333: Athena, what do you think?" in payload["content"]
 
     async def test_on_vc_speech_muted_guild(self) -> None:
         adapter = self._make_adapter()
@@ -318,27 +375,192 @@ class TestDiscordAdapterVC:
 
     async def test_dispatch_routes_to_vc(self) -> None:
         adapter = self._make_adapter()
+        adapter._vc_receivers[999] = MagicMock()
+        adapter._vc_session_ids[999] = "session"
+        adapter._speak_in_vc = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        adapter._send_to_discord = AsyncMock()  # type: ignore[method-assign]
+
+        await adapter._dispatch_core_message(
+            "vc:999",
+            "hello from core",
+            [],
+            metadata={
+                "via_vc": True,
+                "guild_id": "999",
+                "vc_session_id": "session",
+            },
+        )
+        adapter._speak_in_vc.assert_called_once_with(999, "hello from core")
+        adapter._send_to_discord.assert_not_called()
+
+    async def test_dispatch_does_not_dm_when_vc_reply_is_unavailable(self) -> None:
+        adapter = self._make_adapter()
+        adapter._vc_receivers[999] = MagicMock()
+        adapter._vc_session_ids[999] = "session"
+        adapter._vc_pending_guilds.add(999)
+        adapter._vc_buffered_speech[999] = ["next"]
+        adapter._speak_in_vc = AsyncMock(return_value=False)  # type: ignore[method-assign]
+        adapter._send_to_discord = AsyncMock()  # type: ignore[method-assign]
+
+        await adapter._dispatch_core_message(
+            "vc:999",
+            "hello from core",
+            [],
+            metadata={
+                "via_vc": True,
+                "guild_id": "999",
+                "vc_session_id": "session",
+            },
+        )
+
+        adapter._send_to_discord.assert_not_called()
+        assert 999 not in adapter._vc_pending_guilds
+        assert 999 not in adapter._vc_buffered_speech
+
+    async def test_dispatch_drops_stale_vc_session_reply(self) -> None:
+        adapter = self._make_adapter()
+        adapter._vc_receivers[999] = MagicMock()
+        adapter._vc_session_ids[999] = "new-session"
+        adapter._speak_in_vc = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        await adapter._dispatch_core_message(
+            "vc:999",
+            "stale reply",
+            [],
+            metadata={
+                "via_vc": True,
+                "guild_id": "999",
+                "vc_session_id": "old-session",
+            },
+        )
+
+        adapter._speak_in_vc.assert_not_called()
+
+    async def test_non_voice_reply_does_not_route_to_previous_vc(self) -> None:
+        adapter = self._make_adapter()
         adapter._vc_user_guild["42"] = 999
         adapter._vc_receivers[999] = MagicMock()
         adapter._speak_in_vc = AsyncMock(return_value=True)  # type: ignore[method-assign]
         adapter._send_to_discord = AsyncMock()  # type: ignore[method-assign]
 
-        await adapter._dispatch_core_message("42", "hello from core", [])
-        adapter._speak_in_vc.assert_called_once_with(999, "hello from core")
-        adapter._send_to_discord.assert_not_called()
+        await adapter._dispatch_core_message("42", "text reply", [])
 
-    async def test_dispatch_falls_back_to_text_when_tts_unavailable(self) -> None:
+        adapter._speak_in_vc.assert_not_called()
+        adapter._send_to_discord.assert_called_once()
+
+    async def test_vc_speech_buffers_while_reply_pending(self) -> None:
         adapter = self._make_adapter()
-        adapter._vc_user_guild["42"] = 999
-        adapter._vc_receivers[999] = MagicMock()
-        adapter._speak_in_vc = AsyncMock(return_value=False)  # type: ignore[method-assign]
-        adapter._send_to_discord = AsyncMock()  # type: ignore[method-assign]
+        adapter._ws = AsyncMock()
+        adapter._stt = AsyncMock()
+        adapter._stt.transcribe = AsyncMock(return_value="follow up")
+        adapter._vc_receivers[111] = MagicMock()
+        adapter._vc_pending_guilds.add(111)
+        adapter._vc_pending_since[111] = monotonic()
 
-        await adapter._dispatch_core_message("42", "hello from core", [])
+        await adapter._on_vc_speech(111, 222, b"wav")
 
-        adapter._send_to_discord.assert_called_once_with(
-            "42", "hello from core", [], metadata=None
+        adapter._ws.send.assert_not_called()
+        assert adapter._vc_buffered_speech[111] == ["participant-222: follow up"]
+
+    async def test_vc_pending_timeout_accepts_new_wake_request(self) -> None:
+        adapter = self._make_adapter(
+            options={"vc_wake_words": ["athena"], "vc_pending_timeout_seconds": 1}
         )
+        adapter._ws = AsyncMock()
+        adapter._stt = AsyncMock()
+        adapter._stt.transcribe = AsyncMock(return_value="Athena, can you hear me?")
+        adapter._vc_receivers[111] = MagicMock()
+        adapter._vc_session_ids[111] = "session"
+        adapter._vc_pending_guilds.add(111)
+        adapter._vc_pending_since[111] = monotonic() - 2
+        adapter._vc_buffered_speech[111] = ["stale"]
+
+        await adapter._on_vc_speech(111, 222, b"wav")
+
+        adapter._ws.send.assert_called_once()
+        assert adapter._vc_buffered_speech.get(111) is None
+        assert 111 in adapter._vc_pending_guilds
+
+    async def test_vc_reply_keeps_buffered_chat_as_room_context(self) -> None:
+        adapter = self._make_adapter(options={"vc_wake_words": ["athena"]})
+        adapter._ws = AsyncMock()
+        adapter._vc_receivers[999] = MagicMock()
+        adapter._vc_session_ids[999] = "session"
+        adapter._vc_pending_guilds.add(999)
+        adapter._vc_buffered_speech[999] = ["Athena: first", "Bob: second"]
+        adapter._speak_in_vc = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        await adapter._dispatch_core_message(
+            "vc:999",
+            "reply",
+            [],
+            metadata={
+                "via_vc": True,
+                "guild_id": "999",
+                "vc_session_id": "session",
+            },
+        )
+
+        adapter._ws.send.assert_not_called()
+        assert list(adapter._vc_room_context[999]) == ["Athena: first", "Bob: second"]
+        assert 999 not in adapter._vc_pending_guilds
+
+    async def test_vc_reply_flushes_buffered_wake_request(self) -> None:
+        import json
+
+        adapter = self._make_adapter(options={"vc_wake_words": ["athena"]})
+        adapter._ws = AsyncMock()
+        adapter._vc_receivers[999] = MagicMock()
+        adapter._vc_session_ids[999] = "session"
+        adapter._vc_pending_guilds.add(999)
+        adapter._vc_buffered_speech[999] = [
+            "Alice: first",
+            "Bob: Athena, one more question",
+        ]
+        adapter._speak_in_vc = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        await adapter._dispatch_core_message(
+            "vc:999",
+            "reply",
+            [],
+            metadata={
+                "via_vc": True,
+                "guild_id": "999",
+                "vc_session_id": "session",
+            },
+        )
+
+        payload = json.loads(adapter._ws.send.call_args[0][0])
+        assert payload["content"] == "Alice: first\nBob: Athena, one more question"
+        assert payload["is_voice"] is True
+        assert payload["platform_user_id"] == "vc:999"
+        assert 999 in adapter._vc_pending_guilds
+
+    async def test_vc_followup_does_not_require_wake_word(self) -> None:
+        adapter = self._make_adapter(options={"vc_wake_words": ["athena"]})
+        adapter._ws = AsyncMock()
+        adapter._stt = AsyncMock()
+        adapter._stt.transcribe = AsyncMock(return_value="Please do that")
+        adapter._vc_receivers[111] = MagicMock()
+        adapter._vc_session_ids[111] = "session"
+        adapter._vc_followup_until[111] = monotonic() + 10
+
+        await adapter._on_vc_speech(111, 222, b"wav")
+
+        adapter._ws.send.assert_called_once()
+
+    async def test_forward_vc_transcript_clears_pending_when_send_fails(
+        self,
+    ) -> None:
+        adapter = self._make_adapter()
+        adapter._ws = AsyncMock()
+        adapter._ws.send.side_effect = RuntimeError("closed")
+        adapter._vc_session_ids[111] = "session"
+
+        await adapter._forward_vc_transcript(111, "Athena, can you hear me?")
+
+        assert 111 not in adapter._vc_pending_guilds
+        assert 111 not in adapter._vc_pending_since
 
     async def test_dispatch_falls_through_to_text_when_no_vc(self) -> None:
         adapter = self._make_adapter()
@@ -412,14 +634,55 @@ class TestDiscordAdapterVC:
         assert result is True
         vc_mock.play.assert_called_once_with(ffmpeg_source)
 
+    async def test_speak_in_vc_does_not_interrupt_existing_audio(self) -> None:
+        import sys
+
+        adapter = self._make_adapter()
+        adapter._tts = AsyncMock()
+        adapter._tts.synthesize = AsyncMock(return_value=b"RIFF....")
+
+        vc_mock = MagicMock()
+        vc_mock.is_connected.return_value = True
+        vc_mock.is_playing.return_value = True
+        guild_mock = MagicMock()
+        guild_mock.voice_client = vc_mock
+        adapter._bot = MagicMock()
+        adapter._bot.get_guild.return_value = guild_mock
+
+        discord_mock = MagicMock()
+        old = sys.modules.get("discord")
+        sys.modules["discord"] = discord_mock
+        try:
+            result = await adapter._speak_in_vc(111, "hello")
+        finally:
+            if old is None:
+                sys.modules.pop("discord", None)
+            else:
+                sys.modules["discord"] = old
+
+        assert result is False
+        vc_mock.stop.assert_not_called()
+        vc_mock.play.assert_not_called()
+
     def test_voice_join_message_reports_disabled_stt(self) -> None:
         adapter = self._make_adapter()
         assert "STT is disabled" in adapter._voice_join_message("Voice")
 
-    def test_voice_join_message_reports_text_fallback_without_tts(self) -> None:
+    def test_voice_join_message_reports_no_safe_fallback_without_tts(self) -> None:
         adapter = self._make_adapter()
         adapter._stt = MagicMock()
-        assert "replies will be sent as text" in adapter._voice_join_message("Voice")
+        message = adapter._voice_join_message("Voice")
+        assert "cannot safely deliver VC replies" in message
+
+    def test_voice_join_message_explains_wake_words(self) -> None:
+        adapter = self._make_adapter(options={"vc_wake_words": ["athena"]})
+        adapter._stt = MagicMock()
+        adapter._tts = MagicMock()
+
+        message = adapter._voice_join_message("Voice")
+
+        assert "athena" in message
+        assert "Recent room context is temporary" in message
 
 
 # ---------------------------------------------------------------------------
@@ -552,6 +815,31 @@ class TestSlashCommands:
         vc_mock.disconnect.assert_called_once()
         assert guild_id not in adapter._vc_receivers
         assert "123" not in adapter._vc_user_guild
+
+    async def test_cleanup_vc_state_clears_pending_speech(self) -> None:
+        adapter = self._make_adapter()
+        guild_id = 123
+        receiver = AsyncMock()
+        adapter._vc_receivers[guild_id] = receiver
+        adapter._vc_user_guild["456"] = guild_id
+        adapter._vc_pending_guilds.add(guild_id)
+        adapter._vc_pending_since[guild_id] = monotonic()
+        adapter._vc_buffered_speech[guild_id] = ["pending"]
+        adapter._vc_room_context[guild_id] = deque(["room context"])
+        adapter._vc_followup_until[guild_id] = monotonic() + 10
+        adapter._vc_session_ids[guild_id] = "session"
+
+        await adapter._cleanup_vc_state(guild_id)
+
+        receiver.stop.assert_awaited_once()
+        assert guild_id not in adapter._vc_receivers
+        assert "456" not in adapter._vc_user_guild
+        assert guild_id not in adapter._vc_pending_guilds
+        assert guild_id not in adapter._vc_pending_since
+        assert guild_id not in adapter._vc_buffered_speech
+        assert guild_id not in adapter._vc_room_context
+        assert guild_id not in adapter._vc_followup_until
+        assert guild_id not in adapter._vc_session_ids
         assert guild_id not in adapter._vc_muted
 
     async def test_handle_mute_toggle(self) -> None:

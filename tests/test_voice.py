@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -245,6 +248,41 @@ async def test_whisper_local_stt_returns_empty_when_not_installed() -> None:
 
     assert result == ""
 
+async def test_whisper_local_stt_serializes_concurrent_transcriptions() -> None:
+    cfg = STTConfig(backend="whisper_local", model="base")
+    stt = WhisperLocalSTT(cfg)
+    active = 0
+    max_active = 0
+    state_lock = threading.Lock()
+
+    class FakeModel:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def transcribe(
+            self, path: str, language: str | None = None
+        ) -> tuple[list[Any], None]:
+            nonlocal active, max_active
+            with state_lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.02)
+            with state_lock:
+                active -= 1
+            segment = MagicMock(text=" hello")
+            return [segment], None
+
+    fake_module = MagicMock(WhisperModel=FakeModel)
+    with patch.dict("sys.modules", {"faster_whisper": fake_module}):
+        results = await asyncio.gather(
+            stt.transcribe(b"first"),
+            stt.transcribe(b"second"),
+            stt.transcribe(b"third"),
+        )
+
+    assert results == ["hello", "hello", "hello"]
+    assert max_active == 1
+
 
 # ---------------------------------------------------------------------------
 # OpenAI TTS
@@ -342,7 +380,7 @@ async def test_edge_tts_synthesizes() -> None:
     mock_edge_tts.Communicate.return_value = mock_communicate
 
     with patch.dict("sys.modules", {"edge_tts": mock_edge_tts}):
-        result = await tts.synthesize("こんにちは")
+        result = await tts.synthesize("Hello")
 
     assert result == b"chunk1chunk2"
     assert tts.content_type == "audio/mpeg"

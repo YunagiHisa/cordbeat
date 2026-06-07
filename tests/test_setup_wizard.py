@@ -247,7 +247,7 @@ class TestRunWizard:
     def test_ollama_not_found_fallback(self, tmp_path: Path) -> None:
         """When Ollama is not detected, wizard asks provider details."""
         inputs = iter(
-            ["ollama", "http://myhost:11434", "mistral", "テストボット", "ja", "n"]
+            ["ollama", "http://myhost:11434", "mistral", "TestBot", "en", "n"]
         )
         with (
             patch("cordbeat.tools.wizard._probe_ollama", return_value=None),

@@ -393,6 +393,14 @@ class OpenAICompatBackend(AIBackend):
         # ``is_voice_context()`` is true so VC / voice-message replies stay
         # within real-time latency budgets.  None = use ``_enable_thinking``.
         self._voice_enable_thinking: bool | None = options.get("voice_enable_thinking")
+        voice_max_tokens = options.get("voice_max_tokens")
+        self._voice_max_tokens = (
+            int(voice_max_tokens)
+            if isinstance(voice_max_tokens, int)
+            and not isinstance(voice_max_tokens, bool)
+            and voice_max_tokens > 0
+            else None
+        )
         self._reasoning_content_keys = _coerce_string_tuple(
             options.get("reasoning_content_keys"),
             _DEFAULT_REASONING_CONTENT_KEYS,
@@ -432,6 +440,15 @@ class OpenAICompatBackend(AIBackend):
         if is_voice_context() and self._voice_enable_thinking is not None:
             return self._voice_enable_thinking
         return self._enable_thinking
+
+    def _effective_max_tokens(self, requested_max_tokens: int) -> int:
+        resolved = _resolve_configured_max_tokens(
+            self._default_max_tokens,
+            requested_max_tokens,
+        )
+        if is_voice_context() and self._voice_max_tokens is not None:
+            return min(resolved, self._voice_max_tokens)
+        return resolved
 
     @staticmethod
     def _messages_with_no_think(
@@ -525,10 +542,7 @@ class OpenAICompatBackend(AIBackend):
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ) -> str:
-        max_tokens = _resolve_configured_max_tokens(
-            self._default_max_tokens,
-            max_tokens,
-        )
+        max_tokens = self._effective_max_tokens(max_tokens)
         messages: list[dict[str, str]] = []
         effective_thinking = self._effective_enable_thinking()
         effective_system = system
@@ -696,10 +710,7 @@ class OpenAICompatBackend(AIBackend):
         max_tokens: int = 1024,
     ) -> str:
         """Generate using OpenAI vision API (content array with image_url blocks)."""
-        max_tokens = _resolve_configured_max_tokens(
-            self._default_max_tokens,
-            max_tokens,
-        )
+        max_tokens = self._effective_max_tokens(max_tokens)
         messages: list[dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -762,10 +773,7 @@ class OpenAICompatBackend(AIBackend):
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ) -> str:
-        max_tokens = _resolve_configured_max_tokens(
-            self._default_max_tokens,
-            max_tokens,
-        )
+        max_tokens = self._effective_max_tokens(max_tokens)
         labels = {"backend": "openai_compat", "model": self._model}
         effective_thinking = self._effective_enable_thinking()
         has_no_think = any(

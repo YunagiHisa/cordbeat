@@ -1,22 +1,25 @@
 name: web_search
-description: "Web検索を行い結果を返す"
+description: "Search the web and return results"
 description_en: "Perform a web search and return results"
 version: "1.0.0"
 author: "cordbeat"
 
 usage: |
-  ウェブ上の情報を検索したいときに使う。
-  最新情報・ニュース・一般的な知識の確認に有効。
+  Use this skill to search for information on the web.
+  It is useful for checking current information, news, and general knowledge.
 
 parameters:
   - name: query
     type: string
     required: true
-    description: "検索クエリ"
+    description: "Search query"
   - name: max_results
     type: integer
     required: false
-    description: "取得する最大件数（デフォルト: 5）"
+    description: "Maximum number of results to retrieve (default: 5)"
+
+contexts:
+  shared_voice: true
 
 safety:
   level: safe

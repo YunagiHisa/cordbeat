@@ -1,26 +1,29 @@
 name: timer
-description: "リマインダー・タイマーを設定する"
+description: "Set a reminder or timer"
 description_en: "Set a reminder or timer"
 version: "1.0.0"
 author: "cordbeat"
 
 usage: |
-  指定分数後にリマインドが必要なときに使う。
-  HEARTBEATがリマインド時刻をチェックし、対象ユーザーに通知する。
+  Use this skill when a reminder is needed after a specified number of minutes.
+  HEARTBEAT checks the reminder time and notifies the target user.
 
 parameters:
   - name: user_id
     type: string
     required: true
-    description: "リマインド対象のユーザーID"
+    description: "User ID to remind"
   - name: message
     type: string
     required: true
-    description: "リマインドメッセージ"
+    description: "Reminder message"
   - name: minutes
     type: integer
     required: false
-    description: "何分後にリマインドするか（デフォルト: 30）"
+    description: "Minutes until the reminder (default: 30)"
+
+contexts:
+  shared_voice: false
 
 safety:
   level: safe

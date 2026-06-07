@@ -13,7 +13,7 @@ Last updated: 2026-05-19
 Production logs (2026-05-19) revealed a recurring failure mode:
 
 ```text
-User: "https://example.com/article  この記事を要約して"
+User: "https://example.com/article  Summarize this article."
 AI  : "[SKILL: web_search | query=https://example.com/article]"
 → web_search returns search-engine hits about the URL string,
    not the article body. The AI cannot recover within the same turn.
@@ -148,7 +148,7 @@ A common pattern from Claude / ChatGPT-style agents is to acknowledge the
 user **before** invoking a tool:
 
 ```text
-AI iter 1: "うん、ちょっと調べてみるね [SKILL: web_search | query=X]"
+AI iter 1: "Sure, let me look that up. [SKILL: web_search | query=X]"
 ```
 
 CordBeat will:
@@ -168,7 +168,7 @@ change is required. This is the same UX pattern as Claude Code's
 #### Post-tag text (discarded)
 
 ```text
-AI iter 1: "[SKILL: fetch_url | url=X] — きっと面白いと思うよ"
+AI iter 1: "[SKILL: fetch_url | url=X] — I think it will be interesting."
 ```
 
 The text **after** the tag is written **before the AI saw the tool result**
@@ -524,7 +524,7 @@ These should be resolved before implementation begins:
 - **OQ5**: Should `_react_loop` be cancellable via `/stop` mid-iteration?
   (Recommendation: yes — check `_stop_flags` before each LLM call.)
 - **OQ6**: For `split` streaming mode, should we add an aggregation
-  hint (e.g., a leading `…` or trailing `(続く)` marker) so the user
+  hint (e.g., a leading `…` or trailing `(continued)` marker) so the user
   knows more is coming? (Recommendation: no for v1.1, evaluate after
   user feedback.)
 

@@ -183,7 +183,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - **System prompt strengthened to enforce tool-promise consistency.** The
   prompt now lists the action verbs that MUST be paired with a `[SKILL: ...]`
-  tag (調べる/確認する/検索する/見る/取ってくる/描く) and explicitly allows
+  tag (look up/check/search/view/fetch/draw) and explicitly allows
   multiple tags per response (matching ReAct semantics). Previous wording
   said "include exactly one tag" which conflicted with multi-step ReAct
   behaviour.

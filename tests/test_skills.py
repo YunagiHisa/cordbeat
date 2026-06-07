@@ -11,7 +11,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+import yaml
 
+from cordbeat.main import _sync_builtin_skill_contexts
 from cordbeat.models import SafetyLevel
 from cordbeat.skills import SkillPermissionError, SkillRegistry
 
@@ -25,6 +27,7 @@ def _create_skill(
     sandbox: bool = False,
     network: bool = False,
     filesystem: bool = False,
+    shared_voice: bool = False,
     main_code: str | None = None,
 ) -> None:
     """Helper to create a minimal skill in the filesystem."""
@@ -37,6 +40,7 @@ def _create_skill(
         f"  sandbox: {str(sandbox).lower()}\n"
         f"  network: {str(network).lower()}\n"
         f"  filesystem: {str(filesystem).lower()}\n"
+        f"contexts:\n  shared_voice: {str(shared_voice).lower()}\n"
     )
     if enabled is not None:
         yaml_content += f"enabled: {str(enabled).lower()}\n"
@@ -99,6 +103,83 @@ class TestSkillRegistry:
         safe_names = [s.name for s in safe]
         assert "safe_one" in safe_names
         assert "risky" not in safe_names
+
+    def test_shared_voice_context_is_loaded(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "search", shared_voice=True)
+        _create_skill(skills_dir, "timer", shared_voice=False)
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+
+        assert registry.available_skills["search"].shared_voice_enabled is True
+        assert registry.available_skills["timer"].shared_voice_enabled is False
+
+    def test_invalid_shared_voice_context_defaults_to_disabled(
+        self, tmp_path: Path
+    ) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "search")
+        yaml_path = skills_dir / "search" / "skill.yaml"
+        yaml_path.write_text(
+            yaml_path.read_text(encoding="utf-8").replace(
+                "contexts:\n  shared_voice: false",
+                "contexts: invalid",
+            ),
+            encoding="utf-8",
+        )
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+
+        assert registry.available_skills["search"].shared_voice_enabled is False
+
+
+    def test_adds_missing_shared_voice_default(self, tmp_path: Path) -> None:
+        bundled = tmp_path / "bundled" / "web_search"
+        installed = tmp_path / "installed" / "web_search"
+        _create_skill(bundled.parent, "web_search", shared_voice=True)
+        _create_skill(installed.parent, "web_search", shared_voice=False)
+        installed_yaml = installed / "skill.yaml"
+        installed_yaml.write_text(
+            installed_yaml.read_text(encoding="utf-8").replace(
+                "contexts:\n  shared_voice: false\n",
+                "",
+            ),
+            encoding="utf-8",
+        )
+
+        _sync_builtin_skill_contexts(bundled, installed)
+
+        data = yaml.safe_load(installed_yaml.read_text(encoding="utf-8"))
+        assert data["contexts"]["shared_voice"] is True
+
+    def test_preserves_explicit_user_shared_voice_setting(self, tmp_path: Path) -> None:
+        bundled = tmp_path / "bundled" / "web_search"
+        installed = tmp_path / "installed" / "web_search"
+        _create_skill(bundled.parent, "web_search", shared_voice=True)
+        _create_skill(installed.parent, "web_search", shared_voice=False)
+
+        _sync_builtin_skill_contexts(bundled, installed)
+
+        data = yaml.safe_load((installed / "skill.yaml").read_text(encoding="utf-8"))
+        assert data["contexts"]["shared_voice"] is False
+
+    def test_preserves_non_block_context_mapping(self, tmp_path: Path) -> None:
+        bundled = tmp_path / "bundled" / "web_search"
+        installed = tmp_path / "installed" / "web_search"
+        _create_skill(bundled.parent, "web_search", shared_voice=True)
+        _create_skill(installed.parent, "web_search", shared_voice=False)
+        installed_yaml = installed / "skill.yaml"
+        original = installed_yaml.read_text(encoding="utf-8").replace(
+            "contexts:\n  shared_voice: false",
+            "contexts: {custom: true}",
+        )
+        installed_yaml.write_text(original, encoding="utf-8")
+
+        _sync_builtin_skill_contexts(bundled, installed)
+
+        assert installed_yaml.read_text(encoding="utf-8") == original
 
     async def test_execute_skill(self, tmp_path: Path) -> None:
         skills_dir = tmp_path / "skills"
@@ -297,6 +378,25 @@ class TestSkillDescriptions:
         desc = registry.get_skill_descriptions_for_prompt(exclude_names={"draw"})
         assert "draw" not in desc
         assert "web_search" in desc
+
+    def test_can_limit_prompt_to_shared_voice_skills(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "web_search", shared_voice=True)
+        _create_skill(skills_dir, "timer", safety="safe", shared_voice=False)
+        _create_skill(
+            skills_dir,
+            "api_call",
+            safety="requires_confirmation",
+            shared_voice=True,
+        )
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+
+        desc = registry.get_skill_descriptions_for_prompt(context="shared_voice")
+
+        assert "web_search" in desc
+        assert "timer" not in desc
+        assert "api_call" not in desc
 
 
 class TestSkillExecution:

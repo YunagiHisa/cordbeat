@@ -231,8 +231,17 @@ class CoreEngine:
                 response, message, system_prompt, user_prompt, user_id
             )
 
-            # Phase 4: Send reply immediately — do NOT wait for post-processing
-            clean_response, draw_images = await self._maybe_draw(response)
+            if message.metadata.get("shared_voice"):
+                clean_response = _DRAW_TAG_RE.sub("", response).strip()
+                if not clean_response:
+                    clean_response = (
+                        "That action is unavailable in a shared voice channel. "
+                        "Please ask me in text instead."
+                    )
+                draw_images: list[str] = []
+            else:
+                # Phase 4: Send reply immediately — do NOT wait for post-processing
+                clean_response, draw_images = await self._maybe_draw(response)
         reply = GatewayMessage(
             type=MessageType.MESSAGE,
             adapter_id=message.adapter_id,
@@ -296,7 +305,7 @@ class CoreEngine:
         # Heartbeat can route proactive messages back to the same channel
         # instead of falling back to DM (see PR for context).
         channel_id = str(message.metadata.get("channel_id", "") or "")
-        if channel_id:
+        if channel_id and not message.metadata.get("via_vc"):
             guild_id = str(message.metadata.get("guild_id", "") or "")
             is_dm = bool(
                 message.metadata.get(
@@ -327,27 +336,50 @@ class CoreEngine:
         Returns None on failure.
         """
         soul_snap = self._soul.get_soul_snapshot()
-        profile = await self._memory.get_core_profile(user_id)
         md = message.metadata or {}
+        shared_voice = bool(md.get("shared_voice"))
+        profile = None if shared_voice else await self._memory.get_core_profile(user_id)
         channel_id = str(md.get("channel_id") or "") or None
         is_dm_raw = md.get("is_dm")
         is_dm: bool | None = bool(is_dm_raw) if is_dm_raw is not None else None
         adapter_id = message.adapter_id or None
-        history = await self._memory.get_recent_messages(
-            user_id,
-            limit=self._memory_config.conversation_history_limit,
-            channel_id=channel_id,
-            is_dm=is_dm,
-            adapter_id=adapter_id,
+        history_limit = (
+            self._memory_config.voice_conversation_history_limit
+            if message.is_voice
+            else self._memory_config.conversation_history_limit
         )
-        message_count = await self._memory.count_messages(user_id)
+        history = (
+            []
+            if shared_voice
+            else await self._memory.get_recent_messages(
+                user_id,
+                limit=history_limit,
+                channel_id=channel_id,
+                is_dm=is_dm,
+                adapter_id=adapter_id,
+            )
+        )
+        message_count = (
+            None if shared_voice else await self._memory.count_messages(user_id)
+        )
 
         system_prompt = build_soul_system_prompt(
             soul_snap,
             timezone_name=self._timezone_name,
             user_message_count=message_count,
         )
-        if self._skills.get("draw") is not None:
+        if shared_voice:
+            system_prompt += (
+                "\n\nYou are participating in a shared voice channel with multiple"
+                " people. The user message is a short room transcript with speaker"
+                " labels. Reply to the group, not to a private individual. Never"
+                " reveal or infer private personal memories. Keep the spoken reply"
+                " concise and natural, usually one or two sentences. Safe skills"
+                " explicitly enabled for shared voice may be used. Drawings and"
+                " actions requiring confirmation are unavailable in shared voice"
+                " channels; never emit [DRAW: ...] tags."
+            )
+        if not message.is_voice and self._skills.get("draw") is not None:
             system_prompt += (
                 "\n\nYou can create simple vector-style drawings for the user"
                 " through CordBeat's Draw DSL renderer. This is not a"
@@ -363,9 +395,16 @@ class CoreEngine:
             )
 
         # Inject available skill catalog so the AI knows what tools it can call.
-        skills_desc = self._skills.get_skill_descriptions_for_prompt(
-            exclude_names={"draw"}
-        )
+        skills_desc = ""
+        if shared_voice:
+            skills_desc = self._skills.get_skill_descriptions_for_prompt(
+                exclude_names={"draw"},
+                context="shared_voice",
+            )
+        elif not message.is_voice:
+            skills_desc = self._skills.get_skill_descriptions_for_prompt(
+                exclude_names={"draw"}
+            )
         if skills_desc and skills_desc != "(no skills available)":
             system_prompt += (
                 "\n\nYou have access to the following tools. To USE a tool you"
@@ -376,8 +415,7 @@ class CoreEngine:
                 "\n\n**STRICT RULE**: If you state in natural language that you"
                 " will look something up, search, check, investigate, fetch,"
                 " confirm, draw, or perform any other action that needs a tool"
-                " (Japanese: 調べる/確認する/検索する/見る/取ってくる/描く"
-                " etc.), you MUST include the corresponding [SKILL: ...] tag in"
+                ", you MUST include the corresponding [SKILL: ...] tag in"
                 " the SAME reply. Do NOT promise an action without emitting the"
                 " tag — that produces dishonest replies and frustrates users."
                 " Conversely, if you have no need for a tool, do not promise one."
@@ -388,22 +426,27 @@ class CoreEngine:
             )
 
         # Phase 1: Direct keyword search (message.content → vector search)
-        semantic_memories = await self._memory.search_semantic(
-            user_id,
-            message.content,
-            n_results=self._memory_config.memory_search_results,
-        )
-        episodic_memories = await self._memory.search_episodic(
-            user_id,
-            message.content,
-            n_results=self._memory_config.memory_search_results,
-        )
+        semantic_memories: list[dict[str, Any]] = []
+        episodic_memories: list[dict[str, Any]] = []
+        if not shared_voice:
+            semantic_memories = await self._memory.search_semantic(
+                user_id,
+                message.content,
+                n_results=self._memory_config.memory_search_results,
+            )
+            episodic_memories = await self._memory.search_episodic(
+                user_id,
+                message.content,
+                n_results=self._memory_config.memory_search_results,
+            )
 
         # Phase 2: Context inference recall (AI extracts keywords → search).
         # Voice replies skip this extra LLM round-trip by default to preserve
         # conversational latency; direct vector and history recall still run.
         recall_keywords: list[str] = []
-        if not message.is_voice or self._memory_config.voice_recall_keywords_enabled:
+        if not shared_voice and (
+            not message.is_voice or self._memory_config.voice_recall_keywords_enabled
+        ):
             recall_keywords = await self._extractor.extract_recall_keywords(
                 message.content, history or None
             )
@@ -430,7 +473,7 @@ class CoreEngine:
 
         # Phase 3: Emotion association recall (current emotion → tag search)
         current_emotion = soul_snap["emotion"]["primary"]
-        if current_emotion and current_emotion != "calm":
+        if not shared_voice and current_emotion and current_emotion != "calm":
             for mem in await self._memory.search_by_emotion(
                 user_id,
                 current_emotion,
@@ -442,35 +485,41 @@ class CoreEngine:
                     seen_ids.add(mem["id"])
 
         # Phase 4a: Chain recall (precomputed associative links)
-        try:
-            recalled_ids = list(seen_ids)
-            chain_contents = await self._memory.get_chain_links(
-                user_id,
-                recalled_ids,
-                max_depth=self._memory_config.chain_recall_max_depth,
-            )
-            existing_contents = {
-                m["content"] for m in semantic_memories + episodic_memories
-            }
-            for chain_text in chain_contents:
-                if chain_text not in existing_contents:
-                    episodic_memories.append(
-                        {"id": f"chain_{hash(chain_text)}", "content": chain_text}
-                    )
-                    existing_contents.add(chain_text)
-        except Exception:
-            logger.debug("Chain recall failed for user %s", user_id)
+        if not shared_voice:
+            try:
+                recalled_ids = list(seen_ids)
+                chain_contents = await self._memory.get_chain_links(
+                    user_id,
+                    recalled_ids,
+                    max_depth=self._memory_config.chain_recall_max_depth,
+                )
+                existing_contents = {
+                    m["content"] for m in semantic_memories + episodic_memories
+                }
+                for chain_text in chain_contents:
+                    if chain_text not in existing_contents:
+                        episodic_memories.append(
+                            {"id": f"chain_{hash(chain_text)}", "content": chain_text}
+                        )
+                        existing_contents.add(chain_text)
+            except Exception:
+                logger.debug("Chain recall failed for user %s", user_id)
 
         # Phase 4b: Precomputed temporal recall hints
         hints: list[str] = []
-        try:
-            raw_hints = await self._memory.get_recall_hints(user_id)
-            hints = [h["content"] for h in raw_hints if h.get("content")]
-        except Exception:
-            logger.debug("Recall hints lookup failed for user %s", user_id)
+        if not shared_voice:
+            try:
+                raw_hints = await self._memory.get_recall_hints(user_id)
+                hints = [h["content"] for h in raw_hints if h.get("content")]
+            except Exception:
+                logger.debug("Recall hints lookup failed for user %s", user_id)
 
         context = build_context(
-            user_display_name=user.display_name,
+            user_display_name=(
+                "participants in a shared voice channel"
+                if shared_voice
+                else user.display_name
+            ),
             profile=profile or None,
             semantic_memories=semantic_memories or None,
             episodic_memories=episodic_memories or None,
@@ -541,7 +590,7 @@ class CoreEngine:
                     type=MessageType.ERROR,
                     adapter_id=message.adapter_id,
                     platform_user_id=message.platform_user_id,
-                    content="（AIが応答を生成できませんでした。もう一度お試しください）",
+                    content="The AI could not generate a response. Please try again.",
                     metadata=self._reply_metadata(message),
                 )
                 await self._gateway.send_to_adapter(message.adapter_id, error_reply)
@@ -569,6 +618,9 @@ class CoreEngine:
         """Background task: persist conversation + run emotion/memory extraction."""
         try:
             md = message.metadata or {}
+            if md.get("ephemeral"):
+                logger.debug("Skipping persistence for ephemeral conversation")
+                return
             channel_id = str(md.get("channel_id") or "")
             is_dm_raw = md.get("is_dm")
             is_dm = bool(is_dm_raw) if is_dm_raw is not None else True
@@ -633,6 +685,7 @@ class CoreEngine:
             {"role": "assistant", "content": response},
         ]
         trace = ToolTrace()
+        shared_voice = bool(message.metadata.get("shared_voice"))
 
         for iteration in range(self._react_config.max_iterations):
             tags = list(_SKILL_TAG_RE.finditer(response))
@@ -642,7 +695,7 @@ class CoreEngine:
             # D13: Extract pre-tag text and flush to user immediately
             first_tag_start = tags[0].start()
             pre_text = response[:first_tag_start].strip()
-            if pre_text:
+            if pre_text and not shared_voice:
                 pre_msg = GatewayMessage(
                     type=MessageType.MESSAGE,
                     adapter_id=message.adapter_id,
@@ -684,7 +737,36 @@ class CoreEngine:
                     )
                     continue
 
+                if shared_voice and not skill.meta.shared_voice_enabled:
+                    logger.info(
+                        "ReAct: blocking skill %r disabled for shared voice",
+                        skill_name,
+                    )
+                    results.append(
+                        ToolCallResult(
+                            skill_name=skill_name,
+                            params=params,
+                            output="Unavailable in shared voice",
+                            is_error=True,
+                        )
+                    )
+                    continue
+
                 if skill.meta.safety_level != SafetyLevel.SAFE:
+                    if shared_voice:
+                        logger.info(
+                            "ReAct: blocking non-safe skill %r in shared voice",
+                            skill_name,
+                        )
+                        results.append(
+                            ToolCallResult(
+                                skill_name=skill_name,
+                                params=params,
+                                output="Unavailable in shared voice",
+                                is_error=True,
+                            )
+                        )
+                        continue
                     logger.info(
                         "ReAct: skill %r requires confirmation; requesting approval",
                         skill_name,
@@ -706,12 +788,12 @@ class CoreEngine:
                     stopped_early = True
                     break
 
-                if pre_text and not status_sent:
+                if pre_text and not status_sent and not shared_voice:
                     status = GatewayMessage(
                         type=MessageType.ACK,
                         adapter_id=message.adapter_id,
                         platform_user_id=message.platform_user_id,
-                        content="🔧 ツールを実行中…",
+                        content="🔧 Running tool…",
                         metadata=self._reply_metadata(message),
                     )
                     try:
@@ -753,9 +835,9 @@ class CoreEngine:
 
             if stopped_early:
                 return (
-                    "🔧 この操作は承認が必要だよ。"
-                    "表示された確認から許可するか、/approve <proposal_id> "
-                    "で実行してね。"
+                    "🔧 This action requires approval. "
+                    "Use the displayed confirmation or run "
+                    "/approve <proposal_id> to proceed."
                 )
 
             if not results:
@@ -801,8 +883,8 @@ class CoreEngine:
         cleaned_final = _SKILL_TAG_RE.sub("", response).strip()
         if not cleaned_final and trace.calls:
             cleaned_final = (
-                "(ツールの実行は完了したけれど、まとめの返信を生成できなかったよ。"
-                "もう一度聞いてくれると嬉しいな)"
+                "(The tool finished, but I could not generate a summary reply. "
+                "Please ask again.)"
             )
         return cleaned_final
 

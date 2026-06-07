@@ -1,18 +1,21 @@
 name: weather
-description: "指定した地域の天気情報を取得する"
+description: "Get weather information for a specified location"
 description_en: "Get weather information for a specified location"
 version: "1.0.0"
 author: "cordbeat"
 
 usage: |
-  天気予報を確認したいときに使う。
-  都市名や地域名を指定して現在の天気と予報を取得する。
+  Use this skill to check a weather forecast.
+  Specify a city or region to get current weather and forecast information.
 
 parameters:
   - name: location
     type: string
     required: true
-    description: "天気を取得する地域名（例: Tokyo, Yokkaichi）"
+    description: "Location to get weather for (e.g. Tokyo or Yokkaichi)"
+
+contexts:
+  shared_voice: true
 
 safety:
   level: safe

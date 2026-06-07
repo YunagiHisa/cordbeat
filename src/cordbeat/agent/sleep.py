@@ -102,7 +102,7 @@ class SleepPhase:
             await self._precompute_chain_links(user.user_id)
 
         # 4. (Memory decay is now lazy — performed inside search_*; no
-        #    nightly batch needed. See PR #81 / 設計書 項目 #4.)
+        #    nightly batch needed. See PR #81 / design document item #4.)
 
         # 5. Trim old conversation messages and recall hints
         for user in users:

@@ -189,14 +189,15 @@ class TestBuildContext:
         result = build_context(
             user_display_name="Alice",
             history=[
-                {"role": "user", "content": "鹿の絵を描いて"},
+                {"role": "user", "content": "Draw a deer"},
                 {
                     "role": "assistant",
                     "content": (
                         "Here's a thinking process:\n"
                         "3. **Formulate Response (Mental Draft):**\n"
                         "   [DRAW: internal draft]\n"
-                        "   - Text: 奈良の鹿だね✨ 優しい雰囲気で描くよ。\n"
+                        "   - Text: A Nara deer ✨ I'll draw it with a gentle "
+                        "atmosphere.\n"
                         "   - Checks: OK"
                     ),
                 },
@@ -204,7 +205,10 @@ class TestBuildContext:
             soul_name="CordBeat",
         )
 
-        assert "CordBeat: 奈良の鹿だね✨ 優しい雰囲気で描くよ。" in result
+        assert (
+            "CordBeat: A Nara deer ✨ I'll draw it with a gentle atmosphere."
+            in result
+        )
         assert "thinking process" not in result
         assert "Formulate Response" not in result
         assert "[DRAW: internal draft]" not in result

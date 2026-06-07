@@ -337,6 +337,9 @@ class ProposalExecutor:
         yaml_lines.extend(
             [
                 "",
+                "contexts:",
+                "  shared_voice: false",
+                "",
                 "safety:",
                 "  level: requires_confirmation",
                 "  sandbox: false",

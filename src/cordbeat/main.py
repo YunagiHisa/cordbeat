@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from cordbeat.agent.heartbeat import HeartbeatLoop
 from cordbeat.agent.soul import Soul
 from cordbeat.ai.backend import create_backend
@@ -30,6 +32,61 @@ logger = logging.getLogger("cordbeat")
 # SIGINT (Ctrl+C) is handled by the signal handlers below instead.
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+
+def _sync_builtin_skill_contexts(src_skill: Path, dst_skill: Path) -> None:
+    """Add missing built-in context defaults without overwriting user settings."""
+    src_yaml = src_skill / "skill.yaml"
+    dst_yaml = dst_skill / "skill.yaml"
+    if not src_yaml.is_file() or not dst_yaml.is_file():
+        return
+    try:
+        src_data = yaml.safe_load(src_yaml.read_text(encoding="utf-8")) or {}
+        dst_data = yaml.safe_load(dst_yaml.read_text(encoding="utf-8")) or {}
+        if not isinstance(src_data, dict) or not isinstance(dst_data, dict):
+            return
+        src_contexts = src_data.get("contexts") or {}
+        dst_contexts = dst_data.get("contexts") or {}
+        if not isinstance(src_contexts, dict) or not isinstance(dst_contexts, dict):
+            return
+        if "shared_voice" in dst_contexts:
+            return
+        shared_voice = src_contexts.get("shared_voice")
+        if not isinstance(shared_voice, bool):
+            return
+
+        text = dst_yaml.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        setting = f"  shared_voice: {str(shared_voice).lower()}"
+        contexts_index = next(
+            (index for index, line in enumerate(lines) if line == "contexts:"),
+            None,
+        )
+        if contexts_index is not None:
+            lines.insert(contexts_index + 1, setting)
+        elif "contexts" in dst_data:
+            logger.warning(
+                "Cannot safely add shared_voice default to non-block contexts "
+                "for skill '%s'",
+                src_skill.name,
+            )
+            return
+        else:
+            safety_index = next(
+                (index for index, line in enumerate(lines) if line == "safety:"),
+                len(lines),
+            )
+            lines[safety_index:safety_index] = ["contexts:", setting, ""]
+        dst_yaml.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        logger.info(
+            "Added built-in shared_voice context default to skill '%s'",
+            src_skill.name,
+        )
+    except (OSError, yaml.YAMLError, AttributeError):
+        logger.exception(
+            "Failed to sync context metadata for skill '%s'",
+            src_skill.name,
+        )
 
 
 def _resolve_config_path() -> str:
@@ -72,6 +129,7 @@ def _sync_builtin_skills(skills_dir: Path) -> None:
             continue
         dst_skill = skills_dir / src_skill.name
         if dst_skill.exists():
+            _sync_builtin_skill_contexts(src_skill, dst_skill)
             continue  # user copy already present — don't overwrite
         try:
             shutil.copytree(src_skill, dst_skill)

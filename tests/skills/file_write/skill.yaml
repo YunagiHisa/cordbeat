@@ -1,27 +1,30 @@
 name: file_write
-description: "指定されたパスにファイルを書き込む"
+description: "Write to a file at the specified path"
 description_en: "Write to a file at the specified path"
 version: "1.0.0"
 author: "cordbeat"
 
 usage: |
-  ファイルにテキストを書き込みたいときに使う。
-  サンドボックス内のファイルのみ書き込み可能。
-  ユーザーの承認が必要。
+  Use this skill to write text to a file.
+  It can write only to files inside the sandbox.
+  Requires user approval.
 
 parameters:
   - name: path
     type: string
     required: true
-    description: "書き込み先のファイルパス"
+    description: "Destination file path"
   - name: content
     type: string
     required: true
-    description: "書き込む内容"
+    description: "Content to write"
   - name: mode
     type: string
     required: false
-    description: "書き込みモード: write（上書き）/ append（追記）（デフォルト: write）"
+    description: "Write mode: write (overwrite) / append (default: write)"
+
+contexts:
+  shared_voice: false
 
 safety:
   level: requires_confirmation

@@ -69,6 +69,7 @@ class WhisperLocalSTT(STTBackend):
         self._model_size = config.model or "base"
         self._language = config.language
         self._model: Any = None  # faster_whisper.WhisperModel, loaded lazily
+        self._transcribe_lock = asyncio.Lock()
 
     async def transcribe(self, audio_bytes: bytes, language: str = "") -> str:
         lang: str | None = language or self._language or None
@@ -95,7 +96,11 @@ class WhisperLocalSTT(STTBackend):
             finally:
                 Path(tmp_path).unlink(missing_ok=True)
 
-        return await asyncio.get_running_loop().run_in_executor(None, _run)
+        # faster-whisper model instances are not intended to serve overlapping
+        # calls. Concurrent VC fragments caused severe CPU contention and made
+        # sub-second clips take tens of seconds.
+        async with self._transcribe_lock:
+            return await asyncio.get_running_loop().run_in_executor(None, _run)
 
 
 class WhisperOpenAISTT(STTBackend):

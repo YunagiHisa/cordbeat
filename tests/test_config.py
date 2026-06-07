@@ -89,6 +89,7 @@ class TestLoadConfig:
         # Relative paths are resolved against the config file's directory
         assert config.memory.sqlite_path == str((tmp_path / "custom.db").resolve())
         assert config.memory.decay_rate == 0.5
+        assert config.memory.voice_conversation_history_limit == 6
         assert config.memory.voice_recall_keywords_enabled is False
         assert config.memory.voice_memory_extraction_enabled is False
 

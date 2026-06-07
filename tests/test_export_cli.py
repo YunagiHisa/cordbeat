@@ -87,13 +87,13 @@ class TestFormatAsJson:
             [
                 {
                     "role": "user",
-                    "content": "こんにちは🌸",
+                    "content": "Hello 🌸",
                     "adapter_id": "",
                     "created_at": "2025-01-01T00:00:00+00:00",
                 }
             ],
         )
-        assert "こんにちは🌸" in rendered
+        assert "Hello 🌸" in rendered
 
 
 class TestFormatAsMarkdown:

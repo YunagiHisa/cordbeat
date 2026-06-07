@@ -578,6 +578,31 @@ class TestCoreEngine:
             "A Nara deer ✨ I'll draw it with a gentle atmosphere."
         )
 
+    async def test_post_process_strips_tool_tags_from_stored_history(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+    ) -> None:
+        user = await memory.get_or_create_user("u1", "Alice")
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content="Please run this [SKILL: web_search | query=secret]",
+            metadata={"channel_id": "456", "is_dm": False},
+        )
+        response = "Done. [DRAW: a detailed image-generation prompt]"
+
+        await engine._post_process_message("u1", user, msg, response)
+
+        msgs = await memory.get_recent_messages("u1")
+        user_msg = next(item for item in msgs if item["role"] == "user")
+        assistant_msg = next(item for item in msgs if item["role"] == "assistant")
+        assert "[SKILL:" not in user_msg["content"]
+        assert "query=secret" not in user_msg["content"]
+        assert "[DRAW:" not in assistant_msg["content"]
+        assert "image-generation prompt" not in assistant_msg["content"]
+
     async def test_handle_message_updates_emotion(
         self,
         engine: CoreEngine,
@@ -2395,6 +2420,40 @@ class TestAutoDraw:
         text, images = await eng._maybe_draw("Here you go! [DRAW: a red circle]")
         assert "[DRAW:" not in text
         assert images == ["base64imgdata"]
+
+    async def test_maybe_draw_skips_complex_image_prompt(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Rich image-generation prompts are not sent to the Draw DSL pipeline."""
+        from unittest.mock import MagicMock
+
+        mock_skill = MagicMock()
+        mock_skill.execute = AsyncMock(return_value={"output": "base64imgdata"})
+
+        fake_skills = MagicMock()
+        fake_skills.get = lambda name: mock_skill if name == "draw" else None
+
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=fake_skills,
+            gateway=mock_gateway,
+        )
+        text, images = await eng._maybe_draw(
+            "Here [DRAW: a majestic icy dragon with translucent scales flying "
+            "inside a crystal cave surrounded by glowing crystals and ethereal "
+            "lighting]"
+        )
+
+        assert images == []
+        assert "image-generation prompts" in text
+        mock_ai.generate.assert_not_awaited()
+        mock_skill.execute.assert_not_awaited()
 
     async def test_maybe_draw_appends_output_to_truncated_dsl(
         self,

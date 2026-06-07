@@ -14,6 +14,8 @@ _SANITIZE_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 # Stricter pattern that also strips # and newlines (for embedded user data)
 _SANITIZE_STRICT_RE = re.compile(r"[#\n\r\x00-\x1f]")
+_DRAW_TAG_RE = re.compile(r"\[DRAW:\s*.*?(?:\]|$)", re.DOTALL | re.IGNORECASE)
+_SKILL_TAG_RE = re.compile(r"\[SKILL:\s*.*?(?:\]|$)", re.DOTALL | re.IGNORECASE)
 
 MAX_USER_INPUT_LEN = 2000
 
@@ -34,6 +36,14 @@ def sanitize(
     """
     pattern = _SANITIZE_STRICT_RE if strict else _SANITIZE_RE
     return pattern.sub("", text)[:max_len]
+
+
+def sanitize_tool_artifacts(text: str) -> str:
+    """Remove generated tool tags before recalled text enters prompts."""
+
+    text = _DRAW_TAG_RE.sub("", text)
+    text = _SKILL_TAG_RE.sub("", text)
+    return text.strip()
 
 
 def _familiarity_label(message_count: int) -> str:
@@ -176,7 +186,9 @@ def build_context(
     if semantic_memories:
         parts.append("\n[BEGIN RECALLED FACTS]")
         for mem in semantic_memories:
-            content = sanitize_reasoning_artifacts(str(mem["content"]))
+            content = sanitize_tool_artifacts(
+                sanitize_reasoning_artifacts(str(mem["content"]))
+            )
             if content:
                 parts.append(f"  - {sanitize(content, max_len=500)}")
         parts.append("[END RECALLED FACTS]")
@@ -184,7 +196,9 @@ def build_context(
     if episodic_memories:
         parts.append("\n[BEGIN RECALLED EPISODES]")
         for mem in episodic_memories:
-            content = sanitize_reasoning_artifacts(str(mem["content"]))
+            content = sanitize_tool_artifacts(
+                sanitize_reasoning_artifacts(str(mem["content"]))
+            )
             if content:
                 parts.append(f"  - {sanitize(content, max_len=500)}")
         parts.append("[END RECALLED EPISODES]")
@@ -192,7 +206,7 @@ def build_context(
     if recall_hints:
         parts.append("\n[BEGIN RECALL HINTS]")
         for hint in recall_hints:
-            content = sanitize_reasoning_artifacts(str(hint))
+            content = sanitize_tool_artifacts(sanitize_reasoning_artifacts(str(hint)))
             if content:
                 parts.append(f"  - {sanitize(content, max_len=500)}")
         parts.append("[END RECALL HINTS]")
@@ -205,6 +219,7 @@ def build_context(
             content = msg["content"]
             if msg["role"] != "user":
                 content = sanitize_reasoning_artifacts(content)
+            content = sanitize_tool_artifacts(content)
             if not content:
                 continue
             sanitized = sanitize(content, max_len=max_user_input_len)

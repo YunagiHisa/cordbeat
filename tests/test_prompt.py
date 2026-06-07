@@ -7,6 +7,7 @@ from cordbeat.ai.prompt import (
     build_context,
     build_soul_system_prompt,
     sanitize,
+    sanitize_tool_artifacts,
 )
 
 
@@ -28,6 +29,12 @@ class TestSanitize:
         long_text = "a" * (MAX_USER_INPUT_LEN + 100)
         result = sanitize(long_text)
         assert len(result) == MAX_USER_INPUT_LEN
+
+    def test_sanitize_tool_artifacts_strips_draw_tags(self) -> None:
+        result = sanitize_tool_artifacts(
+            "I'll draw it. [DRAW: a detailed fantasy image prompt"
+        )
+        assert result == "I'll draw it."
 
 
 class TestBuildSoulSystemPrompt:
@@ -154,6 +161,23 @@ class TestBuildContext:
         assert "Likes Python" in result
         assert "[BEGIN RECALLED EPISODES]" in result
         assert "Got a new job" in result
+
+    def test_recalled_draw_tags_are_removed(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            episodic_memories=[
+                {
+                    "content": (
+                        "User asked for art / Response: Sure [DRAW: a majestic "
+                        "dragon with cinematic lighting]"
+                    )
+                }
+            ],
+        )
+
+        assert "[DRAW:" not in result
+        assert "cinematic lighting" not in result
+        assert "User asked for art" in result
 
     def test_with_recall_hints(self) -> None:
         result = build_context(

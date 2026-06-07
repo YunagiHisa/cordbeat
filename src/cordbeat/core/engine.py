@@ -20,6 +20,7 @@ from cordbeat.ai.prompt import (
     build_react_continuation_prompt,
     build_soul_system_prompt,
     sanitize,
+    sanitize_tool_artifacts,
 )
 from cordbeat.ai.reasoning import sanitize_reasoning_artifacts
 from cordbeat.config import MemoryConfig, ReActConfig
@@ -64,6 +65,8 @@ _DRAW_SAFE_OPCODES = frozenset(
 )
 _DRAW_CONTENT_OPCODES = _DRAW_SAFE_OPCODES - {"SIZE", "CANVAS", "OUTPUT"}
 _DRAW_MAX_AUTO_LINES = 80
+_DRAW_MAX_SIMPLE_DESCRIPTION_CHARS = 120
+_DRAW_MAX_SIMPLE_DESCRIPTION_WORDS = 16
 
 # Pattern for inline skill-invocation tags.
 # Example: [SKILL: web_search | query=latest AI news]
@@ -142,6 +145,22 @@ def _normalize_draw_dsl(raw_dsl: str) -> str:
         normalized.insert(canvas_index, "CANVAS #f8fafc")
     normalized.append("OUTPUT")
     return "\n".join(normalized)
+
+
+def _is_simple_draw_description(description: str) -> bool:
+    """Return True for requests that fit the tiny Draw DSL renderer."""
+
+    compact = " ".join(description.split())
+    if not compact:
+        return False
+    if len(compact) > _DRAW_MAX_SIMPLE_DESCRIPTION_CHARS:
+        return False
+    words = re.findall(r"[A-Za-z0-9#%-]+", compact)
+    if len(words) > _DRAW_MAX_SIMPLE_DESCRIPTION_WORDS:
+        return False
+    if compact.count(",") > 1:
+        return False
+    return True
 
 
 class CoreEngine:
@@ -382,11 +401,17 @@ class CoreEngine:
         if not message.is_voice and self._skills.get("draw") is not None:
             system_prompt += (
                 "\n\nYou can create simple vector-style drawings for the user"
-                " through CordBeat's Draw DSL renderer. This is not a"
-                " photorealistic image-generation model. When a simple"
-                " poster/icon-like drawing would enhance your response,"
-                " include exactly one"
-                " [DRAW: <description in English>] tag in your message."
+                " through CordBeat's tiny Draw DSL renderer. This is not an"
+                " image-generation model and cannot create complex"
+                " illustrations, character art, photorealism, anime-style art,"
+                " detailed fantasy scenes, camera/lighting/composition effects,"
+                " or rich prompt-based images. Use it only when the user"
+                " explicitly asks for a simple DSL-friendly sketch, diagram,"
+                " icon, poster, or geometric drawing. If the user asks for a"
+                " complex illustration, explain that Draw can only make simple"
+                " vector-style DSL sketches and ask for a simpler target."
+                " When appropriate, include exactly one short"
+                " [DRAW: <simple shape/object description in English>] tag."
                 " Example: [DRAW: a red circle on a white background]."
                 " The tag will be converted to Draw DSL, rendered, and sent"
                 " with your reply."
@@ -414,10 +439,12 @@ class CoreEngine:
                 " for approval."
                 "\n\n**STRICT RULE**: If you state in natural language that you"
                 " will look something up, search, check, investigate, fetch,"
-                " confirm, draw, or perform any other action that needs a tool"
+                " confirm, or perform any other action that needs a skill"
                 ", you MUST include the corresponding [SKILL: ...] tag in"
                 " the SAME reply. Do NOT promise an action without emitting the"
                 " tag — that produces dishonest replies and frustrates users."
+                " Drawing is separate: never use [SKILL: draw]; only use"
+                " [DRAW: ...] when the Draw DSL guidance says it is appropriate."
                 " Conversely, if you have no need for a tool, do not promise one."
                 "\nExample: [SKILL: web_search | query=latest AI news]"
                 "\nExample (multi): [SKILL: fetch_url | url=https://example.com]"
@@ -624,15 +651,18 @@ class CoreEngine:
             channel_id = str(md.get("channel_id") or "")
             is_dm_raw = md.get("is_dm")
             is_dm = bool(is_dm_raw) if is_dm_raw is not None else True
+            stored_user_content = sanitize_tool_artifacts(message.content)
             await self._memory.add_message(
                 user_id,
                 "user",
-                message.content,
+                stored_user_content,
                 message.adapter_id,
                 channel_id=channel_id,
                 is_dm=is_dm,
             )
-            stored_response = sanitize_reasoning_artifacts(response)
+            stored_response = sanitize_tool_artifacts(
+                sanitize_reasoning_artifacts(response)
+            )
             await self._memory.add_message(
                 user_id,
                 "assistant",
@@ -654,10 +684,10 @@ class CoreEngine:
             # concurrent calls against a single local LLM server.
             async with self._post_process_lock:
                 await self._extractor.infer_and_update_emotion(
-                    user_id, message.content, stored_response
+                    user_id, stored_user_content, stored_response
                 )
                 await self._extractor.extract_and_store_memories(
-                    user_id, user.display_name, message.content, stored_response
+                    user_id, user.display_name, stored_user_content, stored_response
                 )
         except Exception:
             logger.exception("Background post-processing failed for user %s", user_id)
@@ -944,6 +974,19 @@ class CoreEngine:
 
         clean_text = _DRAW_TAG_RE.sub("", response).strip()
         description = matches[0].strip()
+
+        if not _is_simple_draw_description(description):
+            logger.warning(
+                "Skipping auto-draw because description is too complex "
+                "for Draw DSL: %r",
+                description,
+            )
+            limitation = (
+                "⚠️ I skipped the drawing attachment because Draw only supports "
+                "simple vector-style DSL sketches, not complex image-generation "
+                "prompts."
+            )
+            return f"{clean_text}\n\n{limitation}".strip(), []
 
         skill = self._skills.get("draw")
         if skill is None:

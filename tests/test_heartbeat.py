@@ -1182,6 +1182,9 @@ class TestLayer2Evaluate:
         assert decision.action == HeartbeatAction.MESSAGE
         assert decision.content == "How are you?"
         assert decision.target_user_id == "u1"
+        system = mock_ai.generate_json.await_args.kwargs["system"]
+        assert "Do not revive a completed topic" in system
+        assert "If uncertain, choose" in system
 
     async def test_evaluate_fallback_on_validation_failure(
         self,
@@ -2513,6 +2516,25 @@ class TestSkillCreationProposal:
 
 
 class TestSendHeartbeatMessagePlatformLink:
+    async def test_busy_queue_blocks_send_after_decision_generation(
+        self,
+        heartbeat: HeartbeatLoop,
+        queue: MessageQueue,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """A user message arriving during Heartbeat generation blocks its send."""
+        queue._processing = True
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.MESSAGE,
+            content="stale proactive reply",
+            target_user_id="uid-1",
+            target_adapter_id="discord",
+        )
+
+        await heartbeat._send_heartbeat_message(decision)
+
+        mock_gateway.send_to_adapter.assert_not_awaited()
+
     async def test_resolves_existing_platform_link(
         self,
         heartbeat: HeartbeatLoop,

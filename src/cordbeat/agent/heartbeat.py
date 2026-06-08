@@ -82,6 +82,13 @@ You are executing HEARTBEAT Layer 2 — a detailed evaluation for one user.
 Based on the user's context, conversation history, and memories below,
 decide what action to take for this specific user.
 
+Relevance rule:
+Treat conversation history and memories as background, not as a request to
+continue an old task. Do not revive a completed topic, ask for feedback about
+an old result, or claim that you just performed an action. Choose action=message
+only when the message is clearly relevant and useful now. If uncertain, choose
+action=none.
+
 Important skill rule:
 If you choose action=skill, parameters must be directly executable by that
 skill. Do not put natural-language prompts into skill parameters.
@@ -522,6 +529,12 @@ class HeartbeatLoop:
     async def _send_heartbeat_message(self, decision: HeartbeatDecision) -> None:
         if not decision.target_user_id or not decision.target_adapter_id:
             logger.warning("HEARTBEAT message missing target")
+            return
+        if self._queue.is_busy():
+            logger.info(
+                "HEARTBEAT skipped before send: message queue became busy "
+                "(user-message generation in progress)"
+            )
             return
         if (
             self._proactive_messages_sent_this_tick

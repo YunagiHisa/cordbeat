@@ -68,9 +68,34 @@ _DRAW_SAFE_OPCODES = frozenset(
 )
 _DRAW_CONTENT_OPCODES = _DRAW_SAFE_OPCODES - {"SIZE", "CANVAS", "OUTPUT"}
 _DRAW_MAX_AUTO_LINES = 80
-_DRAW_MAX_SIMPLE_DESCRIPTION_CHARS = 120
-_DRAW_MAX_SIMPLE_DESCRIPTION_WORDS = 16
+_DRAW_MAX_SIMPLE_DESCRIPTION_CHARS = 360
+_DRAW_MAX_SIMPLE_DESCRIPTION_WORDS = 60
 _DRAW_MAX_AUTO_ATTEMPTS = 3
+_DRAW_COMPLEX_PROMPT_TERMS = frozenset(
+    {
+        "8k",
+        "anime",
+        "camera",
+        "cinematic",
+        "complex",
+        "crystal cave",
+        "detailed",
+        "dramatic",
+        "ethereal",
+        "gracefully",
+        "high quality",
+        "illustration prompt",
+        "image-generation prompt",
+        "lighting",
+        "majestic",
+        "masterpiece",
+        "photorealistic",
+        "realistic",
+        "render",
+        "translucent",
+        "ultra",
+    }
+)
 
 # Pattern for inline skill-invocation tags.
 # Example: [SKILL: web_search | query=latest AI news]
@@ -182,7 +207,8 @@ def _is_simple_draw_description(description: str) -> bool:
     words = re.findall(r"[A-Za-z0-9#%-]+", compact)
     if len(words) > _DRAW_MAX_SIMPLE_DESCRIPTION_WORDS:
         return False
-    if compact.count(",") > 1:
+    lower = compact.lower()
+    if any(term in lower for term in _DRAW_COMPLEX_PROMPT_TERMS):
         return False
     return True
 

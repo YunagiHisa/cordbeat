@@ -2512,14 +2512,19 @@ class TestAutoDraw:
         memory: MemoryStore,
         mock_gateway: AsyncMock,
     ) -> None:
-        """Malformed ``[A DRAW: ...]`` tags are stripped and guarded too."""
+        """Malformed ``[A DRAW: ...]`` tags are accepted when DSL-friendly."""
         from unittest.mock import MagicMock
 
         mock_skill = MagicMock()
-        mock_skill.execute = AsyncMock(return_value={"output": "base64imgdata"})
+        mock_skill.execute = AsyncMock(
+            return_value={"output": "base64imgdata", "warnings": []}
+        )
 
         fake_skills = MagicMock()
         fake_skills.get = lambda name: mock_skill if name == "draw" else None
+        mock_ai.generate = AsyncMock(
+            return_value="SIZE 400 400\nCANVAS white\nELLIPSE 180 160 240 260 tan"
+        )
 
         eng = CoreEngine(
             ai=mock_ai,
@@ -2535,10 +2540,48 @@ class TestAutoDraw:
         )
 
         assert "[A DRAW:" not in text
-        assert images == []
-        assert "image-generation prompts" in text
-        mock_ai.generate.assert_not_awaited()
-        mock_skill.execute.assert_not_awaited()
+        assert images == ["base64imgdata"]
+
+    async def test_maybe_draw_allows_simple_night_scene_description(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Long but DSL-friendly scene descriptions should still render."""
+        from unittest.mock import MagicMock
+
+        mock_skill = MagicMock()
+        mock_skill.execute = AsyncMock(
+            return_value={"output": "nightimgdata", "warnings": []}
+        )
+
+        fake_skills = MagicMock()
+        fake_skills.get = lambda name: mock_skill if name == "draw" else None
+        mock_ai.generate = AsyncMock(
+            return_value=(
+                "SIZE 800 600\nCANVAS #07142f\nCIRCLE 680 90 40 yellow FILL\n"
+                "RECT 0 500 800 600 black FILL\nOUTPUT"
+            )
+        )
+
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=fake_skills,
+            gateway=mock_gateway,
+        )
+        text, images = await eng._maybe_draw(
+            "Here [DRAW: a dark blue background with a yellow crescent moon "
+            "in the top right, several small white stars scattered across the "
+            "sky, and a simplified black silhouette of a city skyline with a "
+            "few glowing yellow windows at the bottom]"
+        )
+
+        assert "[DRAW:" not in text
+        assert images == ["nightimgdata"]
 
     async def test_maybe_draw_appends_output_to_truncated_dsl(
         self,

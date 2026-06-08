@@ -783,6 +783,56 @@ class TestCoreEngine:
         # 4 calls: recall keywords, main generate, emotion, extraction
         assert mock_ai.generate.await_count == 4
 
+    async def test_text_generation_timeout_retries_no_think(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Main response generation retries once with no-think after timeout."""
+        ai = AsyncMock()
+
+        async def _generate(**kwargs: object) -> str:
+            prompt = kwargs.get("prompt", "")
+            system = kwargs.get("system", "")
+            if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if isinstance(prompt, str) and "what emotion" in prompt.lower():
+                return '{"emotion": "neutral", "intensity": 0.4}'
+            if isinstance(prompt, str) and "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "timeout", "emotional_tone": "neutral",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            if isinstance(system, str) and "/no_think" in system:
+                return "Recovered after retry."
+            raise TimeoutError("LLM read timeout")
+
+        ai.generate = AsyncMock(side_effect=_generate)
+        eng = CoreEngine(
+            ai=ai, soul=soul, memory=memory, skills=skills, gateway=mock_gateway
+        )
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Hi!",
+        )
+        await eng.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args.args[1]
+        assert reply.type == MessageType.MESSAGE
+        assert reply.content == "Recovered after retry."
+        retry_call = next(
+            call
+            for call in ai.generate.await_args_list
+            if "/no_think" in call.kwargs.get("system", "")
+        )
+        assert retry_call.kwargs["max_tokens"] == 1024
+        assert retry_call.kwargs["temperature"] == 0.5
+
     async def test_memory_extraction_stores_facts(
         self,
         soul: Soul,

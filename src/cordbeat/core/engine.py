@@ -80,6 +80,26 @@ _SKILL_TAG_RE = re.compile(
 )
 
 
+def _is_timeout_exception(exc: BaseException) -> bool:
+    """Return True for common HTTP timeout exception wrappers."""
+
+    timeout_names = {
+        "ConnectTimeout",
+        "PoolTimeout",
+        "ReadTimeout",
+        "TimeoutException",
+        "WriteTimeout",
+    }
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, TimeoutError):
+            return True
+        if current.__class__.__name__ in timeout_names:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def _draw_line_has_minimum_args(opcode: str, line: str) -> bool:
     """Return True when a DSL line has enough tokens to be plausibly usable."""
 
@@ -605,7 +625,7 @@ class CoreEngine:
                         len(message.images),
                         exc_info=True,
                     )
-            raw = await self._ai.generate(prompt=prompt, system=system_prompt)
+            raw = await self._generate_text_with_timeout_retry(prompt, system_prompt)
             cleaned = sanitize_reasoning_artifacts(raw)
             logger.debug(
                 "[AI OUTPUT] raw(%d chars):\n%s",
@@ -638,6 +658,35 @@ class CoreEngine:
             )
             await self._gateway.send_to_adapter(message.adapter_id, error_reply)
             return None
+
+    async def _generate_text_with_timeout_retry(
+        self,
+        prompt: str,
+        system_prompt: str,
+    ) -> str:
+        """Generate chat text, retrying timeouts once with no-think constraints."""
+
+        try:
+            return await self._ai.generate(prompt=prompt, system=system_prompt)
+        except Exception as exc:
+            if not _is_timeout_exception(exc):
+                raise
+
+        retry_system = (
+            system_prompt
+            + "\n/no_think\n"
+            "The previous generation timed out. Reply concisely and directly. "
+            "Do not use hidden reasoning."
+        )
+        logger.warning(
+            "AI generation timed out; retrying once with no-think short output"
+        )
+        return await self._ai.generate(
+            prompt=prompt,
+            system=retry_system,
+            temperature=0.5,
+            max_tokens=1024,
+        )
 
     async def _post_process_message(
         self,

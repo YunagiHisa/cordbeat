@@ -2471,21 +2471,30 @@ class TestAutoDraw:
         assert "[DRAW:" not in text
         assert images == ["base64imgdata"]
 
-    async def test_maybe_draw_skips_complex_image_prompt(
+    async def test_maybe_draw_attempts_stylized_complex_scene(
         self,
         mock_ai: AsyncMock,
         soul: Soul,
         memory: MemoryStore,
         mock_gateway: AsyncMock,
     ) -> None:
-        """Rich image-generation prompts are not sent to the Draw DSL pipeline."""
+        """Complex scene descriptions are converted into stylized Draw DSL."""
         from unittest.mock import MagicMock
 
         mock_skill = MagicMock()
-        mock_skill.execute = AsyncMock(return_value={"output": "base64imgdata"})
+        mock_skill.execute = AsyncMock(
+            return_value={"output": "base64imgdata", "warnings": []}
+        )
 
         fake_skills = MagicMock()
         fake_skills.get = lambda name: mock_skill if name == "draw" else None
+        mock_ai.generate = AsyncMock(
+            return_value=(
+                "SIZE 800 600\nGRADIENT 0 0 800 600 #dff6ff #315b8a vertical\n"
+                "BEZIER 100 300 250 80 550 80 700 300 #bde9ff 8\n"
+                "POLYGON 300 360 400 180 500 360 #e8f8ff FILL\nOUTPUT"
+            )
+        )
 
         eng = CoreEngine(
             ai=mock_ai,
@@ -2500,10 +2509,10 @@ class TestAutoDraw:
             "lighting]"
         )
 
-        assert images == []
-        assert "image-generation prompts" in text
-        mock_ai.generate.assert_not_awaited()
-        mock_skill.execute.assert_not_awaited()
+        assert "[DRAW:" not in text
+        assert images == ["base64imgdata"]
+        mock_ai.generate.assert_awaited_once()
+        mock_skill.execute.assert_awaited_once()
 
     async def test_maybe_draw_handles_malformed_a_draw_tag(
         self,
@@ -2653,6 +2662,45 @@ class TestAutoDraw:
         assert "SIZE:" not in commands
         assert "CANVAS:" not in commands
         assert "CIRCLE:" not in commands
+
+    async def test_maybe_draw_preserves_turtle_repeat_commands(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Auto-draw preserves supported turtle and repeat DSL commands."""
+        from unittest.mock import MagicMock
+
+        mock_skill = MagicMock()
+        mock_skill.execute = AsyncMock(
+            return_value={"output": "base64imgdata", "warnings": []}
+        )
+        fake_skills = MagicMock()
+        fake_skills.get = lambda name: mock_skill if name == "draw" else None
+        mock_ai.generate = AsyncMock(
+            return_value=(
+                "SIZE 400 400\nCANVAS white\nTURTLE 200 200\nPENCOLOR purple\n"
+                "PENWIDTH 3\nPENDOWN\nREPEAT 6\nFORWARD 60\nRIGHT 60\nEND\nOUTPUT"
+            )
+        )
+
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=fake_skills,
+            gateway=mock_gateway,
+        )
+        _, images = await eng._maybe_draw("Here [DRAW: a purple hexagon]")
+
+        assert images == ["base64imgdata"]
+        commands = mock_skill.execute.await_args.args[0]["commands"]
+        assert "TURTLE 200 200" in commands
+        assert "REPEAT 6" in commands
+        assert "FORWARD 60" in commands
+        assert "\nEND\n" in commands
 
     async def test_maybe_draw_retries_ai_when_llm_dsl_has_no_image(
         self,
@@ -2856,8 +2904,10 @@ class TestAutoDraw:
         assert dsl == dsl_response.strip()
         call_kwargs = mock_ai.generate.await_args.kwargs
         assert call_kwargs["temperature"] == 0.2
-        assert call_kwargs["max_tokens"] == 1200
+        assert call_kwargs["max_tokens"] == 3000
         assert "/no_think" in call_kwargs["system"]
+        assert "BEZIER" in call_kwargs["system"]
+        assert "REPEAT" in call_kwargs["system"]
 
     async def test_generate_draw_dsl_ai_failure_returns_empty(
         self,

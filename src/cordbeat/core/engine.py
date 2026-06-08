@@ -63,39 +63,35 @@ _DRAW_SAFE_OPCODES = frozenset(
         "BEZIER",
         "GRADIENT",
         "DOTS",
+        "TURTLE",
+        "HEADING",
+        "PENCOLOR",
+        "PENWIDTH",
+        "PENUP",
+        "PENDOWN",
+        "FORWARD",
+        "BACKWARD",
+        "RIGHT",
+        "LEFT",
+        "REPEAT",
+        "END",
         "OUTPUT",
     }
 )
-_DRAW_CONTENT_OPCODES = _DRAW_SAFE_OPCODES - {"SIZE", "CANVAS", "OUTPUT"}
-_DRAW_MAX_AUTO_LINES = 80
-_DRAW_MAX_SIMPLE_DESCRIPTION_CHARS = 360
-_DRAW_MAX_SIMPLE_DESCRIPTION_WORDS = 60
+_DRAW_CONTENT_OPCODES = _DRAW_SAFE_OPCODES - {
+    "SIZE",
+    "CANVAS",
+    "HEADING",
+    "PENCOLOR",
+    "PENWIDTH",
+    "PENUP",
+    "PENDOWN",
+    "REPEAT",
+    "END",
+    "OUTPUT",
+}
+_DRAW_MAX_AUTO_LINES = 120
 _DRAW_MAX_AUTO_ATTEMPTS = 3
-_DRAW_COMPLEX_PROMPT_TERMS = frozenset(
-    {
-        "8k",
-        "anime",
-        "camera",
-        "cinematic",
-        "complex",
-        "crystal cave",
-        "detailed",
-        "dramatic",
-        "ethereal",
-        "gracefully",
-        "high quality",
-        "illustration prompt",
-        "image-generation prompt",
-        "lighting",
-        "majestic",
-        "masterpiece",
-        "photorealistic",
-        "realistic",
-        "render",
-        "translucent",
-        "ultra",
-    }
-)
 
 # Pattern for inline skill-invocation tags.
 # Example: [SKILL: web_search | query=latest AI news]
@@ -144,6 +140,18 @@ def _draw_line_has_minimum_args(opcode: str, line: str) -> bool:
         "BEZIER": 10,
         "GRADIENT": 7,
         "DOTS": 7,
+        "TURTLE": 3,
+        "HEADING": 2,
+        "PENCOLOR": 2,
+        "PENWIDTH": 2,
+        "PENUP": 1,
+        "PENDOWN": 1,
+        "FORWARD": 2,
+        "BACKWARD": 2,
+        "RIGHT": 2,
+        "LEFT": 2,
+        "REPEAT": 2,
+        "END": 1,
         "OUTPUT": 1,
     }
     return token_count >= minimums.get(opcode, 1)
@@ -194,23 +202,6 @@ def _normalize_draw_dsl(raw_dsl: str) -> str:
         normalized.insert(canvas_index, "CANVAS #f8fafc")
     normalized.append("OUTPUT")
     return "\n".join(normalized)
-
-
-def _is_simple_draw_description(description: str) -> bool:
-    """Return True for requests that fit the tiny Draw DSL renderer."""
-
-    compact = " ".join(description.split())
-    if not compact:
-        return False
-    if len(compact) > _DRAW_MAX_SIMPLE_DESCRIPTION_CHARS:
-        return False
-    words = re.findall(r"[A-Za-z0-9#%-]+", compact)
-    if len(words) > _DRAW_MAX_SIMPLE_DESCRIPTION_WORDS:
-        return False
-    lower = compact.lower()
-    if any(term in lower for term in _DRAW_COMPLEX_PROMPT_TERMS):
-        return False
-    return True
 
 
 class CoreEngine:
@@ -450,19 +441,18 @@ class CoreEngine:
             )
         if not message.is_voice and self._skills.get("draw") is not None:
             system_prompt += (
-                "\n\nYou can create simple vector-style drawings for the user"
-                " through CordBeat's tiny Draw DSL renderer. This is not an"
-                " image-generation model and cannot create complex"
-                " illustrations, character art, photorealism, anime-style art,"
-                " detailed fantasy scenes, camera/lighting/composition effects,"
-                " or rich prompt-based images. Use it only when the user"
-                " explicitly asks for a simple DSL-friendly sketch, diagram,"
-                " icon, poster, or geometric drawing. If the user asks for a"
-                " complex illustration, explain that Draw can only make simple"
-                " vector-style DSL sketches and ask for a simpler target."
-                " When appropriate, include exactly one short"
-                " [DRAW: <simple shape/object description in English>] tag."
-                " Example: [DRAW: a red circle on a white background]."
+                "\n\nYou can create procedural illustrations for the user"
+                " through CordBeat's Draw DSL renderer. Draw is not a diffusion"
+                " image generator: describe the intended visible composition,"
+                " subjects, pose, colors, and mood rather than writing an"
+                " image-generation prompt with quality tags. Represent any"
+                " requested content through a suitable stylized composition of"
+                " primitives and curves. For a difficult request, preserve its"
+                " essential visual relationships while simplifying only what"
+                " the renderer cannot express. Do not refuse merely because the"
+                " subject is complex. When the user asks for a drawing, include"
+                " exactly one concise [DRAW: <visible composition and"
+                " relationships in English>] tag."
                 " The tag will be converted to Draw DSL, rendered, and sent"
                 " with your reply."
                 " Do not call the draw skill directly with [SKILL: draw];"
@@ -1054,19 +1044,8 @@ class CoreEngine:
         clean_text = _DRAW_TAG_RE.sub("", response).strip()
         description = matches[0].strip()
 
-        if not _is_simple_draw_description(description):
-            logger.warning(
-                "Skipping auto-draw because description is too complex "
-                "for Draw DSL: %r",
-                description,
-            )
-            limitation = (
-                "⚠️ I couldn't attach a drawing because Draw only supports "
-                "simple vector-style DSL sketches, not complex image-generation "
-                "prompts. Please ask for a simpler sketch, diagram, icon, or "
-                "geometric drawing."
-            )
-            return limitation, []
+        if not description:
+            return clean_text, []
 
         skill = self._skills.get("draw")
         if skill is None:
@@ -1210,19 +1189,20 @@ class CoreEngine:
 
         system = (
             "/no_think\n"
-            "You review simple Draw DSL renderings. Return ONLY compact JSON: "
+            "You review Draw DSL renderings. Return ONLY compact JSON: "
             '{"verdict":"pass"} or {"verdict":"retry","reason":"short reason"}. '
             "Retry only when the image is blank, broken, unreadable, or clearly "
-            "does not match the requested simple drawing. Do not request style "
-            "polish or complex image-generation details."
+            "does not match the requested drawing. Judge whether the stylized "
+            "procedural interpretation communicates the requested subject and "
+            "composition; do not demand photorealism."
         )
         prompt = (
             "Requested drawing:\n"
-            f"{sanitize(description, max_len=300)}\n\n"
+            f"{sanitize(description, max_len=1200)}\n\n"
             "Draw DSL used:\n"
-            f"{sanitize(dsl, strict=True, max_len=1400)}\n\n"
-            "Check whether the attached image is an acceptable simple "
-            "vector-style rendering of the request."
+            f"{sanitize(dsl, strict=True, max_len=6000)}\n\n"
+            "Check whether the attached image is an acceptable stylized "
+            "procedural rendering of the request."
         )
         try:
             raw = await self._ai.generate_with_vision(
@@ -1263,12 +1243,12 @@ class CoreEngine:
 
         Returns an empty string on failure so callers can skip gracefully.
         """
-        safe_desc = sanitize(description, max_len=500)
+        safe_desc = sanitize(description, max_len=2000)
         retry_line = ""
         if retry_reason:
             retry_line = (
                 "\nPrevious attempt failed: "
-                f"{sanitize(retry_reason, strict=True, max_len=160)}"
+                f"{sanitize(retry_reason, strict=True, max_len=500)}"
                 "\nProduce a complete alternative Draw DSL for the same request."
             )
         system = (
@@ -1276,7 +1256,10 @@ class CoreEngine:
             "You are a drawing DSL generator. "
             "Given a description, output ONLY valid Draw DSL"
             " commands — no prose, no markdown fences.\n"
-            "Use at most 35 lines. Prefer a simple poster-like composition. "
+            "Plan the composition in canvas coordinates before emitting it. "
+            "Use enough layered primitives to make the main subject recognizable"
+            " and occupy a clear focal area. Stylize difficult subjects instead"
+            " of refusing them. Use at most 100 lines. "
             "Never use SAVE. Always end with OUTPUT as the final line.\n"
             "Available commands (one per line):\n"
             "  SIZE <width> <height>\n"
@@ -1289,8 +1272,23 @@ class CoreEngine:
             '  TEXT <x> <y> "<text>" <color> [size]\n'
             "  STAR <cx> <cy> <outer_r> <inner_r> <points> <color> [FILL]\n"
             "  SPIRAL <cx> <cy> <turns> <spacing> <color> [width]\n"
+            "  ARC <cx> <cy> <radius> <start_deg> <end_deg> <color> [FILL]\n"
+            "  BEZIER <x1> <y1> <cx1> <cy1> <cx2> <cy2> <x2> <y2> <color>"
+            " [width]\n"
+            "  GRADIENT <x1> <y1> <x2> <y2> <color1> <color2>"
+            " [horizontal|vertical|radial]\n"
+            "  DOTS <x1> <y1> <x2> <y2> <count> <color> [radius]\n"
+            "  TURTLE <x> <y>\n"
+            "  HEADING <degrees>\n"
+            "  PENCOLOR <color>\n"
+            "  PENWIDTH <width>\n"
+            "  PENUP | PENDOWN\n"
+            "  FORWARD <distance> | BACKWARD <distance>\n"
+            "  RIGHT <degrees> | LEFT <degrees>\n"
+            "  REPEAT <count> ... END\n"
             "  OUTPUT [PNG]\n"
             "Colors: named colors (white, red, blue, ...) or #RRGGBB."
+            " Curves, gradients, repeated details, and turtle paths are welcome."
             " Always end with OUTPUT."
         )
         prompt = f"Draw this: {safe_desc}{retry_line}"
@@ -1299,7 +1297,7 @@ class CoreEngine:
                 prompt=prompt,
                 system=system,
                 temperature=0.2,
-                max_tokens=1200,
+                max_tokens=3000,
             )
             return raw.strip()
         except Exception:

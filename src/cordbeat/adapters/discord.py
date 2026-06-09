@@ -582,10 +582,48 @@ class DiscordAdapter(RetryableConnection):
         await _fetch_attachment_images(message, images)
 
         ref = getattr(message, "reference", None)
-        if ref is not None and len(images) < _MAX_IMAGES_PER_MESSAGE:
+        reply_context: dict[str, Any] | None = None
+        if ref is not None:
             ref_msg = getattr(ref, "resolved", None)
+            if ref_msg is None:
+                message_id = getattr(ref, "message_id", None)
+                if isinstance(message_id, int):
+                    try:
+                        ref_msg = await message.channel.fetch_message(message_id)
+                    except Exception:
+                        logger.debug(
+                            "Failed to fetch unresolved Discord reply message %s",
+                            message_id,
+                        )
             if ref_msg is not None:
+                reply_image_start = len(images)
                 await _fetch_attachment_images(ref_msg, images)
+                reply_author = getattr(ref_msg, "author", None)
+                author_name = getattr(reply_author, "display_name", None) or getattr(
+                    reply_author, "name", None
+                )
+                reply_content = getattr(ref_msg, "content", "")
+                reply_message_id = getattr(ref_msg, "id", "")
+                if not isinstance(author_name, str):
+                    author_name = ""
+                if not isinstance(reply_content, str):
+                    reply_content = ""
+                if not isinstance(reply_message_id, (int, str)):
+                    reply_message_id = ""
+                reply_image_count = len(images) - reply_image_start
+                if (
+                    author_name
+                    or reply_content
+                    or reply_message_id
+                    or reply_image_count
+                ):
+                    reply_context = {
+                        "author": author_name,
+                        "content": reply_content,
+                        "message_id": str(reply_message_id),
+                        "is_bot": bool(getattr(reply_author, "bot", False)),
+                        "image_count": reply_image_count,
+                    }
 
         content = message.content
         is_voice = False
@@ -632,6 +670,7 @@ class DiscordAdapter(RetryableConnection):
                     "guild_id": str(message.guild.id) if message.guild else "",
                     "is_dm": message.guild is None,
                     "display_name": message.author.display_name,
+                    **({"reply_context": reply_context} if reply_context else {}),
                 },
             }
         )

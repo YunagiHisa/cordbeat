@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ADAPTER_ID = "telegram"
+_MAX_IMAGES_PER_MESSAGE = 4
 _IMAGE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024
 _TYPING_REFRESH_SECONDS = 4
 _CORE_BOT_COMMANDS = (
@@ -176,6 +177,48 @@ class TelegramAdapter(RetryableConnection):
                     except Exception:
                         logger.warning("Failed to download Telegram document image")
 
+            reply_context: dict[str, Any] | None = None
+            reply = getattr(msg, "reply_to_message", None)
+            if reply is not None:
+                reply_image_start = len(images)
+                if len(images) < _MAX_IMAGES_PER_MESSAGE and reply.photo:
+                    try:
+                        photo = reply.photo[-1]
+                        if (photo.file_size or 0) <= _IMAGE_SIZE_LIMIT_BYTES:
+                            file = await context.bot.get_file(photo.file_id)
+                            raw = await file.download_as_bytearray()
+                            images.append(
+                                base64.b64encode(bytes(raw)).decode("ascii")
+                            )
+                    except Exception:
+                        logger.warning("Failed to download replied Telegram photo")
+                if (
+                    len(images) < _MAX_IMAGES_PER_MESSAGE
+                    and reply.document
+                    and (reply.document.mime_type or "").startswith("image/")
+                    and (reply.document.file_size or 0) <= _IMAGE_SIZE_LIMIT_BYTES
+                ):
+                    try:
+                        file = await context.bot.get_file(reply.document.file_id)
+                        raw = await file.download_as_bytearray()
+                        images.append(base64.b64encode(bytes(raw)).decode("ascii"))
+                    except Exception:
+                        logger.warning("Failed to download replied Telegram document")
+
+                reply_author = getattr(reply, "from_user", None)
+                author_name = (
+                    getattr(reply_author, "full_name", None)
+                    or getattr(reply_author, "username", None)
+                    or ""
+                )
+                reply_context = {
+                    "author": author_name,
+                    "content": reply.text or reply.caption or "",
+                    "message_id": str(reply.message_id),
+                    "is_bot": bool(getattr(reply_author, "is_bot", False)),
+                    "image_count": len(images) - reply_image_start,
+                }
+
             # Handle voice messages via STT when the backend is configured.
             text = msg.text or msg.caption or ""
             if msg.voice and self._stt is not None:
@@ -207,6 +250,7 @@ class TelegramAdapter(RetryableConnection):
                 chat_id=chat_id,
                 images=images,
                 is_voice=user_id in self._voice_users,
+                reply_context=reply_context,
             )
 
         async def handle_core_command(update: Update, context: Any) -> None:
@@ -470,6 +514,7 @@ class TelegramAdapter(RetryableConnection):
         chat_id: int = 0,
         images: list[str] | None = None,
         is_voice: bool = False,
+        reply_context: dict[str, Any] | None = None,
     ) -> None:
         if self._ws is None:
             logger.warning("Not connected to Core, dropping message")
@@ -487,6 +532,7 @@ class TelegramAdapter(RetryableConnection):
                 "metadata": {
                     "chat_id": str(chat_id),
                     "display_name": display_name,
+                    **({"reply_context": reply_context} if reply_context else {}),
                 },
             }
         )

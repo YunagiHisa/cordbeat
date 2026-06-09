@@ -110,6 +110,71 @@ class TestDiscordAdapter:
         # User channel should be cached
         assert adapter._user_channels["123"] == 456
 
+    async def test_forward_to_core_includes_discord_reply_context(self) -> None:
+        from cordbeat.adapters.discord import DiscordAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = DiscordAdapter(config)
+        adapter._ws = AsyncMock()
+
+        referenced = MagicMock(
+            id=777,
+            content="Earlier message",
+            author=MagicMock(display_name="Bob", name="bob", bot=False),
+            attachments=[],
+        )
+        message = MagicMock(
+            author=MagicMock(id=123, display_name="Alice"),
+            content="What about this?",
+            channel=MagicMock(id=456),
+            guild=MagicMock(id=789),
+            attachments=[],
+            reference=MagicMock(resolved=referenced),
+        )
+
+        await adapter._forward_to_core(message)
+
+        payload = json.loads(adapter._ws.send.call_args[0][0])
+        assert payload["metadata"]["reply_context"] == {
+            "author": "Bob",
+            "content": "Earlier message",
+            "message_id": "777",
+            "is_bot": False,
+            "image_count": 0,
+        }
+
+    async def test_forward_to_core_fetches_unresolved_discord_reply(self) -> None:
+        from cordbeat.adapters.discord import DiscordAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = DiscordAdapter(config)
+        adapter._ws = AsyncMock()
+        referenced = MagicMock(
+            id=778,
+            content="Fetched earlier message",
+            author=MagicMock(display_name="Bob", name="bob", bot=True),
+            attachments=[],
+        )
+        channel = MagicMock(id=456)
+        channel.fetch_message = AsyncMock(return_value=referenced)
+        message = MagicMock(
+            author=MagicMock(id=123, display_name="Alice"),
+            content="Explain this",
+            channel=channel,
+            guild=MagicMock(id=789),
+            attachments=[],
+            reference=MagicMock(resolved=None, message_id=778),
+        )
+
+        await adapter._forward_to_core(message)
+
+        channel.fetch_message.assert_awaited_once_with(778)
+        payload = json.loads(adapter._ws.send.call_args[0][0])
+        assert payload["metadata"]["reply_context"]["content"] == (
+            "Fetched earlier message"
+        )
+        assert payload["metadata"]["reply_context"]["is_bot"] is True
+
     async def test_forward_to_core_ws_error(self) -> None:
         from cordbeat.adapters.discord import DiscordAdapter
 
@@ -386,6 +451,33 @@ class TestTelegramAdapter:
         assert payload["adapter_id"] == "telegram"
         assert payload["platform_user_id"] == "user42"
         assert payload["content"] == "Hello!"
+
+    async def test_forward_to_core_includes_telegram_reply_context(self) -> None:
+        from cordbeat.adapters.telegram import TelegramAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = TelegramAdapter(config)
+        adapter._ws = AsyncMock()
+        reply_context = {
+            "author": "Bob",
+            "content": "Earlier message",
+            "message_id": "42",
+            "is_bot": False,
+            "image_count": 1,
+        }
+
+        await adapter._forward_to_core(
+            "user42",
+            "What about this?",
+            display_name="Alice",
+            chat_id=999,
+            images=["image"],
+            reply_context=reply_context,
+        )
+
+        payload = json.loads(adapter._ws.send.call_args[0][0])
+        assert payload["metadata"]["reply_context"] == reply_context
+        assert payload["images"] == ["image"]
 
     async def test_forward_to_core_no_ws(self) -> None:
         from cordbeat.adapters.telegram import TelegramAdapter

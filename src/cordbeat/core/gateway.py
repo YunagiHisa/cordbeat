@@ -111,7 +111,7 @@ class RetryableConnection(ABC):
                 metadata: dict[str, Any] = data.get("metadata") or {}
                 if msg_type == "skill_confirm":
                     await self._dispatch_skill_confirm(platform_user_id, data)
-                elif msg_type in ("message", "heartbeat_message", "error"):
+                elif msg_type in ("message", "heartbeat_message", "ack", "error"):
                     await self._dispatch_core_message(
                         platform_user_id, content, images, metadata=metadata
                     )

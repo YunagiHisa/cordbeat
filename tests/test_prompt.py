@@ -140,6 +140,18 @@ class TestBuildSoulSystemPrompt:
         result = build_soul_system_prompt(snap)
         assert "Relationship stage" not in result
 
+    def test_language_rule_allows_task_suitable_tool_arguments(self) -> None:
+        snap = {
+            "name": "TestBot",
+            "traits": ["curious"],
+            "emotion": {"primary": "calm", "intensity": 0.5},
+            "immutable_rules": [],
+            "language": "ja",
+        }
+        result = build_soul_system_prompt(snap)
+        assert "Always respond to the user in ja." in result
+        assert "Tool arguments may use the language best suited" in result
+
 
 class TestBuildContext:
     def test_minimal_context(self) -> None:
@@ -167,6 +179,40 @@ class TestBuildContext:
         assert "Likes Python" in result
         assert "[BEGIN RECALLED EPISODES]" in result
         assert "Got a new job" in result
+
+    def test_recalled_episodes_remove_response_and_near_duplicates(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            episodic_memories=[
+                {
+                    "content": (
+                        "[joy] User: 自画像描いてって / Response: "
+                        "I'll create an image prompt."
+                    )
+                },
+                {"content": "[joy] User: <@123> アテナの自画像を描いて"},
+                {"content": "Alice decided to publish CordBeat."},
+            ],
+        )
+
+        assert "image prompt" not in result
+        assert result.count("自画像") == 1
+        assert "Alice decided to publish CordBeat." in result
+
+    def test_recalled_episode_limit_reduces_context_weight(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            episodic_memories=[
+                {"content": "Alice adopted a cat"},
+                {"content": "Alice released CordBeat"},
+                {"content": "Alice visited Kyoto"},
+            ],
+            recalled_episode_limit=2,
+        )
+
+        assert "Alice adopted a cat" in result
+        assert "Alice released CordBeat" in result
+        assert "Alice visited Kyoto" not in result
 
     def test_recalled_draw_tags_are_removed(self) -> None:
         result = build_context(

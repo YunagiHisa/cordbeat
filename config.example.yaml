@@ -115,6 +115,7 @@ memory:
   archive_threshold: 0.05
   conversation_history_limit: 20     # recent messages loaded into context
   memory_search_results: 3           # vector search results per query
+  recalled_episode_context_limit: 4  # max deduplicated episodes injected per reply
   diary_max_tokens: 512              # max tokens for diary generation
   facts_per_message_limit: 5         # max facts extracted per message
   extraction_temperature: 0.2          # AI temperature for memory extraction
@@ -160,7 +161,7 @@ react:
   enabled: true             # set false to disable ReAct loop (strips skill tags instead)
   max_iterations: 3         # maximum tool-call/re-prompt cycles per message
   max_tool_output_chars: 4000  # per-result output truncation limit fed back to AI
-  expose_trace_to_user: false  # reserved; trace is debug-log only for now
+  expose_trace_to_user: false  # show safe ReAct tool name/params/status messages
 
 skills:
   default_rate_limit_per_minute: 0  # 0 = unlimited; per-skill rate limit (calls/min)

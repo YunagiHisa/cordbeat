@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -19,6 +20,17 @@ _DRAW_TAG_RE = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 _SKILL_TAG_RE = re.compile(r"\[SKILL:\s*.*?(?:\]|$)", re.DOTALL | re.IGNORECASE)
+_EPISODE_RESPONSE_RE = re.compile(
+    r"\s*(?:/|\||;)?\s*(?:AI\s+)?Response\s*:\s*.*$",
+    re.DOTALL | re.IGNORECASE,
+)
+_EPISODE_USER_PREFIX_RE = re.compile(
+    r"^\s*(?:\[[^\]\n]{1,30}\]\s*)?User\s*:\s*",
+    re.IGNORECASE,
+)
+_PLATFORM_MENTION_RE = re.compile(r"<@!?\d+>")
+_EPISODE_SIMILARITY_THRESHOLD = 0.88
+_EPISODE_COMMON_SUBSTRING_THRESHOLD = 0.80
 
 MAX_USER_INPUT_LEN = 2000
 
@@ -47,6 +59,51 @@ def sanitize_tool_artifacts(text: str) -> str:
     text = _DRAW_TAG_RE.sub("", text)
     text = _SKILL_TAG_RE.sub("", text)
     return text.strip()
+
+
+def _prepare_recalled_episodes(
+    episodic_memories: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[str]:
+    """Remove assistant-response imitation and near-duplicates from recall."""
+
+    prepared: list[str] = []
+    normalized: list[str] = []
+    for mem in episodic_memories:
+        content = sanitize_tool_artifacts(
+            sanitize_reasoning_artifacts(str(mem["content"]))
+        )
+        content = _EPISODE_RESPONSE_RE.sub("", content).strip()
+        candidate = _EPISODE_USER_PREFIX_RE.sub("", content)
+        candidate = _PLATFORM_MENTION_RE.sub("", candidate)
+        candidate = re.sub(r"\s+", " ", candidate).strip().casefold()
+        if not candidate:
+            continue
+        if any(_episodes_are_near_duplicates(candidate, item) for item in normalized):
+            continue
+        prepared.append(content)
+        normalized.append(candidate)
+        if len(prepared) >= limit:
+            break
+    return prepared
+
+
+def _episodes_are_near_duplicates(first: str, second: str) -> bool:
+    """Prefer diverse recalled topics over multiple phrasings of one event."""
+
+    matcher = SequenceMatcher(None, first, second)
+    if matcher.ratio() >= _EPISODE_SIMILARITY_THRESHOLD:
+        return True
+    shorter_length = min(len(first), len(second))
+    if shorter_length < 6:
+        return False
+    common_length = matcher.find_longest_match().size
+    common_ratio = common_length / shorter_length
+    if common_ratio >= _EPISODE_COMMON_SUBSTRING_THRESHOLD:
+        return True
+    unsegmented_text = not re.search(r"\s", first) and not re.search(r"\s", second)
+    return unsegmented_text and common_length >= 3 and common_ratio >= 0.35
 
 
 def _familiarity_label(message_count: int) -> str:
@@ -150,7 +207,10 @@ def build_soul_system_prompt(
 
     language = soul_snap.get("language", "en")
     if language != "en":
-        prompt += f"\n\nAlways respond in {language}."
+        prompt += (
+            f"\n\nAlways respond to the user in {language}. "
+            "Tool arguments may use the language best suited for the task."
+        )
 
     notes = soul_snap.get("notes", "").strip()
     if notes:
@@ -169,6 +229,7 @@ def build_context(
     history: list[dict[str, str]] | None = None,
     soul_name: str = "",
     max_user_input_len: int = MAX_USER_INPUT_LEN,
+    recalled_episode_limit: int = 4,
 ) -> str:
     """Assemble the context block from memory and conversation data."""
     parts = [
@@ -197,14 +258,15 @@ def build_context(
         parts.append("[END RECALLED FACTS]")
 
     if episodic_memories:
-        parts.append("\n[BEGIN RECALLED EPISODES]")
-        for mem in episodic_memories:
-            content = sanitize_tool_artifacts(
-                sanitize_reasoning_artifacts(str(mem["content"]))
-            )
-            if content:
+        episodes = _prepare_recalled_episodes(
+            episodic_memories,
+            limit=max(0, recalled_episode_limit),
+        )
+        if episodes:
+            parts.append("\n[BEGIN RECALLED EPISODES]")
+            for content in episodes:
                 parts.append(f"  - {sanitize(content, max_len=500)}")
-        parts.append("[END RECALLED EPISODES]")
+            parts.append("[END RECALLED EPISODES]")
 
     if recall_hints:
         parts.append("\n[BEGIN RECALL HINTS]")

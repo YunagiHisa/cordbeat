@@ -692,6 +692,7 @@ class CoreEngine:
             history=history or None,
             soul_name=soul_snap["name"],
             max_user_input_len=self._memory_config.max_user_input_len,
+            recalled_episode_limit=self._memory_config.recalled_episode_context_limit,
         )
 
         safe_content = sanitize(
@@ -1012,18 +1013,25 @@ class CoreEngine:
                         )
                     status_sent = True
 
+                params_display = _format_react_params(params)
+                call_display = (
+                    f"{skill_name}({params_display})"
+                    if params_display
+                    else f"{skill_name}()"
+                )
+                description = sanitize(
+                    skill.meta.description,
+                    strict=True,
+                    max_len=160,
+                )
+                logger.debug(
+                    "ReAct iter %d/%d call: %s%s",
+                    iteration + 1,
+                    self._react_config.max_iterations,
+                    call_display,
+                    f" — {description}" if description else "",
+                )
                 if self._react_config.expose_trace_to_user and not shared_voice:
-                    params_display = _format_react_params(params)
-                    call_display = (
-                        f"{skill_name}({params_display})"
-                        if params_display
-                        else f"{skill_name}()"
-                    )
-                    description = sanitize(
-                        skill.meta.description,
-                        strict=True,
-                        max_len=160,
-                    )
                     detail = f"\n↳ {description}" if description else ""
                     trace_status = GatewayMessage(
                         type=MessageType.ACK,

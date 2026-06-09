@@ -124,6 +124,7 @@ Common options for Ollama:
 | `archive_threshold` | float | `0.05` | Memory strength threshold for archival |
 | `conversation_history_limit` | int | `20` | Max messages included in prompt context |
 | `memory_search_results` | int | `3` | Max semantic/episodic search results per query |
+| `recalled_episode_context_limit` | int | `4` | Max deduplicated episodic memories included per prompt |
 
 ### `adapters.<name>`
 

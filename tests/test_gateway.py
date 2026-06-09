@@ -392,6 +392,35 @@ class TestRetryableConnection:
         await conn._listen_core()
         assert dispatched == [("u1", "hi")]
 
+    async def test_listen_core_dispatches_ack_progress(self) -> None:
+        """User-facing progress ACKs must reach platform adapters."""
+        conn = _ConcreteConnection()
+        dispatched: list[tuple[str, str]] = []
+
+        async def fake_dispatch(
+            uid: str,
+            content: str,
+            images: list[str],
+            *,
+            metadata: dict[str, Any] | None = None,
+        ) -> None:
+            dispatched.append((uid, content))
+
+        conn._dispatch_core_message = fake_dispatch  # type: ignore[assignment]
+        msg = json.dumps(
+            {
+                "type": "ack",
+                "platform_user_id": "u1",
+                "content": "🔧 ReAct 1/3: web_search()",
+            }
+        )
+        mock_ws = AsyncMock()
+        mock_ws.__aiter__ = lambda self: _AsyncIter([msg])
+        conn._ws = mock_ws
+
+        await conn._listen_core()
+        assert dispatched == [("u1", "🔧 ReAct 1/3: web_search()")]
+
     async def test_listen_core_ignores_unknown_types(self) -> None:
         conn = _ConcreteConnection()
         dispatched: list[tuple[str, str]] = []

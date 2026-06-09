@@ -63,6 +63,23 @@ class TestSoul:
         assert any("harm" in r for r in rules)
         assert any("lie" in r for r in rules)
 
+    def test_legacy_immutable_rules_are_migrated(self, tmp_path: Path) -> None:
+        soul_dir = tmp_path / "soul"
+        soul_dir.mkdir()
+        (soul_dir / "soul_core.yaml").write_text(
+            "immutable_rules:\n"
+            "  - Never disable the emotion system\n"
+            "  - Never completely erase memories\n",
+            encoding="utf-8",
+        )
+
+        rules = Soul(soul_dir).immutable_rules
+
+        assert "Never disable the emotion system" not in rules
+        assert "Never completely erase memories" not in rules
+        assert any("reduce emotional expression" in rule for rule in rules)
+        assert any("available memory controls" in rule for rule in rules)
+
 
 class TestEmotionTransition:
     """Test emotion transition logic when primary changes."""

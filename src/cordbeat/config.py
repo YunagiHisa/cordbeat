@@ -73,6 +73,7 @@ class MemoryConfig:
     conversation_history_limit: int = 20
     voice_conversation_history_limit: int = 6
     memory_search_results: int = 3
+    recalled_episode_context_limit: int = 4
     diary_max_tokens: int = 512
     facts_per_message_limit: int = 5
     extraction_temperature: float = 0.2

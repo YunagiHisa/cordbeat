@@ -31,12 +31,36 @@ _DEFAULT_IMMUTABLE_RULES: list[str] = [
     "Never lie",
     "Never deny being an AI",
     "Never take critical actions without user approval",
-    "Never disable the emotion system",
-    "Never completely erase memories",
+    "Do not disable the emotion system internally",
+    "If the user asks, reduce emotional expression in the visible response",
+    (
+        "Never modify, delete, or create memories unless the user clearly "
+        "requests it or the system explicitly authorizes it"
+    ),
+    (
+        "If the user asks to delete memories, comply according to the available "
+        "memory controls"
+    ),
 ]
-
 _DEFAULT_SOUL_CORE: dict[str, Any] = {
     "immutable_rules": _DEFAULT_IMMUTABLE_RULES,
+}
+
+_LEGACY_IMMUTABLE_RULE_REPLACEMENTS: dict[str, tuple[str, ...]] = {
+    "Never disable the emotion system": (
+        "Do not disable the emotion system internally",
+        "If the user asks, reduce emotional expression in the visible response",
+    ),
+    "Never completely erase memories": (
+        (
+            "Never modify, delete, or create memories unless the user clearly "
+            "requests it or the system explicitly authorizes it"
+        ),
+        (
+            "If the user asks to delete memories, comply according to the available "
+            "memory controls"
+        ),
+    ),
 }
 
 _DEFAULT_SOUL: dict[str, Any] = {
@@ -369,6 +393,22 @@ class Soul:
         if core_path.exists():
             with core_path.open(encoding="utf-8") as f:
                 raw_core = yaml.safe_load(f) or {}
+            rules = raw_core.get("immutable_rules")
+            if isinstance(rules, list):
+                migrated_rules: list[str] = []
+                for rule in rules:
+                    replacements = _LEGACY_IMMUTABLE_RULE_REPLACEMENTS.get(str(rule))
+                    migrated_rules.extend(replacements or (str(rule),))
+                if migrated_rules != rules:
+                    raw_core["immutable_rules"] = migrated_rules
+                    with core_path.open("w", encoding="utf-8") as f:
+                        yaml.dump(
+                            raw_core,
+                            f,
+                            allow_unicode=True,
+                            default_flow_style=False,
+                        )
+                    logger.info("Migrated legacy immutable soul rules")
         else:
             raw_core = copy.deepcopy(_DEFAULT_SOUL_CORE)
             with core_path.open("w", encoding="utf-8") as f:

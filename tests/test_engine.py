@@ -3081,6 +3081,40 @@ class TestReActLoop:
         contents = [c[0][1].content for c in calls]
         assert any("The answer is 42" in c for c in contents)
 
+    async def test_skill_tag_inside_thinking_is_not_executed(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Only cleaned user-facing output is eligible for ReAct parsing."""
+        mock_ai.generate = AsyncMock(
+            return_value=(
+                "<think>Use [SKILL: test_tool | query=private]</think>"
+                "No tool is needed."
+            )
+        )
+        mock_ai.generate_chat = AsyncMock(return_value="unexpected")
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        skill = self._make_safe_skill("should not run")
+        skill.execute = AsyncMock(return_value="should not run")  # type: ignore[method-assign]
+        eng._skills._skills["test_tool"] = skill
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Answer directly",
+        )
+        await eng.handle_message(msg)
+
+        skill.execute.assert_not_awaited()  # type: ignore[attr-defined]
+        mock_ai.generate_chat.assert_not_awaited()
+        reply = mock_gateway.send_to_adapter.call_args.args[1]
+        assert reply.content == "No tool is needed."
+
     async def test_structured_skill_result_is_passed_to_continuation(
         self,
         mock_ai: AsyncMock,

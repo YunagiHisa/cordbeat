@@ -113,6 +113,7 @@ memory:
   conversation_history_limit: 20     # recent messages loaded into context
   voice_conversation_history_limit: 6 # shorter context for real-time voice replies
   memory_search_results: 3           # vector search results per query
+  recalled_episode_context_limit: 4  # max deduplicated episodes injected per reply
   diary_max_tokens: 512              # max tokens for diary generation
   facts_per_message_limit: 5         # max facts extracted per message
   extraction_temperature: 0.2          # AI temperature for memory extraction

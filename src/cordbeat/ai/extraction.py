@@ -54,11 +54,14 @@ Extract the following in JSON:
   "emotional_tone": "one word describing user's tone (e.g. happy, curious, \
 frustrated, neutral)",
   "facts": ["list of new facts/preferences about the user, or empty list"],
-  "episode_summary": "one-sentence summary if this is a memorable moment, \
-or empty string"
+  "episode_summary": "one-sentence summary of a notable user-lived event, \
+decision, preference, or meaningful shared moment; otherwise empty string"
 }}
 
 Only include facts that are clearly stated or strongly implied.
+Do not store the AI's wording, promises, tool usage, failed actions, or response \
+strategy as an episode. An ordinary request followed by an ordinary answer is \
+not a memorable episode.
 Do NOT fabricate or assume information.
 Respond in valid JSON only.
 """

@@ -2997,9 +2997,13 @@ class TestReActLoop:
         mock_gateway: AsyncMock,
         tmp_path: Path,
         react_enabled: bool = True,
+        expose_trace_to_user: bool = False,
     ) -> CoreEngine:
         react = ReActConfig(
-            enabled=react_enabled, max_iterations=3, max_tool_output_chars=4000
+            enabled=react_enabled,
+            max_iterations=3,
+            max_tool_output_chars=4000,
+            expose_trace_to_user=expose_trace_to_user,
         )
         skills = SkillRegistry(tmp_path / "react_skills")
         return CoreEngine(
@@ -3336,6 +3340,49 @@ class TestReActLoop:
         ack_index = next(i for i, m in enumerate(sent) if m.type == MessageType.ACK)
         assert pre_index < ack_index
         assert "Running tool" in sent[ack_index].content
+
+    async def test_expose_trace_shows_safe_tool_progress(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Opt-in ReAct trace shows tool purpose and redacts sensitive values."""
+        mock_ai.generate = AsyncMock(
+            return_value=(
+                "Checking. [SKILL: test_tool | query=CordBeat | "
+                "api_key=secret-value]"
+            )
+        )
+        mock_ai.generate_chat = AsyncMock(return_value="Done!")
+        eng = self._make_engine(
+            mock_ai,
+            soul,
+            memory,
+            mock_gateway,
+            tmp_path,
+            expose_trace_to_user=True,
+        )
+        eng._skills._skills["test_tool"] = self._make_safe_skill("result data")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Check it",
+        )
+        await eng.handle_message(msg)
+
+        sent = [call.args[1] for call in mock_gateway.send_to_adapter.call_args_list]
+        ack_contents = [item.content for item in sent if item.type == MessageType.ACK]
+        assert any("ReAct 1/3" in content for content in ack_contents)
+        assert any('query="CordBeat"' in content for content in ack_contents)
+        assert any("api_key=<redacted>" in content for content in ack_contents)
+        assert any("completed" in content for content in ack_contents)
+        assert all("secret-value" not in content for content in ack_contents)
+        assert all("Running tool" not in content for content in ack_contents)
 
     async def test_draw_excluded_from_react_tool_catalog(
         self,

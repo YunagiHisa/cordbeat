@@ -182,6 +182,39 @@ def _build_reply_context_prompt(
     return "\n".join(lines)
 
 
+def _format_react_params(params: dict[str, Any]) -> str:
+    """Format tool parameters for an opt-in user trace without leaking secrets."""
+
+    sensitive_markers = (
+        "api_key",
+        "apikey",
+        "authorization",
+        "body",
+        "content",
+        "cookie",
+        "credential",
+        "header",
+        "password",
+        "secret",
+        "token",
+    )
+    parts: list[str] = []
+    for key, value in params.items():
+        safe_key = sanitize(str(key), strict=True, max_len=40)
+        if not safe_key:
+            continue
+        lower_key = safe_key.lower()
+        if any(marker in lower_key for marker in sensitive_markers):
+            rendered = "<redacted>"
+        else:
+            rendered = sanitize(str(value), strict=True, max_len=120)
+            if len(str(value)) > 120:
+                rendered += "…"
+            rendered = json.dumps(rendered, ensure_ascii=False)
+        parts.append(f"{safe_key}={rendered}")
+    return ", ".join(parts)
+
+
 def _draw_line_has_minimum_args(opcode: str, line: str) -> bool:
     """Return True when a DSL line has enough tokens to be plausibly usable."""
 
@@ -957,7 +990,12 @@ class CoreEngine:
                     stopped_early = True
                     break
 
-                if pre_text and not status_sent and not shared_voice:
+                if (
+                    pre_text
+                    and not status_sent
+                    and not shared_voice
+                    and not self._react_config.expose_trace_to_user
+                ):
                     status = GatewayMessage(
                         type=MessageType.ACK,
                         adapter_id=message.adapter_id,
@@ -973,6 +1011,41 @@ class CoreEngine:
                             message.adapter_id,
                         )
                     status_sent = True
+
+                if self._react_config.expose_trace_to_user and not shared_voice:
+                    params_display = _format_react_params(params)
+                    call_display = (
+                        f"{skill_name}({params_display})"
+                        if params_display
+                        else f"{skill_name}()"
+                    )
+                    description = sanitize(
+                        skill.meta.description,
+                        strict=True,
+                        max_len=160,
+                    )
+                    detail = f"\n↳ {description}" if description else ""
+                    trace_status = GatewayMessage(
+                        type=MessageType.ACK,
+                        adapter_id=message.adapter_id,
+                        platform_user_id=message.platform_user_id,
+                        content=(
+                            f"🔧 ReAct {iteration + 1}/"
+                            f"{self._react_config.max_iterations}: {call_display}"
+                            f"{detail}"
+                        ),
+                        metadata=self._reply_metadata(message),
+                    )
+                    try:
+                        await self._gateway.send_to_adapter(
+                            message.adapter_id,
+                            trace_status,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to send ReAct trace status to %s",
+                            message.adapter_id,
+                        )
 
                 try:
                     result = await skill.execute(params, memory=self._memory)
@@ -991,6 +1064,29 @@ class CoreEngine:
                         skill_name,
                         len(output),
                     )
+                    if self._react_config.expose_trace_to_user and not shared_voice:
+                        result_status = GatewayMessage(
+                            type=MessageType.ACK,
+                            adapter_id=message.adapter_id,
+                            platform_user_id=message.platform_user_id,
+                            content=(
+                                f"{'⚠️' if is_error else '✅'} ReAct "
+                                f"{iteration + 1}: {skill_name} "
+                                f"{'failed' if is_error else 'completed'} "
+                                f"({len(output)} chars)"
+                            ),
+                            metadata=self._reply_metadata(message),
+                        )
+                        try:
+                            await self._gateway.send_to_adapter(
+                                message.adapter_id,
+                                result_status,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Failed to send ReAct trace result to %s",
+                                message.adapter_id,
+                            )
                 except Exception:
                     logger.warning("ReAct: skill %r failed", skill_name, exc_info=True)
                     results.append(
@@ -1001,6 +1097,27 @@ class CoreEngine:
                             is_error=True,
                         )
                     )
+                    if self._react_config.expose_trace_to_user and not shared_voice:
+                        failure_status = GatewayMessage(
+                            type=MessageType.ACK,
+                            adapter_id=message.adapter_id,
+                            platform_user_id=message.platform_user_id,
+                            content=(
+                                f"⚠️ ReAct {iteration + 1}: "
+                                f"{skill_name} execution failed"
+                            ),
+                            metadata=self._reply_metadata(message),
+                        )
+                        try:
+                            await self._gateway.send_to_adapter(
+                                message.adapter_id,
+                                failure_status,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Failed to send ReAct trace failure to %s",
+                                message.adapter_id,
+                            )
 
             trace.calls.extend(results)
             trace.iterations = iteration + 1

@@ -160,7 +160,7 @@ react:
   enabled: true             # set false to disable ReAct loop (strips skill tags instead)
   max_iterations: 3         # maximum tool-call/re-prompt cycles per message
   max_tool_output_chars: 4000  # per-result output truncation limit fed back to AI
-  expose_trace_to_user: false  # reserved; trace is debug-log only for now
+  expose_trace_to_user: false  # show safe ReAct tool name/params/status messages
 
 skills:
   default_rate_limit_per_minute: 0  # 0 = unlimited; per-skill rate limit (calls/min)

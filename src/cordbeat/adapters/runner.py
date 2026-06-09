@@ -80,8 +80,21 @@ async def _run_adapter(adapter_name: str, config_path: str) -> None:
     if adapter_name == "discord":
         from .discord import DiscordAdapter
 
+        soul_name = ""
+        try:
+            import yaml
+
+            soul_path = Path(config.soul.soul_dir) / "soul.yaml"
+            if soul_path.is_file():
+                soul_data = yaml.safe_load(soul_path.read_text(encoding="utf-8")) or {}
+                soul_name = str(soul_data.get("identity", {}).get("name", "")).strip()
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not load soul name for Discord VC", exc_info=True)
         adapter = DiscordAdapter(
-            adapter_cfg, stt_config=config.stt, tts_config=config.tts
+            adapter_cfg,
+            stt_config=config.stt,
+            tts_config=config.tts,
+            soul_name=soul_name,
         )
     elif adapter_name == "telegram":
         from .telegram import TelegramAdapter

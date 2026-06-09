@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -75,6 +76,27 @@ def get_judge_backend() -> AIBackend | None:
 def get_judge_params() -> tuple[int, float]:
     """Return ``(max_tokens, temperature)`` for ai_decision_llm yes/no calls."""
     return _judge_max_tokens, _judge_temperature
+
+
+async def judge_yes_no(prompt: str, *, fail_open: bool = False) -> bool:
+    """Run the lightweight judge with a minimal no-thinking yes/no response."""
+
+    backend = get_judge_backend()
+    if backend is None:
+        return fail_open
+    max_tokens, temperature = get_judge_params()
+    try:
+        reply = await backend.generate(
+            prompt,
+            system="/no_think\nReply with exactly one word: yes or no.",
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("ai_decision_llm backend failed", exc_info=True)
+        return fail_open
+    yes_pattern = r"""[\s"'`([{]*yes[\s.!?,"'`\])}]*"""
+    return re.fullmatch(yes_pattern, reply.lower()) is not None
 
 
 def _read_soul_keywords() -> list[str]:
@@ -237,10 +259,8 @@ class AdapterFilter:
             return False
         if self.respond_mode != MODE_AI_DECISION_LLM or is_dm:
             return True
-        backend = get_judge_backend()
-        if backend is None:
+        if get_judge_backend() is None:
             return True  # already keyword-judged above
-        max_tokens, temperature = get_judge_params()
         soul_name = ""
         soul_keys = _read_soul_keywords()
         if soul_keys:
@@ -257,20 +277,4 @@ class AdapterFilter:
             f"Message: {text}\n"
             "Answer:"
         )
-        try:
-            reply = await backend.generate(
-                prompt,
-                system="",
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "ai_decision_llm backend failed; allowing message", exc_info=True
-            )
-            return True
-        # Match against ``yes`` rather than the looser ``startswith("y")``
-        # so replies like ``y'know`` / ``ya``  don't trigger a reply.  The
-        # prompt asks for a one-word ``yes``/``no`` answer; this handles
-        # common variants like ``yes.`` / ``"yes"`` / ``Yes!``.
-        return "yes" in reply.strip().lower()
+        return await judge_yes_no(prompt, fail_open=True)

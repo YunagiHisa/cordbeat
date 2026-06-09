@@ -98,7 +98,8 @@ ai_backend:
 #   max_tokens: 8
 #   options:
 #     api_key: ""
-#     judge_max_tokens: 8        # tokens for the yes/no judge reply
+#     enable_thinking: false     # recommended for fast yes/no decisions
+#     judge_max_tokens: 2        # enough for a one-word yes/no judge reply
 #     judge_temperature: 0.0     # 0.0 = deterministic; raise for more variety
 
 heartbeat:
@@ -210,6 +211,8 @@ adapters:
       #                    (pre-1.0 behaviour — opt back in here).
       #   never           : never send proactive Heartbeat messages at all.
       dm_policy: "reply_only"
+      vc_activation_mode: "hybrid" # hybrid | wake_phrase | always
+      vc_activation_phrases: ["cordbeat"]  # Soul name is added automatically
       # guild_id: 123456789012345678 # set for instant slash-command sync (dev/single-server).
       #                              # leave unset for global sync (up to 1 hour to propagate)
     # -- Example: mention-only bot in a busy server --

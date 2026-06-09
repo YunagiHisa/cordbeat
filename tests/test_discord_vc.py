@@ -281,6 +281,16 @@ class TestDiscordAdapterVC:
         assert adapter._vc_context_max_lines == 8
         assert adapter._vc_pending_timeout_seconds == 120.0
 
+    def test_soul_name_is_added_as_activation_phrase(self) -> None:
+        from cordbeat.adapters.discord import DiscordAdapter
+
+        config = AdapterConfig(
+            options={"token": "test-token", "vc_activation_phrases": ["cordbeat"]}
+        )
+        adapter = DiscordAdapter(config, soul_name="アテナ")
+
+        assert adapter._vc_wake_words == ("cordbeat", "アテナ")
+
     async def test_on_vc_speech_no_ws(self) -> None:
         adapter = self._make_adapter()
         adapter._ws = None
@@ -364,6 +374,116 @@ class TestDiscordAdapterVC:
         payload = json.loads(adapter._ws.send.call_args[0][0])
         assert "participant-222: Where should we travel?" in payload["content"]
         assert "participant-333: Athena, what do you think?" in payload["content"]
+
+    async def test_on_vc_speech_normalizes_kana_wake_word(self) -> None:
+        adapter = self._make_adapter(options={"vc_wake_words": ["アテナ"]})
+        adapter._ws = AsyncMock()
+        adapter._stt = AsyncMock()
+        adapter._stt.transcribe = AsyncMock(return_value="あてな、聞こえる？")
+        adapter._vc_receivers[111] = MagicMock()
+        adapter._vc_session_ids[111] = "session"
+
+        await adapter._on_vc_speech(111, 222, b"wav")
+
+        adapter._ws.send.assert_called_once()
+
+    async def test_on_vc_speech_normalizes_spacing_and_width(self) -> None:
+        adapter = self._make_adapter(options={"vc_wake_words": ["cordbeat"]})
+        adapter._ws = AsyncMock()
+        adapter._stt = AsyncMock()
+        adapter._stt.transcribe = AsyncMock(return_value="Ｃｏｒｄ Ｂｅａｔ, hello")
+        adapter._vc_receivers[111] = MagicMock()
+        adapter._vc_session_ids[111] = "session"
+
+        await adapter._on_vc_speech(111, 222, b"wav")
+
+        adapter._ws.send.assert_called_once()
+
+    async def test_hybrid_mode_uses_short_no_think_participation_judge(self) -> None:
+        from cordbeat.adapters._utils import set_judge_backend
+
+        backend = AsyncMock()
+        backend.generate = AsyncMock(return_value="yes")
+        set_judge_backend(backend)
+        try:
+            adapter = self._make_adapter(options={"vc_activation_mode": "hybrid"})
+            adapter._ws = AsyncMock()
+            adapter._stt = AsyncMock()
+            adapter._stt.transcribe = AsyncMock(return_value="What does the AI think?")
+            adapter._vc_receivers[111] = MagicMock()
+            adapter._vc_session_ids[111] = "session"
+
+            await adapter._on_vc_speech(111, 222, b"wav")
+
+            adapter._ws.send.assert_called_once()
+            kwargs = backend.generate.await_args.kwargs
+            assert "/no_think" in kwargs["system"]
+            assert kwargs["temperature"] == 0.0
+        finally:
+            set_judge_backend(None)
+
+    async def test_hybrid_judge_failure_does_not_interrupt_chat(self) -> None:
+        from cordbeat.adapters._utils import set_judge_backend
+
+        backend = AsyncMock()
+        backend.generate = AsyncMock(side_effect=RuntimeError("offline"))
+        set_judge_backend(backend)
+        try:
+            adapter = self._make_adapter(options={"vc_activation_mode": "hybrid"})
+            adapter._ws = AsyncMock()
+            adapter._stt = AsyncMock()
+            adapter._stt.transcribe = AsyncMock(return_value="What should we eat?")
+            adapter._vc_receivers[111] = MagicMock()
+            adapter._vc_session_ids[111] = "session"
+
+            await adapter._on_vc_speech(111, 222, b"wav")
+
+            adapter._ws.send.assert_not_called()
+        finally:
+            set_judge_backend(None)
+
+    async def test_wake_phrase_mode_skips_participation_judge(self) -> None:
+        from cordbeat.adapters._utils import set_judge_backend
+
+        backend = AsyncMock()
+        backend.generate = AsyncMock(return_value="yes")
+        set_judge_backend(backend)
+        try:
+            adapter = self._make_adapter(options={"vc_activation_mode": "wake_phrase"})
+            adapter._ws = AsyncMock()
+            adapter._stt = AsyncMock()
+            adapter._stt.transcribe = AsyncMock(return_value="What does the AI think?")
+            adapter._vc_receivers[111] = MagicMock()
+            adapter._vc_session_ids[111] = "session"
+
+            await adapter._on_vc_speech(111, 222, b"wav")
+
+            backend.generate.assert_not_awaited()
+            adapter._ws.send.assert_not_called()
+        finally:
+            set_judge_backend(None)
+
+    async def test_hybrid_skips_new_judge_call_while_one_is_running(self) -> None:
+        from cordbeat.adapters._utils import set_judge_backend
+
+        backend = AsyncMock()
+        backend.generate = AsyncMock(return_value="yes")
+        set_judge_backend(backend)
+        try:
+            adapter = self._make_adapter(options={"vc_activation_mode": "hybrid"})
+            await adapter._vc_participation_judge_lock.acquire()
+
+            decision = await adapter._vc_should_join_conversation(
+                "Alice: What do you think?",
+                deque(["Alice: What do you think?"]),
+            )
+
+            assert decision is False
+            backend.generate.assert_not_awaited()
+        finally:
+            if adapter._vc_participation_judge_lock.locked():
+                adapter._vc_participation_judge_lock.release()
+            set_judge_backend(None)
 
     async def test_on_vc_speech_muted_guild(self) -> None:
         adapter = self._make_adapter()

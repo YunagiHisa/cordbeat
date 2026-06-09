@@ -9,6 +9,7 @@ import pytest
 from cordbeat.adapters._utils import (
     AdapterFilter,
     get_judge_backend,
+    judge_yes_no,
     set_judge_backend,
 )
 
@@ -19,9 +20,11 @@ class _FakeBackend:
     def __init__(self, answer: str = "yes") -> None:
         self.answer = answer
         self.calls: list[str] = []
+        self.kwargs: list[dict[str, Any]] = []
 
     async def generate(self, prompt: str, **kwargs: Any) -> str:
         self.calls.append(prompt)
+        self.kwargs.append(kwargs)
         return self.answer
 
     async def aclose(self) -> None:
@@ -107,3 +110,12 @@ def test_set_and_get_judge_backend_roundtrip() -> None:
     assert get_judge_backend() is b
     set_judge_backend(None)
     assert get_judge_backend() is None
+
+
+@pytest.mark.asyncio
+async def test_judge_yes_no_forces_no_think_and_rejects_non_exact_yes() -> None:
+    fake = _FakeBackend("yesterday")
+    set_judge_backend(fake)  # type: ignore[arg-type]
+
+    assert not await judge_yes_no("Answer:")
+    assert "/no_think" in fake.kwargs[0]["system"]

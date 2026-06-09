@@ -7,6 +7,7 @@ import base64
 import io
 import json
 import logging
+import unicodedata
 import uuid
 from collections import OrderedDict, deque
 from datetime import UTC, datetime
@@ -15,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from cordbeat.adapters._utils import AdapterFilter
+from cordbeat.adapters._utils import AdapterFilter, get_judge_backend, judge_yes_no
 from cordbeat.config import AdapterConfig, RVCConfig, STTConfig, TTSConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -40,6 +41,7 @@ _VC_CONTEXT_MAX_LINES_DEFAULT = 8
 _VC_FOLLOWUP_SECONDS_DEFAULT = 20.0
 _VC_PENDING_TIMEOUT_SECONDS_DEFAULT = 120.0
 _VC_WAKE_WORDS_DEFAULT = ("cordbeat",)
+_VC_ACTIVATION_MODES = frozenset({"always", "hybrid", "wake_phrase"})
 _REQUIRED_VOICE_PERMISSIONS = (
     ("view_channel", "View Channel"),
     ("connect", "Connect"),
@@ -55,6 +57,17 @@ _CORE_SLASH_COMMAND_NAMES = (
     "prefer",
     "draw",
 )
+
+
+def _normalize_vc_wake_text(text: str) -> str:
+    """Normalize common STT spelling variations for wake-word matching."""
+
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    normalized = "".join(
+        chr(ord(char) - 0x60) if "\u30a1" <= char <= "\u30f6" else char
+        for char in normalized
+    )
+    return "".join(char for char in normalized if char.isalnum())
 
 
 def _bounded_float_option(
@@ -97,6 +110,7 @@ class DiscordAdapter(RetryableConnection):
         stt_config: STTConfig | None = None,
         tts_config: TTSConfig | None = None,
         rvc_config: RVCConfig | None = None,
+        soul_name: str = "",
     ) -> None:
         self._config = config
         self._ws_url = config.core_ws_url
@@ -123,17 +137,48 @@ class DiscordAdapter(RetryableConnection):
         self._vc_room_context: dict[int, deque[str]] = {}
         self._vc_followup_until: dict[int, float] = {}
         self._vc_session_ids: dict[int, str] = {}
-        raw_wake_words = config.options.get("vc_wake_words", _VC_WAKE_WORDS_DEFAULT)
+        self._vc_participation_judge_lock = asyncio.Lock()
+        raw_activation_mode = str(
+            config.options.get("vc_activation_mode", "hybrid")
+        ).strip()
+        self._vc_activation_mode = (
+            raw_activation_mode
+            if raw_activation_mode in _VC_ACTIVATION_MODES
+            else "hybrid"
+        )
+        if self._vc_activation_mode != raw_activation_mode:
+            logger.warning(
+                "Invalid Discord option vc_activation_mode=%r; using hybrid",
+                raw_activation_mode,
+            )
+        raw_wake_words = config.options.get(
+            "vc_activation_phrases",
+            config.options.get("vc_wake_words", _VC_WAKE_WORDS_DEFAULT),
+        )
         if isinstance(raw_wake_words, str):
             raw_wake_words = [raw_wake_words]
         elif not isinstance(raw_wake_words, (list, tuple, set)):
             logger.warning("Invalid Discord option vc_wake_words; using defaults")
             raw_wake_words = _VC_WAKE_WORDS_DEFAULT
-        self._vc_wake_words = tuple(
+        configured_phrases = tuple(
             str(word).strip().casefold()
             for word in raw_wake_words
             if str(word).strip()
+        )
+        soul_phrase = soul_name.strip().casefold()
+        activation_phrases = (
+            (*configured_phrases, soul_phrase)
+            if soul_phrase
+            else configured_phrases
+        )
+        self._vc_wake_words = tuple(
+            dict.fromkeys(activation_phrases)
         ) or _VC_WAKE_WORDS_DEFAULT
+        self._vc_normalized_wake_words = tuple(
+            normalized
+            for word in self._vc_wake_words
+            if (normalized := _normalize_vc_wake_text(word))
+        )
         self._vc_followup_seconds = _bounded_float_option(
             config.options,
             "vc_followup_seconds",
@@ -987,17 +1032,65 @@ class DiscordAdapter(RetryableConnection):
         room_context.append(speech_line)
         wake_detected = self._vc_has_wake_word(transcribed)
         followup_active = monotonic() <= self._vc_followup_until.get(guild_id, 0.0)
-        if not wake_detected and not followup_active:
+        should_activate = wake_detected or followup_active
+        if not should_activate and self._vc_activation_mode == "always":
+            should_activate = True
+        if (
+            not should_activate
+            and self._vc_activation_mode == "hybrid"
+            and get_judge_backend() is not None
+        ):
+            should_activate = await self._vc_should_join_conversation(
+                speech_line,
+                room_context,
+            )
+        if not should_activate:
             logger.debug(
-                "Ignoring shared VC speech without wake word guild=%d user=%d",
+                "Ignoring shared VC speech activation_mode=%s guild=%d user=%d "
+                "phrases=%s",
+                self._vc_activation_mode,
                 guild_id,
                 user_id,
+                self._vc_wake_words,
             )
             return
 
         transcript = "\n".join(room_context)
         room_context.clear()
         await self._forward_vc_transcript(guild_id, transcript)
+
+    async def _vc_should_join_conversation(
+        self,
+        speech_line: str,
+        room_context: deque[str],
+    ) -> bool:
+        """Use the lightweight judge to decide whether inactive VC chat invites us."""
+
+        if self._vc_participation_judge_lock.locked():
+            logger.debug("Skipping VC participation judge while previous call runs")
+            return False
+        async with self._vc_participation_judge_lock:
+            context = "\n".join(list(room_context)[-5:-1])
+            phrases = ", ".join(self._vc_wake_words)
+            prompt = (
+                "Decide whether the latest line clearly invites the voice AI to join. "
+                "Say yes only for a direct question/request to the AI or an explicit "
+                "invitation for its opinion. Say no for human-to-human chatter, even "
+                "when it contains a question.\n"
+                f"AI names: {phrases}\n"
+                f"Recent room transcript:\n{context}\n"
+                f"Latest line: {speech_line}\n"
+                "Answer:"
+            )
+            started_at = monotonic()
+            decision = await judge_yes_no(prompt, fail_open=False)
+            logger.debug(
+                "VC participation judge decision=%s elapsed=%.3fs line=%r",
+                decision,
+                monotonic() - started_at,
+                speech_line[:120],
+            )
+            return decision
 
     async def _forward_vc_transcript(
         self, guild_id: int, transcribed: str
@@ -1073,8 +1166,8 @@ class DiscordAdapter(RetryableConnection):
         return False
 
     def _vc_has_wake_word(self, transcribed: str) -> bool:
-        text = transcribed.casefold()
-        return any(word in text for word in self._vc_wake_words)
+        text = _normalize_vc_wake_text(transcribed)
+        return any(word in text for word in self._vc_normalized_wake_words)
 
     def _vc_line_has_wake_word(self, speech_line: str) -> bool:
         _, separator, transcribed = speech_line.partition(": ")
@@ -1149,8 +1242,9 @@ class DiscordAdapter(RetryableConnection):
             )
         wake_words = ", ".join(self._vc_wake_words)
         return (
-            f"✅ Joined **{channel_name}**. Say one of: **{wake_words}** to invite "
-            "me into the conversation. Recent room context is temporary."
+            f"✅ Joined **{channel_name}** in **{self._vc_activation_mode}** mode. "
+            f"Say one of: **{wake_words}** to invite me directly. "
+            "Recent room context is temporary."
         )
 
     async def _handle_join(self, interaction: Any) -> None:

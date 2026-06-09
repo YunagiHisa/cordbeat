@@ -92,7 +92,8 @@ ai_backend:
 #   base_url: "http://localhost:11434"
 #   model: "gemma2:2b"
 #   options:
-#     judge_max_tokens: 8        # tokens for the yes/no judgement reply
+#     enable_thinking: false     # recommended for fast yes/no decisions
+#     judge_max_tokens: 2        # enough for a one-word yes/no judgement
 #     judge_temperature: 0.0     # 0.0 = deterministic; raise for more variety
 
 heartbeat:
@@ -206,9 +207,10 @@ adapters:
       #                    (pre-1.0 behaviour — opt back in here).
       #   never           : never send proactive Heartbeat messages at all.
       dm_policy: "reply_only"
-      # Shared voice-channel participation:
-      # listen passively, reply only after a wake word, then allow short follow-ups.
-      vc_wake_words: ["cordbeat"]
+      # Shared voice-channel participation. Hybrid uses the lightweight
+      # ai_decision judge when no activation phrase or follow-up window matches.
+      vc_activation_mode: "hybrid" # hybrid | wake_phrase | always
+      vc_activation_phrases: ["cordbeat"]  # Soul name is added automatically
       vc_followup_seconds: 20
       vc_context_max_lines: 8
       vc_pending_timeout_seconds: 120

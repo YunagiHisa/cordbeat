@@ -1072,6 +1072,13 @@ class CoreEngine:
                         skill_name,
                         len(output),
                     )
+                    if skill_name in {"web_search", "fetch_url"}:
+                        logger.debug(
+                            "ReAct iter %d: %r result preview: %.2000s",
+                            iteration,
+                            skill_name,
+                            output,
+                        )
                     if self._react_config.expose_trace_to_user and not shared_voice:
                         result_status = GatewayMessage(
                             type=MessageType.ACK,

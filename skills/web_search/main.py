@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -40,16 +41,10 @@ def _parse_results(html: str, max_results: int) -> list[dict[str, str]]:
     i = 0
     while i < len(lines) and len(results) < max_results:
         line = lines[i].strip()
-        # Result links have class="result-link"
-        if 'class="result-link"' in line:
+        if "<a" in line and "result-link" in line:
             href = _extract_attr(line, "href")
             title = _strip_tags(line)
-            # Snippet follows in a <td class="result-snippet"> element
-            snippet = ""
-            for j in range(i + 1, min(i + 10, len(lines))):
-                if "result-snippet" in lines[j]:
-                    snippet = _strip_tags(lines[j])
-                    break
+            snippet = _extract_snippet(lines, i + 1)
             if href and title:
                 results.append({"title": title, "url": href, "snippet": snippet})
         i += 1
@@ -59,19 +54,25 @@ def _parse_results(html: str, max_results: int) -> list[dict[str, str]]:
 
 def _extract_attr(tag: str, attr: str) -> str:
     """Extract an attribute value from an HTML tag string."""
-    key = f'{attr}="'
-    start = tag.find(key)
-    if start == -1:
-        return ""
-    start += len(key)
-    end = tag.find('"', start)
-    return tag[start:end] if end != -1 else ""
+    match = re.search(rf"\b{re.escape(attr)}\s*=\s*(['\"])(.*?)\1", tag)
+    return match.group(2) if match else ""
+
+
+def _extract_snippet(lines: list[str], start: int) -> str:
+    """Extract a possibly multiline result snippet following a result link."""
+    for index in range(start, min(start + 20, len(lines))):
+        if "result-snippet" not in lines[index]:
+            continue
+        snippet_lines = [lines[index]]
+        while "</td>" not in snippet_lines[-1] and index + 1 < len(lines):
+            index += 1
+            snippet_lines.append(lines[index])
+        return _strip_tags(" ".join(snippet_lines))
+    return ""
 
 
 def _strip_tags(html: str) -> str:
     """Remove HTML tags and decode basic entities."""
-    import re
-
     text = re.sub(r"<[^>]+>", "", html)
     text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
     text = text.replace("&quot;", '"').replace("&#39;", "'")

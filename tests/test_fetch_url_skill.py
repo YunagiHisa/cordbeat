@@ -51,6 +51,8 @@ class _FakeResp:
 class _FakeClient:
     def __init__(self, response: _FakeResp) -> None:
         self._response = response
+        self.get_args: tuple[Any, ...] = ()
+        self.get_kwargs: dict[str, Any] = {}
 
     def __call__(self, *_a: Any, **_kw: Any) -> _FakeClient:
         return self
@@ -61,7 +63,9 @@ class _FakeClient:
     async def __aexit__(self, *_a: Any) -> None:
         return None
 
-    async def get(self, *_a: Any, **_kw: Any) -> _FakeResp:
+    async def get(self, *args: Any, **kwargs: Any) -> _FakeResp:
+        self.get_args = args
+        self.get_kwargs = kwargs
         return self._response
 
 
@@ -94,6 +98,21 @@ async def test_rejects_dns_to_private_ip() -> None:
 async def test_rejects_cloud_metadata() -> None:
     result = await fetch_url.execute(url="http://169.254.169.254/latest/")
     assert "error" in result
+
+
+async def test_https_ip_pinning_preserves_original_sni_hostname() -> None:
+    fake = _FakeClient(_FakeResp("<p>ok</p>"))
+    gai = _fake_getaddrinfo("93.184.216.34")
+    with (
+        patch("_fetch_url_skill_main.socket.getaddrinfo", return_value=gai),
+        patch("_fetch_url_skill_main.httpx.AsyncClient", fake),
+    ):
+        result = await fetch_url.execute(url="https://example.com/article")
+
+    assert result["status_code"] == 200
+    assert fake.get_args[0] == "https://93.184.216.34:443/article"
+    assert fake.get_kwargs["headers"]["Host"] == "example.com"
+    assert fake.get_kwargs["extensions"]["sni_hostname"] == "example.com"
 
 
 async def test_strips_html_tags() -> None:

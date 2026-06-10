@@ -1027,6 +1027,36 @@ class TestWebSearchSkill:
         assert results[0]["title"] == "Example"
         assert results[0]["snippet"] == "A test snippet"
 
+    async def test_web_search_parses_live_lite_markup_shape(self) -> None:
+        """_parse_results supports single quotes and multiline snippets."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_web_search_live_markup",
+            str(_BUILTIN_SKILLS_DIR / "web_search" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        html = (
+            "<a rel=\"nofollow\" href=\"https://example.com\" "
+            "class='result-link'>Example</a>\n"
+            "<tr>\n"
+            "<td class='result-snippet'>\n"
+            "A <b>multiline</b> snippet\n"
+            "</td>\n"
+        )
+        results = mod._parse_results(html, max_results=5)
+
+        assert results == [
+            {
+                "url": "https://example.com",
+                "title": "Example",
+                "snippet": "A multiline snippet",
+            }
+        ]
+
     async def test_web_search_max_results(self) -> None:
         """_parse_results respects max_results limit."""
         import importlib.util

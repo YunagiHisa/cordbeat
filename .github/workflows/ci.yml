@@ -37,19 +37,27 @@ jobs:
         run: uv sync --extra dev
 
       - name: Lint (ruff check)
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: uv run ruff check src/ tests/
 
       - name: Format check (ruff format)
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: uv run ruff format --check src/ tests/
 
       - name: Type check (mypy)
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: uv run mypy src/
 
-      - name: Test (pytest)
+      - name: Test with coverage (pytest)
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: uv run pytest tests/ -q --cov --cov-report=term-missing --cov-report=xml
 
+      - name: Test (pytest)
+        if: matrix.os != 'ubuntu-latest' || matrix.python-version != '3.12'
+        run: uv run pytest tests/ -q
+
       - name: Upload coverage XML
-        if: always()
+        if: always() && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-${{ matrix.os }}-py${{ matrix.python-version }}

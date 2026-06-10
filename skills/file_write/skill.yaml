@@ -5,9 +5,8 @@ version: "1.0.0"
 author: "cordbeat"
 
 usage: |
-  Use this skill to write text to a file.
-  It can write only to files inside the sandbox.
-  Requires user approval.
+  Use this skill to create, overwrite, or append to a local text file.
+  Writing the approved path requires user confirmation before execution.
 
 parameters:
   - name: path

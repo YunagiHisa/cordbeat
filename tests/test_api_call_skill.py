@@ -146,3 +146,43 @@ async def test_accepts_public_ip() -> None:
     ):
         result = await api_call.execute(url="http://example.com/api")
     assert result.get("status_code") == 200
+
+
+async def test_https_ip_pinning_preserves_original_sni_hostname() -> None:
+    """Pinned HTTPS requests connect by IP but validate the original host."""
+
+    class FakeResp:
+        status_code = 200
+        headers: dict[str, str] = {}
+        text = '{"ok": true}'
+
+        def json(self) -> Any:
+            return {"ok": True}
+
+    request: dict[str, Any] = {}
+
+    class FakeClient:
+        def __init__(self, *_a: Any, **_kw: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *_a: Any) -> None:
+            return None
+
+        async def get(self, url: str, **kwargs: Any) -> FakeResp:
+            request.update(url=url, **kwargs)
+            return FakeResp()
+
+    gai = _fake_getaddrinfo("93.184.216.34")
+    with (
+        patch("main.socket.getaddrinfo", return_value=gai),
+        patch("main.httpx.AsyncClient", FakeClient),
+    ):
+        result = await api_call.execute(url="https://example.com/api")
+
+    assert result["status_code"] == 200
+    assert request["url"] == "https://93.184.216.34:443/api"
+    assert request["headers"]["Host"] == "example.com"
+    assert request["extensions"]["sni_hostname"] == "example.com"

@@ -137,6 +137,7 @@ async def execute(
         return {"error": block_reason}
 
     req_headers = {"User-Agent": "CordBeat/1.0"}
+    extensions: dict[str, Any] = {}
     if headers:
         req_headers.update(headers)
 
@@ -159,6 +160,8 @@ async def execute(
             url = f"{scheme}://{netloc}{parts.path}"
             if parts.query:
                 url += f"?{parts.query}"
+            if scheme == "https":
+                extensions["sni_hostname"] = parts.hostname
 
     try:
         async with httpx.AsyncClient(
@@ -166,9 +169,18 @@ async def execute(
             follow_redirects=False,
         ) as client:
             if method == "POST":
-                resp = await client.post(url, json=body, headers=req_headers)
+                resp = await client.post(
+                    url,
+                    json=body,
+                    headers=req_headers,
+                    extensions=extensions,
+                )
             else:
-                resp = await client.get(url, headers=req_headers)
+                resp = await client.get(
+                    url,
+                    headers=req_headers,
+                    extensions=extensions,
+                )
     except httpx.HTTPError as exc:
         return {"error": f"Request failed: {exc}"}
 

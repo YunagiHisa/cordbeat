@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
 from unittest.mock import patch
+from urllib.error import URLError
 
 import pytest
 import yaml
@@ -94,7 +95,8 @@ class TestProbeOllama:
         assert model == "llama3:latest"
 
     def test_not_detected(self) -> None:
-        assert _probe_ollama("http://127.0.0.1:1") is None
+        with patch("urllib.request.urlopen", side_effect=URLError("unreachable")):
+            assert _probe_ollama("http://127.0.0.1:1") is None
 
 
 # -- _probe_provider ───────────────────────────────────────────────────
@@ -105,7 +107,8 @@ class TestProbeProvider:
         assert _probe_provider("ollama", ollama_server) is True
 
     def test_unreachable(self) -> None:
-        assert _probe_provider("ollama", "http://127.0.0.1:1") is False
+        with patch("urllib.request.urlopen", side_effect=URLError("unreachable")):
+            assert _probe_provider("ollama", "http://127.0.0.1:1") is False
 
 
 # -- _probe_llama_cpp ──────────────────────────────────────────────────
@@ -117,7 +120,8 @@ class TestProbeLlamaCpp:
         assert model == "my-model"
 
     def test_not_detected(self) -> None:
-        assert _probe_llama_cpp("http://127.0.0.1:1") is None
+        with patch("urllib.request.urlopen", side_effect=URLError("unreachable")):
+            assert _probe_llama_cpp("http://127.0.0.1:1") is None
 
 
 # -- _build_soul_yaml ──────────────────────────────────────────────────
@@ -346,6 +350,7 @@ def test_cordbeat_init_cli_delegates_to_run_wizard(tmp_path: Path) -> None:
     """``cordbeat_init_cli`` runs wizard, asks to chat, then starts CordBeat."""
     config_file = tmp_path / "config.yaml"
     with (
+        patch("cordbeat.tools.wizard._check_required_deps"),
         patch("cordbeat.tools.wizard.run_wizard") as mock_rw,
         patch("cordbeat.main.cli_chat") as mock_cli_chat,
         patch("builtins.input", return_value="y"),
@@ -360,6 +365,7 @@ def test_cordbeat_init_cli_skips_chat_when_declined(tmp_path: Path) -> None:
     """``cordbeat_init_cli`` exits cleanly when user declines CLI chat."""
     config_file = tmp_path / "config.yaml"
     with (
+        patch("cordbeat.tools.wizard._check_required_deps"),
         patch("cordbeat.tools.wizard.run_wizard") as mock_rw,
         patch("cordbeat.main.cli_chat") as mock_cli_chat,
         patch("builtins.input", return_value="n"),

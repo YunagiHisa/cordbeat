@@ -5,8 +5,8 @@ version: "1.0.0"
 author: "cordbeat"
 
 usage: |
-  Use this skill to inspect file contents.
-  Reading local files requires user approval before execution.
+  Use this skill to inspect a local file requested by the user.
+  Reading the approved path requires user confirmation before execution.
 
 parameters:
   - name: path

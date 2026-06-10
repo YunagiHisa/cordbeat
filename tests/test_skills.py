@@ -7,13 +7,17 @@ import os
 import shutil
 import socket
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import yaml
 
-from cordbeat.main import _sync_builtin_skill_contexts
+from cordbeat.main import (
+    _sync_builtin_skill_contexts,
+    _sync_builtin_skills,
+    _sync_managed_builtin_skill,
+)
 from cordbeat.models import SafetyLevel
 from cordbeat.skills import SkillPermissionError, SkillRegistry
 
@@ -180,6 +184,69 @@ class TestSkillRegistry:
         _sync_builtin_skill_contexts(bundled, installed)
 
         assert installed_yaml.read_text(encoding="utf-8") == original
+
+    def test_updates_managed_builtin_code_and_preserves_settings(
+        self, tmp_path: Path
+    ) -> None:
+        bundled = tmp_path / "bundled" / "web_search"
+        installed = tmp_path / "installed" / "web_search"
+        _create_skill(bundled.parent, "web_search", shared_voice=True)
+        _create_skill(installed.parent, "web_search", shared_voice=False)
+        (bundled / "main.py").write_text("def execute(): return {'new': True}\n")
+        (installed / "main.py").write_text("def execute(): return {'old': True}\n")
+        for skill_dir in (bundled, installed):
+            yaml_path = skill_dir / "skill.yaml"
+            yaml_path.write_text(
+                yaml_path.read_text(encoding="utf-8")
+                + 'author: "cordbeat"\nenabled: false\n',
+                encoding="utf-8",
+            )
+
+        assert _sync_managed_builtin_skill(bundled, installed) is True
+
+        assert "new" in (installed / "main.py").read_text(encoding="utf-8")
+        data = yaml.safe_load((installed / "skill.yaml").read_text(encoding="utf-8"))
+        assert data["enabled"] is False
+        assert data["contexts"]["shared_voice"] is False
+
+    def test_preserves_user_owned_skill_with_builtin_name(self, tmp_path: Path) -> None:
+        bundled = tmp_path / "bundled" / "web_search"
+        installed = tmp_path / "installed" / "web_search"
+        _create_skill(bundled.parent, "web_search")
+        _create_skill(installed.parent, "web_search")
+        installed_main = installed / "main.py"
+        installed_main.write_text("def execute(): return {'custom': True}\n")
+        installed_yaml = installed / "skill.yaml"
+        installed_yaml.write_text(
+            installed_yaml.read_text(encoding="utf-8") + 'author: "user"\n',
+            encoding="utf-8",
+        )
+
+        assert _sync_managed_builtin_skill(bundled, installed) is False
+        assert "custom" in installed_main.read_text(encoding="utf-8")
+
+    def test_sync_builtin_skills_updates_managed_install(self, tmp_path: Path) -> None:
+        bundled = tmp_path / "project" / "skills"
+        installed = tmp_path / "installed"
+        _create_skill(bundled, "web_search")
+        _create_skill(installed, "web_search")
+        for skill_dir in (bundled / "web_search", installed / "web_search"):
+            yaml_path = skill_dir / "skill.yaml"
+            yaml_path.write_text(
+                yaml_path.read_text(encoding="utf-8") + 'author: "cordbeat"\n',
+                encoding="utf-8",
+            )
+        (bundled / "web_search" / "main.py").write_text(
+            "def execute(): return {'new': True}\n"
+        )
+
+        with patch("cordbeat.main.Path.resolve") as resolve:
+            resolve.return_value = tmp_path / "project" / "src" / "cordbeat" / "main.py"
+            _sync_builtin_skills(installed)
+
+        assert "new" in (installed / "web_search" / "main.py").read_text(
+            encoding="utf-8"
+        )
 
     async def test_execute_skill(self, tmp_path: Path) -> None:
         skills_dir = tmp_path / "skills"

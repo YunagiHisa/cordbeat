@@ -89,6 +89,44 @@ def _sync_builtin_skill_contexts(src_skill: Path, dst_skill: Path) -> None:
         )
 
 
+def _sync_managed_builtin_skill(src_skill: Path, dst_skill: Path) -> bool:
+    """Update a CordBeat-managed built-in while preserving user settings."""
+    src_yaml = src_skill / "skill.yaml"
+    dst_yaml = dst_skill / "skill.yaml"
+    if not src_yaml.is_file() or not dst_yaml.is_file():
+        return False
+
+    try:
+        src_data = yaml.safe_load(src_yaml.read_text(encoding="utf-8")) or {}
+        dst_data = yaml.safe_load(dst_yaml.read_text(encoding="utf-8")) or {}
+        if not isinstance(src_data, dict) or not isinstance(dst_data, dict):
+            return False
+        if dst_data.get("author") != "cordbeat":
+            return False
+
+        if "enabled" in dst_data:
+            src_data["enabled"] = dst_data["enabled"]
+        dst_contexts = dst_data.get("contexts")
+        if isinstance(dst_contexts, dict) and "shared_voice" in dst_contexts:
+            src_contexts = src_data.setdefault("contexts", {})
+            if isinstance(src_contexts, dict):
+                src_contexts["shared_voice"] = dst_contexts["shared_voice"]
+
+        dst_yaml.write_text(
+            yaml.safe_dump(src_data, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        for src_file in src_skill.iterdir():
+            if src_file.name == "skill.yaml" or not src_file.is_file():
+                continue
+            shutil.copy2(src_file, dst_skill / src_file.name)
+        logger.info("Updated managed built-in skill '%s'", src_skill.name)
+        return True
+    except (OSError, yaml.YAMLError, AttributeError):
+        logger.exception("Failed to update managed built-in skill '%s'", src_skill.name)
+        return False
+
+
 def _resolve_config_path() -> str:
     """Find the config file, or run the setup wizard if none exists."""
     # Explicit argument overrides everything
@@ -111,11 +149,10 @@ def _resolve_config_path() -> str:
 
 
 def _sync_builtin_skills(skills_dir: Path) -> None:
-    """Copy missing built-in skills to the configured skills directory.
+    """Install and update managed skills in the configured skills directory.
 
-    Skills that already exist in the target are left untouched so
-    that user modifications are preserved.  New built-in skills added
-    in future releases are automatically deployed on the next startup.
+    Existing CordBeat-managed skills are updated while explicit user settings
+    are preserved. User-created and AI-created skills are left untouched.
     """
     # Locate the bundled skills/ directory (project-root sibling of src/cordbeat/)
     _here = Path(__file__).resolve()  # …/src/cordbeat/main.py
@@ -129,8 +166,9 @@ def _sync_builtin_skills(skills_dir: Path) -> None:
             continue
         dst_skill = skills_dir / src_skill.name
         if dst_skill.exists():
-            _sync_builtin_skill_contexts(src_skill, dst_skill)
-            continue  # user copy already present — don't overwrite
+            if not _sync_managed_builtin_skill(src_skill, dst_skill):
+                _sync_builtin_skill_contexts(src_skill, dst_skill)
+            continue
         try:
             shutil.copytree(src_skill, dst_skill)
             logger.info("Installed built-in skill '%s' → %s", src_skill.name, dst_skill)

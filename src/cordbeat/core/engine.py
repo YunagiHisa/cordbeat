@@ -1144,6 +1144,7 @@ class CoreEngine:
             continuation = build_react_continuation_prompt(
                 results,
                 max_tool_output_chars=self._react_config.max_tool_output_chars,
+                final_iteration=iteration + 1 >= self._react_config.max_iterations,
             )
             messages.append({"role": "user", "content": continuation})
 
@@ -1173,16 +1174,21 @@ class CoreEngine:
             len(trace.calls),
         )
         # C-1: Strip any leaked [SKILL: ...] tags before returning so users
-        # never see raw tags. C-2: If max_iterations was exhausted and the
-        # final response is empty after stripping (AI emitted only tags
-        # with no natural language), fall back to a generic acknowledgement
-        # so the user still gets a reply.
+        # never see raw tags. C-2: If the model ignores the final-iteration
+        # instruction and emits only tags, return a useful failure instead
+        # of exposing an empty response.
         cleaned_final = _SKILL_TAG_RE.sub("", response).strip()
         if not cleaned_final and trace.calls:
-            cleaned_final = (
-                "(The tool finished, but I could not generate a summary reply. "
-                "Please ask again.)"
-            )
+            last_call = trace.calls[-1]
+            if last_call.is_error:
+                cleaned_final = (
+                    "The tool could not complete the request. Please try again."
+                )
+            else:
+                cleaned_final = (
+                    "The tool completed, but I could not summarize its results. "
+                    "Please try a more specific request."
+                )
         return cleaned_final
 
     async def _request_skill_confirmation(

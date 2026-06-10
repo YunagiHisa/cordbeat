@@ -302,6 +302,8 @@ def _escape_tool_response(text: str) -> str:
 def build_react_continuation_prompt(
     results: list[Any],
     max_tool_output_chars: int = 4000,
+    *,
+    final_iteration: bool = False,
 ) -> str:
     """Build the continuation user message containing tool results.
 
@@ -318,4 +320,16 @@ def build_react_continuation_prompt(
             safe_out = _escape_tool_response(r.output[:max_tool_output_chars])
             body = safe_out
         parts.append(f'<tool_response name="{r.skill_name}">\n{body}\n</tool_response>')
-    return "\n\n".join(parts) + "\n\nPlease continue."
+    if final_iteration:
+        instruction = (
+            "This is the final tool step. Answer the user now using the tool "
+            "results above. Do not emit any [SKILL: ...] tags. If the results "
+            "are empty or failed, say so clearly."
+        )
+    else:
+        instruction = (
+            "Use the tool results above to answer the user. Call another tool "
+            "only when the results clearly require it. Do not repeat or merely "
+            "rephrase a completed tool call."
+        )
+    return "\n\n".join(parts) + f"\n\n{instruction}"

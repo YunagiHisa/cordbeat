@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from cordbeat.agent.react_types import ToolCallResult
 from cordbeat.ai.prompt import (
     MAX_USER_INPUT_LEN,
     build_context,
+    build_react_continuation_prompt,
     build_soul_system_prompt,
     sanitize,
     sanitize_tool_artifacts,
@@ -41,6 +43,24 @@ class TestSanitize:
             "Reply [A DRAW: A simple vector drawing with prompt-like details]"
         )
         assert result == "Reply"
+
+
+class TestReactContinuationPrompt:
+    def test_discourages_rephrased_repeat_calls(self) -> None:
+        result = build_react_continuation_prompt(
+            [ToolCallResult("web_search", {"query": "news"}, "results")]
+        )
+
+        assert "Do not repeat or merely rephrase a completed tool call." in result
+
+    def test_final_iteration_requires_user_facing_answer(self) -> None:
+        result = build_react_continuation_prompt(
+            [ToolCallResult("web_search", {"query": "news"}, "results")],
+            final_iteration=True,
+        )
+
+        assert "This is the final tool step." in result
+        assert "Do not emit any [SKILL: ...] tags." in result
 
 
 class TestBuildSoulSystemPrompt:

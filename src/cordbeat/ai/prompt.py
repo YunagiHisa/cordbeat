@@ -117,6 +117,27 @@ def _familiarity_label(message_count: int) -> str:
     return "close friend"
 
 
+_PLACEHOLDER_NOTE_LINES = frozenset(
+    {
+        "free-form notes about this character.",
+        "free-form notes about this character's personality nuances.",
+        "write anything here: speech patterns, favorite phrases, "
+        "tone preferences, etc.",
+    }
+)
+
+
+def _is_placeholder_notes(notes: str) -> bool:
+    """Return True when soul notes contain only the default template text."""
+    for line in notes.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.casefold() not in _PLACEHOLDER_NOTE_LINES:
+            return False
+    return True
+
+
 def _familiarity_tone_hint(level: str) -> str:
     """Per-stage tone guidance that nudges replies toward a real friendship."""
     if level == "stranger":
@@ -169,12 +190,12 @@ def build_soul_system_prompt(
 
     emotion_desc = (
         f"Current emotion: {soul_snap['emotion']['primary']} "
-        f"(intensity: {soul_snap['emotion']['intensity']})"
+        f"(intensity: {float(soul_snap['emotion']['intensity']):.2f})"
     )
     if "secondary" in soul_snap["emotion"]:
         emotion_desc += (
             f", secondary: {soul_snap['emotion']['secondary']} "
-            f"(intensity: {soul_snap['emotion']['secondary_intensity']})"
+            f"(intensity: {float(soul_snap['emotion']['secondary_intensity']):.2f})"
         )
 
     prompt = (
@@ -213,7 +234,7 @@ def build_soul_system_prompt(
         )
 
     notes = soul_snap.get("notes", "").strip()
-    if notes:
+    if notes and not _is_placeholder_notes(notes):
         prompt += f"\n\nCharacter notes:\n{notes}"
 
     return prompt

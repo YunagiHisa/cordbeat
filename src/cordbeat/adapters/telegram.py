@@ -187,9 +187,7 @@ class TelegramAdapter(RetryableConnection):
                         if (photo.file_size or 0) <= _IMAGE_SIZE_LIMIT_BYTES:
                             file = await context.bot.get_file(photo.file_id)
                             raw = await file.download_as_bytearray()
-                            images.append(
-                                base64.b64encode(bytes(raw)).decode("ascii")
-                            )
+                            images.append(base64.b64encode(bytes(raw)).decode("ascii"))
                     except Exception:
                         logger.warning("Failed to download replied Telegram photo")
                 if (

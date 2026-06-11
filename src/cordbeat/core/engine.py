@@ -151,9 +151,7 @@ def _build_reply_context_prompt(
 
     author = sanitize(str(reply.get("author") or ""), strict=True, max_len=200)
     content = sanitize(str(reply.get("content") or ""), max_len=max_len)
-    message_id = sanitize(
-        str(reply.get("message_id") or ""), strict=True, max_len=200
-    )
+    message_id = sanitize(str(reply.get("message_id") or ""), strict=True, max_len=200)
     try:
         image_count = max(0, int(reply.get("image_count") or 0))
     except (TypeError, ValueError):
@@ -533,6 +531,14 @@ class CoreEngine:
                 " actions requiring confirmation are unavailable in shared voice"
                 " channels; never emit [DRAW: ...] tags."
             )
+        elif message.is_voice:
+            system_prompt += (
+                "\n\nYour reply will be spoken aloud via text-to-speech."
+                " Use plain conversational sentences only: no markdown,"
+                " bullet lists, code blocks, URLs, emojis, or bracketed tags"
+                " such as [DRAW: ...]. Keep the spoken reply short and"
+                " natural, usually one or two sentences."
+            )
         if not message.is_voice and self._skills.get("draw") is not None:
             system_prompt += (
                 "\n\nYou can create procedural illustrations for the user"
@@ -549,6 +555,11 @@ class CoreEngine:
                 " relationships in English>] tag."
                 " The tag will be converted to Draw DSL, rendered, and sent"
                 " with your reply."
+                " No image exists unless this reply contains the tag: if you"
+                " say you will draw, are drawing, or have drawn something,"
+                " the SAME reply MUST contain the [DRAW: ...] tag. Never claim"
+                " a drawing is attached, finished, or on its way without the"
+                " tag in this reply."
                 " Do not call the draw skill directly with [SKILL: draw];"
                 " use the [DRAW: ...] tag instead."
             )
@@ -580,7 +591,10 @@ class CoreEngine:
                 " When the user explicitly asks for current or external"
                 " information, use the appropriate search/fetch skill NOW in"
                 " that response. A reply that only says you will search, are"
-                " searching, or will report back later is invalid."
+                " searching, or will report back later is invalid. Equally"
+                " invalid is claiming in past tense that you already searched,"
+                " checked, or fetched something when this reply contains no"
+                " tag and no earlier tool result for it."
                 " Drawing is separate: never use [SKILL: draw]; only use"
                 " [DRAW: ...] when the Draw DSL guidance says it is appropriate."
                 " Conversely, if you have no need for a tool, do not promise one."
@@ -793,8 +807,7 @@ class CoreEngine:
                 raise
 
         retry_system = (
-            system_prompt
-            + "\n/no_think\n"
+            system_prompt + "\n/no_think\n"
             "The previous generation timed out. Reply concisely and directly. "
             "Do not use hidden reasoning."
         )
@@ -928,6 +941,12 @@ class CoreEngine:
                         params[k.strip()] = v.strip()
 
                 skill = self._skills.get(skill_name)
+                if skill is not None and any(
+                    p.name == "user_id" for p in skill.meta.parameters
+                ):
+                    # Never trust an AI-provided user_id: inject the resolved
+                    # internal user id so skills act on the correct user.
+                    params["user_id"] = user_id
                 if skill is None or not skill.meta.enabled:
                     logger.debug("ReAct: unknown/disabled skill %r", skill_name)
                     results.append(

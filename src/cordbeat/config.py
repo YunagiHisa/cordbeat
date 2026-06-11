@@ -508,9 +508,7 @@ def validate_config(cfg: Config) -> None:
     if cfg.heartbeat.proactive_user_cooldown_minutes < 0:
         errors.append("heartbeat.proactive_user_cooldown_minutes must be >= 0")
     if cfg.heartbeat.proactive_destination_cooldown_minutes < 0:
-        errors.append(
-            "heartbeat.proactive_destination_cooldown_minutes must be >= 0"
-        )
+        errors.append("heartbeat.proactive_destination_cooldown_minutes must be >= 0")
     if cfg.heartbeat.max_proactive_messages_per_tick < 1:
         errors.append("heartbeat.max_proactive_messages_per_tick must be >= 1")
 

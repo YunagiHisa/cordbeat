@@ -592,10 +592,7 @@ class HeartbeatLoop:
         metadata: dict[str, Any] = {"allow_dm_fallback": False}
         if last_seen is not None:
             last_channel_id, last_is_dm = last_seen
-            if (
-                decision.target_adapter_id == "discord"
-                and last_channel_id == "vc"
-            ):
+            if decision.target_adapter_id == "discord" and last_channel_id == "vc":
                 logger.info(
                     "HEARTBEAT skipped non-routable Discord VC history user=%s",
                     decision.target_user_id,
@@ -825,8 +822,15 @@ class HeartbeatLoop:
             await self._proposals.store_skill_proposal(decision, skill.meta.name)
             return
 
+        params = dict(decision.skill_params)
+        if decision.target_user_id and any(
+            p.name == "user_id" for p in skill.meta.parameters
+        ):
+            # Never trust an AI-provided user_id: inject the code-level target.
+            params["user_id"] = decision.target_user_id
+
         try:
-            result = await skill.execute(decision.skill_params, memory=self._memory)
+            result = await skill.execute(params, memory=self._memory)
             logger.info("Skill '%s' result: %s", decision.skill_name, result)
         except Exception:
             logger.exception("Skill '%s' failed", decision.skill_name)

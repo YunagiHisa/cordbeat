@@ -354,8 +354,12 @@ async def main(
     ) -> None:
         try:
             await asyncio.wait_for(coro_or_task, timeout=timeout)
-        except (TimeoutError, asyncio.CancelledError):
+        except TimeoutError:
             logger.warning("Shutdown timeout for %s (%.0fs)", label, timeout)
+        except asyncio.CancelledError:
+            # A task we cancelled on purpose re-raises CancelledError when
+            # awaited — that is a clean shutdown, not a timeout.
+            logger.debug("Shutdown of %s completed via cancellation", label)
         except Exception:
             logger.exception("Error during shutdown of %s", label)
 

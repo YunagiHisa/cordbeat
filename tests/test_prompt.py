@@ -302,8 +302,7 @@ class TestBuildContext:
         )
 
         assert (
-            "CordBeat: A Nara deer ✨ I'll draw it with a gentle atmosphere."
-            in result
+            "CordBeat: A Nara deer ✨ I'll draw it with a gentle atmosphere." in result
         )
         assert "thinking process" not in result
         assert "Formulate Response" not in result

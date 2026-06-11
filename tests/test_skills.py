@@ -138,7 +138,6 @@ class TestSkillRegistry:
 
         assert registry.available_skills["search"].shared_voice_enabled is False
 
-
     def test_adds_missing_shared_voice_default(self, tmp_path: Path) -> None:
         bundled = tmp_path / "bundled" / "web_search"
         installed = tmp_path / "installed" / "web_search"
@@ -1107,7 +1106,7 @@ class TestWebSearchSkill:
         spec.loader.exec_module(mod)
 
         html = (
-            "<a rel=\"nofollow\" href=\"https://example.com\" "
+            '<a rel="nofollow" href="https://example.com" '
             "class='result-link'>Example</a>\n"
             "<tr>\n"
             "<td class='result-snippet'>\n"

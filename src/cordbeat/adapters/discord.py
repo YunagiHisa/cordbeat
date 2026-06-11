@@ -157,23 +157,19 @@ class DiscordAdapter(RetryableConnection):
         )
         if isinstance(raw_wake_words, str):
             raw_wake_words = [raw_wake_words]
-        elif not isinstance(raw_wake_words, (list, tuple, set)):
+        elif not isinstance(raw_wake_words, list | tuple | set):
             logger.warning("Invalid Discord option vc_wake_words; using defaults")
             raw_wake_words = _VC_WAKE_WORDS_DEFAULT
         configured_phrases = tuple(
-            str(word).strip().casefold()
-            for word in raw_wake_words
-            if str(word).strip()
+            str(word).strip().casefold() for word in raw_wake_words if str(word).strip()
         )
         soul_phrase = soul_name.strip().casefold()
         activation_phrases = (
-            (*configured_phrases, soul_phrase)
-            if soul_phrase
-            else configured_phrases
+            (*configured_phrases, soul_phrase) if soul_phrase else configured_phrases
         )
-        self._vc_wake_words = tuple(
-            dict.fromkeys(activation_phrases)
-        ) or _VC_WAKE_WORDS_DEFAULT
+        self._vc_wake_words = (
+            tuple(dict.fromkeys(activation_phrases)) or _VC_WAKE_WORDS_DEFAULT
+        )
         self._vc_normalized_wake_words = tuple(
             normalized
             for word in self._vc_wake_words
@@ -433,9 +429,8 @@ class DiscordAdapter(RetryableConnection):
                 logger.info("Dropping stale VC reply for guild=%d", guild_id)
                 return
 
-            if (
-                guild_id in self._vc_receivers
-                and await self._speak_in_vc(guild_id, content)
+            if guild_id in self._vc_receivers and await self._speak_in_vc(
+                guild_id, content
             ):
                 self._vc_followup_until[guild_id] = (
                     monotonic() + self._vc_followup_seconds
@@ -653,7 +648,7 @@ class DiscordAdapter(RetryableConnection):
                     author_name = ""
                 if not isinstance(reply_content, str):
                     reply_content = ""
-                if not isinstance(reply_message_id, (int, str)):
+                if not isinstance(reply_message_id, int | str):
                     reply_message_id = ""
                 reply_image_count = len(images) - reply_image_start
                 if (
@@ -1092,9 +1087,7 @@ class DiscordAdapter(RetryableConnection):
             )
             return decision
 
-    async def _forward_vc_transcript(
-        self, guild_id: int, transcribed: str
-    ) -> None:
+    async def _forward_vc_transcript(self, guild_id: int, transcribed: str) -> None:
         """Forward one consolidated VC turn to Core."""
         if self._ws is None:
             return

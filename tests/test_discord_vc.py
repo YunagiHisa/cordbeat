@@ -257,9 +257,7 @@ class TestRVCWrappedTTS:
 
 
 class TestDiscordAdapterVC:
-    def _make_adapter(
-        self, options: dict[str, object] | None = None
-    ) -> DiscordAdapter:
+    def _make_adapter(self, options: dict[str, object] | None = None) -> DiscordAdapter:
         from cordbeat.adapters.discord import DiscordAdapter
 
         config = AdapterConfig(options={"token": "test-token", **(options or {})})

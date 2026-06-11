@@ -392,8 +392,9 @@ class TestCoreEngine:
         call = mock_ai.generate.call_args
         assert "do not reveal" not in call.kwargs["prompt"]
         assert "private old conversation" not in call.kwargs["prompt"]
-        assert "Safe skills explicitly enabled for shared voice may be used" in (
-            call.kwargs["system"]
+        assert (
+            "Safe skills explicitly enabled for shared voice may be used"
+            in (call.kwargs["system"])
         )
         reply = mock_gateway.send_to_adapter.call_args.args[1]
         assert reply.content == "Understood."
@@ -3386,8 +3387,7 @@ class TestReActLoop:
         """Opt-in ReAct trace shows tool purpose and redacts sensitive values."""
         mock_ai.generate = AsyncMock(
             return_value=(
-                "Checking. [SKILL: test_tool | query=CordBeat | "
-                "api_key=secret-value]"
+                "Checking. [SKILL: test_tool | query=CordBeat | api_key=secret-value]"
             )
         )
         mock_ai.generate_chat = AsyncMock(return_value="Done!")

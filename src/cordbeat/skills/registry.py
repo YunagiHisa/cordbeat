@@ -327,7 +327,13 @@ class SkillRegistry:
                     continue
                 if skill.meta.safety_level != SafetyLevel.SAFE:
                     continue
-            params_str = ", ".join(f"{p.name}: {p.type}" for p in skill.meta.parameters)
+            # user_id is injected by the engine at call time; hide it from the
+            # AI so it never tries to guess internal user IDs.
+            params_str = ", ".join(
+                f"{p.name}: {p.type}"
+                for p in skill.meta.parameters
+                if p.name != "user_id"
+            )
             lines.append(
                 f"- {name}: {skill.meta.description} "
                 f"(safety={skill.meta.safety_level.value}, params=[{params_str}])"

@@ -20,6 +20,10 @@ topics discussed, decisions made, user preferences or facts mentioned, and the
 emotional tone.
 Write the summary in third-person, past tense, 3-5 sentences max.
 Start with: "Earlier in this conversation:"
+Focus on the user: their topics, requests, preferences, and mood. Do NOT
+narrate the assistant's performance — omit meta-commentary about the
+assistant failing, apologizing, retrying, or producing poor outputs. If a
+request was not fulfilled, state the request neutrally at most once.
 Respond with ONLY the summary text, no JSON or extra formatting.
 """
 

@@ -580,9 +580,7 @@ class OpenAICompatBackend(AIBackend):
             if payload_thinking is not None:
                 # llama.cpp passes template kwargs via chat_template_kwargs;
                 # keep the legacy top-level field for other servers (vLLM etc.)
-                payload["chat_template_kwargs"] = {
-                    "enable_thinking": payload_thinking
-                }
+                payload["chat_template_kwargs"] = {"enable_thinking": payload_thinking}
                 payload["enable_thinking"] = payload_thinking
             async with time_block(LLM_GENERATE_LATENCY, labels):
                 resp = await self._client.post(
@@ -619,26 +617,23 @@ class OpenAICompatBackend(AIBackend):
                 # output — using it as the response would leak raw thinking text.
                 # Return empty string; callers (engine, generate_json) handle empty.
                 if reasoning_content:
-                    # Model exhausted max_tokens during thinking phase. Retry once
-                    # with at least 8192 tokens so it has budget for both
-                    # thinking and the actual answer.
+                    # Model exhausted max_tokens during thinking phase. Retry
+                    # once with thinking disabled and a larger budget (at
+                    # least 8192 tokens) so the model produces a direct reply.
                     _thinking_retry_floor = 8192
                     retry_mt = max(max_tokens * 2, _thinking_retry_floor)
-                    logger.warning(
-                        "openai_compat: content=null but reasoning_content=%d chars. "
-                        "Model produced only thinking tokens with no actual response. "
-                        "Retrying with max_tokens=%d. "
-                        "Set ai.options.enable_thinking: false in config.yaml "
-                        "to force the model to generate a direct reply.",
-                        len(reasoning_content),
-                        retry_mt,
-                    )
                     retry_result = await self._retry_without_thinking(
                         messages=messages,
                         temperature=temperature,
                         max_tokens=retry_mt,
                         labels=labels,
-                        reason="openai_compat: content=null but reasoning_content set.",
+                        reason=(
+                            "openai_compat: content=null but "
+                            f"reasoning_content={len(reasoning_content)} chars. "
+                            "Model spent the whole token budget on thinking. "
+                            "Set ai_backend.options.enable_thinking: false in "
+                            "config.yaml to avoid these retries."
+                        ),
                     )
                     if retry_result:
                         logger.debug(
@@ -682,9 +677,7 @@ class OpenAICompatBackend(AIBackend):
                         ),
                     )
                     if not result:
-                        logger.warning(
-                            "openai_compat: dropping reasoning-like content"
-                        )
+                        logger.warning("openai_compat: dropping reasoning-like content")
                 if not reasoning_like and not stripped:
                     logger.warning(
                         "openai_compat: content was entirely <think> blocks; "
@@ -790,9 +783,7 @@ class OpenAICompatBackend(AIBackend):
                 "max_tokens": max_tokens,
             }
             if payload_thinking is not None:
-                payload["chat_template_kwargs"] = {
-                    "enable_thinking": payload_thinking
-                }
+                payload["chat_template_kwargs"] = {"enable_thinking": payload_thinking}
                 payload["enable_thinking"] = payload_thinking
             async with time_block(LLM_GENERATE_LATENCY, labels):
                 resp = await self._client.post(

@@ -9,6 +9,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- **`user_id` skill parameter no longer exposed to the AI.** The skill
+  catalog shown to the model hid nothing, so `timer`/`read_diary` asked the
+  AI to supply `user_id` — but the model only sees platform IDs (e.g.
+  Discord snowflakes), not internal UUIDs. The catalog now omits `user_id`
+  and the engine/heartbeat inject the code-level resolved user id at
+  execution time, ignoring any AI-provided value.
+- **Conversation summaries no longer preserve AI-failure narratives.**
+  Compressed history summaries recalled as episodes could embed
+  meta-commentary like "the assistant continued to fail", reinforcing bad
+  behaviour in later prompts. The summarizer now focuses on the user's
+  topics and requests and omits commentary about the assistant's
+  performance.
+- **Prompt hardening against phantom tool actions.** Production logs showed
+  the model replying "I drew it, what do you think?" without emitting a
+  `[DRAW: ...]` tag (so no image was ever rendered) and promising "I'll
+  search and report back" without a `[SKILL: ...]` tag. The draw guidance now
+  states that no image exists unless the same reply contains the tag, and the
+  skill STRICT RULE now also forbids past-tense claims of completed
+  searches/fetches when no tag or tool result backs them.
+- **Spurious shutdown warning.** A cleanly cancelled `queue_task` re-raises
+  `CancelledError` when awaited; the shutdown helper treated this as a
+  timeout and logged `Shutdown timeout for queue_task (10s)` on every
+  shutdown. Clean cancellation is now logged at DEBUG level and only a real
+  `TimeoutError` produces the warning.
+- **Contradictory thinking-retry log messages.** When a thinking model
+  exhausted its token budget (`content=null` with `reasoning_content`), two
+  back-to-back warnings claimed both "retrying with max_tokens=8192" and
+  "retrying with thinking disabled". The retry (which disables thinking AND
+  raises the token budget) now logs a single accurate warning.
+- **Dead optional dependencies removed.** The `anthropic` and `openrouter`
+  extras installed packages that no code imports (only `ollama` and
+  `openai_compat` providers exist); the matching unused mypy override was
+  also removed.
 - **Skill approval and safety hardening.** ReAct now creates a
   `skill_confirm` proposal instead of silently skipping non-safe `[SKILL: ...]`
   calls, and adapter approval buttons now include the platform user id required

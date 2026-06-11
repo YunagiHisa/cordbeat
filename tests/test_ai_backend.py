@@ -387,9 +387,7 @@ class TestOpenAICompatBackend:
             "choices": [
                 {
                     "message": {
-                        "content": (
-                            "<|START_THINKING|>private<|END_THINKING|>\nAnswer"
-                        )
+                        "content": ("<|START_THINKING|>private<|END_THINKING|>\nAnswer")
                     }
                 }
             ]
@@ -587,9 +585,7 @@ class TestOpenAICompatBackend:
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
-            "choices": [
-                {"message": {"content": "analysis\n</think>\nFinal answer"}}
-            ]
+            "choices": [{"message": {"content": "analysis\n</think>\nFinal answer"}}]
         }
         mock_response.raise_for_status = MagicMock()
 

@@ -117,9 +117,7 @@ _ENTITY_MAP = {
 
 def _html_to_text(html: str) -> str:
     """Strip HTML tags and collapse whitespace into readable text."""
-    text = re.sub(
-        _SCRIPT_STYLE_PATTERN, "", html, flags=re.IGNORECASE | re.DOTALL
-    )
+    text = re.sub(_SCRIPT_STYLE_PATTERN, "", html, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(_TAG_PATTERN, "", text)
     for entity, char in _ENTITY_MAP.items():
         text = text.replace(entity, char)

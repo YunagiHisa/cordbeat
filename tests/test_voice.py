@@ -248,6 +248,7 @@ async def test_whisper_local_stt_returns_empty_when_not_installed() -> None:
 
     assert result == ""
 
+
 async def test_whisper_local_stt_serializes_concurrent_transcriptions() -> None:
     cfg = STTConfig(backend="whisper_local", model="base")
     stt = WhisperLocalSTT(cfg)

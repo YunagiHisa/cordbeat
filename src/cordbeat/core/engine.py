@@ -512,7 +512,9 @@ class CoreEngine:
             )
         )
         message_count = (
-            None if shared_voice else await self._memory.count_messages(user_id)
+            None
+            if shared_voice
+            else await self._memory.get_lifetime_message_count(user_id)
         )
 
         system_prompt = build_soul_system_prompt(

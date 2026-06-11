@@ -78,6 +78,14 @@ MIGRATIONS: list[Migration] = [
         "is_dm=1 (treat legacy history as DM context, the safer default)",
         callable=lambda conn: _migrate_v4_channel_columns(conn),
     ),
+    Migration(
+        version=5,
+        description="add users.total_messages lifetime counter; familiarity "
+        "was derived from COUNT(conversation_messages), which the nightly "
+        "sleep phase trims, so relationships could never grow past the "
+        "trim threshold. Backfilled from the current message count.",
+        callable=lambda conn: _migrate_v5_total_messages(conn),
+    ),
 ]
 
 
@@ -135,6 +143,27 @@ async def _migrate_v4_channel_columns(conn: aiosqlite.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_conv_user_dm_time
             ON conversation_messages (user_id, is_dm, created_at DESC);
         """
+    )
+
+
+async def _migrate_v5_total_messages(conn: aiosqlite.Connection) -> None:
+    """Add users.total_messages and backfill from conversation_messages.
+
+    Idempotent: skips the ALTER if the column already exists (partial
+    failure re-run safety).
+    """
+    cur = await conn.execute("PRAGMA table_info(users)")
+    columns = {r[1] for r in await cur.fetchall()}
+    await cur.close()
+    if "total_messages" not in columns:
+        await conn.execute(
+            "ALTER TABLE users ADD COLUMN total_messages INTEGER NOT NULL DEFAULT 0"
+        )
+    await conn.execute(
+        "UPDATE users SET total_messages = ("
+        "  SELECT COUNT(*) FROM conversation_messages cm"
+        "  WHERE cm.user_id = users.user_id"
+        ") WHERE total_messages = 0"
     )
 
 

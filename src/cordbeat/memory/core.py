@@ -277,6 +277,13 @@ class MemoryStore:
         await self._conversations.add_message(
             user_id, role, content, adapter_id, channel_id, is_dm
         )
+        # Lifetime counter survives nightly history trimming so the
+        # familiarity stage keeps growing with the relationship.
+        await self._users.increment_total_messages(user_id)
+
+    async def get_lifetime_message_count(self, user_id: str) -> int:
+        """Total messages ever exchanged (not reduced by trimming)."""
+        return await self._users.get_total_messages(user_id)
 
     async def get_recent_messages(
         self,

@@ -167,7 +167,7 @@ class SlackAdapter(RetryableConnection):
         channel_type: str = "channel",
         bypass_filter: bool = False,
     ) -> None:
-        if self._ws is None or not user_id:
+        if not user_id:
             return
 
         # ── E-4 response filtering ────────────────────────────────────
@@ -204,10 +204,8 @@ class SlackAdapter(RetryableConnection):
                 },
             }
         )
-        try:
-            await self._ws.send(payload)
-        except Exception:
-            logger.exception("Failed to forward message to Core")
+        # Buffered for resend if Core is unreachable (bounded outbox).
+        await self._send_to_core(payload)
 
     async def _send_to_slack(
         self,

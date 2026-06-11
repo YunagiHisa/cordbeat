@@ -219,10 +219,17 @@ class HeartbeatLoop:
                 interval_minutes = self._config.default_interval_minutes
 
             # Clamp interval
-            interval_minutes = max(
+            clamped = max(
                 self._config.min_interval_minutes,
                 min(self._config.max_interval_minutes, interval_minutes),
             )
+            if clamped != interval_minutes:
+                logger.warning(
+                    "HEARTBEAT interval %d min out of bounds; clamped to %d min",
+                    interval_minutes,
+                    clamped,
+                )
+            interval_minutes = clamped
             await asyncio.sleep(interval_minutes * 60)
 
     async def _tick(self) -> int:

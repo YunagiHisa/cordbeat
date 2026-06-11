@@ -191,6 +191,7 @@ class TestCoreEngineVision:
         memory.get_recall_hints = AsyncMock(return_value=[])
         memory.add_message = AsyncMock()
         memory.count_messages = AsyncMock(return_value=0)
+        memory.get_lifetime_message_count = AsyncMock(return_value=0)
 
         extractor = MagicMock()
         extractor.extract_recall_keywords = AsyncMock(return_value=[])

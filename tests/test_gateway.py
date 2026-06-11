@@ -448,3 +448,45 @@ class TestRetryableConnection:
 
         await conn._listen_core()
         assert dispatched == []
+
+    async def test_send_to_core_buffers_when_disconnected(self) -> None:
+        conn = _ConcreteConnection()
+        conn._ws = None
+
+        sent = await conn._send_to_core("payload-1")
+        assert sent is False
+        assert list(conn._outbox) == ["payload-1"]
+
+    async def test_send_to_core_buffers_on_send_failure(self) -> None:
+        conn = _ConcreteConnection()
+        conn._ws = AsyncMock()
+        conn._ws.send = AsyncMock(side_effect=RuntimeError("ws fail"))
+
+        sent = await conn._send_to_core("payload-1")
+        assert sent is False
+        assert list(conn._outbox) == ["payload-1"]
+
+    async def test_flush_outbox_resends_after_reconnect(self) -> None:
+        conn = _ConcreteConnection()
+        conn._ws = None
+        await conn._send_to_core("payload-1")
+        await conn._send_to_core("payload-2")
+
+        conn._ws = AsyncMock()
+        await conn._flush_outbox()
+
+        sent = [call.args[0] for call in conn._ws.send.await_args_list]
+        assert sent == ["payload-1", "payload-2"]
+        assert len(conn._outbox) == 0
+
+    async def test_outbox_is_bounded(self) -> None:
+        from cordbeat.core.gateway import _OUTBOX_MAX
+
+        conn = _ConcreteConnection()
+        conn._ws = None
+        for i in range(_OUTBOX_MAX + 10):
+            await conn._send_to_core(f"payload-{i}")
+
+        assert len(conn._outbox) == _OUTBOX_MAX
+        # Oldest messages were evicted
+        assert conn._outbox[0] == "payload-10"

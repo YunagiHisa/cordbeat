@@ -49,6 +49,23 @@ class UserStore:
         await self._db.commit()
         return UserSummary(user_id=user_id, display_name=display_name)
 
+    async def increment_total_messages(self, user_id: str) -> None:
+        """Atomically bump the lifetime message counter for *user_id*."""
+        await self._db.execute(
+            "UPDATE users SET total_messages = total_messages + 1 WHERE user_id = ?",
+            (user_id,),
+        )
+        await self._db.commit()
+
+    async def get_total_messages(self, user_id: str) -> int:
+        """Return the lifetime message count (survives history trimming)."""
+        cursor = await self._db.execute(
+            "SELECT total_messages FROM users WHERE user_id = ?",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
     async def update_user_summary(self, summary: UserSummary) -> None:
         await self._db.execute(
             "UPDATE users SET display_name=?, last_talked_at=?, "

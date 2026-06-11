@@ -74,17 +74,18 @@ class TestDiscordAdapter:
         adapter = DiscordAdapter(config)
         adapter._ws = None
 
-        # Should not raise, just log warning
-        with patch("cordbeat.adapters.discord.logger") as mock_logger:
-            await adapter._forward_to_core(
-                MagicMock(
-                    author=MagicMock(id=123, display_name="Test"),
-                    content="hello",
-                    channel=MagicMock(id=456),
-                    guild=None,
-                )
+        # Should not raise; message is buffered in the outbox for resend
+        await adapter._forward_to_core(
+            MagicMock(
+                author=MagicMock(id=123, display_name="Test"),
+                content="hello",
+                channel=MagicMock(id=456),
+                guild=None,
             )
-            mock_logger.warning.assert_called()
+        )
+        assert len(adapter._outbox) == 1
+        payload = json.loads(adapter._outbox[0])
+        assert payload["content"] == "hello"
 
     async def test_forward_to_core_sends_payload(self) -> None:
         from cordbeat.adapters.discord import DiscordAdapter
@@ -486,9 +487,11 @@ class TestTelegramAdapter:
         adapter = TelegramAdapter(config)
         adapter._ws = None
 
-        with patch("cordbeat.adapters.telegram.logger") as mock_logger:
-            await adapter._forward_to_core("user1", "hello")
-            mock_logger.warning.assert_called()
+        # Should not raise; message is buffered in the outbox for resend
+        await adapter._forward_to_core("user1", "hello")
+        assert len(adapter._outbox) == 1
+        payload = json.loads(adapter._outbox[0])
+        assert payload["content"] == "hello"
 
     async def test_forward_to_core_ws_error(self) -> None:
         from cordbeat.adapters.telegram import TelegramAdapter

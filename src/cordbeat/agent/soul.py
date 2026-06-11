@@ -431,15 +431,20 @@ class Soul:
             self._save_notes()
 
     def _save_soul(self) -> None:
+        # Atomic write: a crash mid-write must never corrupt soul.yaml.
         soul_path = self._soul_dir / "soul.yaml"
-        with soul_path.open("w", encoding="utf-8") as f:
+        tmp_path = soul_path.with_suffix(".yaml.tmp")
+        with tmp_path.open("w", encoding="utf-8") as f:
             yaml.dump(
                 self._soul,
                 f,
                 allow_unicode=True,
                 default_flow_style=False,
             )
+        tmp_path.replace(soul_path)
 
     def _save_notes(self) -> None:
         notes_path = self._soul_dir / "soul_notes.md"
-        notes_path.write_text(self._notes, encoding="utf-8")
+        tmp_path = notes_path.with_suffix(".md.tmp")
+        tmp_path.write_text(self._notes, encoding="utf-8")
+        tmp_path.replace(notes_path)

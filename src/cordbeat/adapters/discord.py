@@ -554,10 +554,6 @@ class DiscordAdapter(RetryableConnection):
             await self._dispatch_core_message(platform_user_id, content, [])
 
     async def _forward_to_core(self, message: Any) -> None:
-        if self._ws is None:
-            logger.warning("Not connected to Core, dropping message")
-            return
-
         user_id = str(message.author.id)
         channel_id: int = message.channel.id
         is_guild = message.guild is not None  # False = DM
@@ -720,7 +716,8 @@ class DiscordAdapter(RetryableConnection):
                 len(payload.encode("utf-8")),
                 len(images),
             )
-            await self._ws.send(payload)
+            # Buffered for resend if Core is unreachable (bounded outbox).
+            await self._send_to_core(payload)
         except Exception:
             logger.exception("Failed to forward message to Core")
 

@@ -101,7 +101,11 @@ class MemoryConfig:
     chain_recall_depth_penalty: float = 0.5
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dim: int = 384
-    dedup_distance_threshold: float = 0.0
+    # Near-duplicate memories within this vector distance are merged
+    # (strength reinforced) instead of stored again. 0.0 disables dedup.
+    # 0.15 ≈ cosine similarity 0.99 on normalized embeddings — merges only
+    # near-identical statements.
+    dedup_distance_threshold: float = 0.15
     # Context compression: summarise old conversation chunks with LLM
     # instead of silently dropping them.  Runs during the sleep phase.
     context_compression_enabled: bool = True

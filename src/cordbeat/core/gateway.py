@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 from abc import ABC, abstractmethod
+from collections import deque
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
@@ -26,6 +27,8 @@ logging.getLogger("websockets.asyncio.server").setLevel(logging.CRITICAL)
 
 _MAX_BACKOFF = 60
 _DEFAULT_WS_MAX_MESSAGE_BYTES = 64 * 1024 * 1024
+# Bounded resend buffer for user messages typed while Core is unreachable.
+_OUTBOX_MAX = 50
 
 
 class BaseAdapter(ABC):
@@ -66,6 +69,7 @@ class RetryableConnection(ABC):
     _running: bool
     _ws_url: str
     _auth_token: str
+    _pending_outbox: deque[str]
     adapter_id: str
 
     async def _connect_to_core(self) -> None:
@@ -88,6 +92,7 @@ class RetryableConnection(ABC):
                 ack = json.loads(await self._ws.recv())
                 logger.info("Connected to Core: %s", ack.get("content", "OK"))
                 backoff = 1
+                await self._flush_outbox()
                 await self._listen_core()
             except Exception:
                 self._ws = None  # ensure stale WS is not used by _forward_to_core
@@ -99,6 +104,51 @@ class RetryableConnection(ABC):
                 )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, getattr(self, "_max_backoff", _MAX_BACKOFF))
+
+    @property
+    def _outbox(self) -> deque[str]:
+        box: deque[str] | None = getattr(self, "_pending_outbox", None)
+        if box is None:
+            box = deque(maxlen=_OUTBOX_MAX)
+            self._pending_outbox = box
+        return box
+
+    async def _send_to_core(self, payload: str) -> bool:
+        """Send *payload* to Core, buffering it for resend on failure.
+
+        Returns True when the payload was sent immediately. Buffered
+        payloads are flushed in order after the next successful reconnect
+        (oldest entries are dropped beyond the buffer limit).
+        """
+        ws = getattr(self, "_ws", None)
+        if ws is not None:
+            try:
+                await ws.send(payload)
+                return True
+            except Exception:
+                logger.warning("Send to Core failed; buffering message for resend")
+        else:
+            logger.warning("Not connected to Core; buffering message for resend")
+        self._outbox.append(payload)
+        return False
+
+    async def _flush_outbox(self) -> None:
+        """Resend any messages buffered while Core was unreachable."""
+        box = self._outbox
+        if not box:
+            return
+        logger.info("Resending %d buffered message(s) to Core", len(box))
+        while box:
+            payload = box.popleft()
+            try:
+                await self._ws.send(payload)
+            except Exception:
+                box.appendleft(payload)
+                logger.warning(
+                    "Outbox flush interrupted; %d message(s) still pending",
+                    len(box),
+                )
+                return
 
     async def _listen_core(self) -> None:
         try:

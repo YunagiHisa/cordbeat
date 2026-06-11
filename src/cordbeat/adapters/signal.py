@@ -141,7 +141,7 @@ class SignalAdapter(RetryableConnection):
             await asyncio.sleep(self._poll_interval)
 
     async def _forward_to_core(self, *, user_id: str, text: str) -> None:
-        if self._ws is None or not user_id:
+        if not user_id:
             return
 
         # Signal is 1:1 — always a DM; no channel filters needed.
@@ -162,10 +162,8 @@ class SignalAdapter(RetryableConnection):
                 },
             }
         )
-        try:
-            await self._ws.send(payload)
-        except Exception:
-            logger.exception("Failed to forward message to Core")
+        # Buffered for resend if Core is unreachable (bounded outbox).
+        await self._send_to_core(payload)
 
     async def _send_to_signal(self, platform_user_id: str, content: str) -> None:
         if not self._http_client or not platform_user_id:

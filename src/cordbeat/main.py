@@ -285,10 +285,27 @@ async def main(
     )
 
     # ── Start services ────────────────────────────────────────────
+    stop_event = asyncio.Event()
+
     await gateway.start()
     await heartbeat.start()
 
     queue_task = asyncio.create_task(queue.process_loop())
+
+    def _watch_queue_task(task: asyncio.Task[None]) -> None:
+        # The message loop must never exit on its own; if it does, the bot
+        # silently stops responding ("presence" dies). Shut down loudly
+        # instead of running as a zombie.
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.critical("Message queue loop crashed: %s", exc, exc_info=exc)
+        else:
+            logger.critical("Message queue loop exited unexpectedly")
+        stop_event.set()
+
+    queue_task.add_done_callback(_watch_queue_task)
 
     if _ready is not None:
         _ready.set()  # Signal to main_with_cli that the gateway is up
@@ -301,8 +318,6 @@ async def main(
     )
 
     # ── Graceful shutdown ─────────────────────────────────────────
-    stop_event = asyncio.Event()
-
     def _signal_handler() -> None:
         logger.info("Shutdown signal received")
         stop_event.set()

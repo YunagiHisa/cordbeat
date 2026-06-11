@@ -64,9 +64,26 @@ async def test_dedup_keeps_distinct_content(store: MemoryStore) -> None:
     assert len(results) == 2
 
 
-async def test_dedup_disabled_by_default(tmp_path: Path) -> None:
-    """With threshold=0 (default), identical inserts produce two rows."""
-    config = MemoryConfig(sqlite_path=str(tmp_path / "nodedup.db"))
+async def test_dedup_enabled_by_default(tmp_path: Path) -> None:
+    """Default threshold (0.15) merges identical inserts into one row."""
+    config = MemoryConfig(sqlite_path=str(tmp_path / "dedup.db"))
+    assert config.dedup_distance_threshold > 0
+    s = MemoryStore(config)
+    await s.initialize()
+    try:
+        a = await s.add_semantic_memory(_entry("u1", "duplicate text"))
+        b = await s.add_semantic_memory(_entry("u1", "duplicate text"))
+        assert a == b
+    finally:
+        await s.close()
+
+
+async def test_dedup_can_be_disabled(tmp_path: Path) -> None:
+    """With threshold=0, identical inserts produce two rows."""
+    config = MemoryConfig(
+        sqlite_path=str(tmp_path / "nodedup.db"),
+        dedup_distance_threshold=0.0,
+    )
     s = MemoryStore(config)
     await s.initialize()
     try:

@@ -166,7 +166,7 @@ class LineAdapter(RetryableConnection):
         is_group: bool = False,
         channel_id: str = "",
     ) -> None:
-        if self._ws is None or not user_id:
+        if not user_id:
             return
 
         # ── E-4 response filtering ────────────────────────────────────
@@ -204,10 +204,8 @@ class LineAdapter(RetryableConnection):
                 },
             }
         )
-        try:
-            await self._ws.send(payload)
-        except Exception:
-            logger.exception("Failed to forward message to Core")
+        # Buffered for resend if Core is unreachable (bounded outbox).
+        await self._send_to_core(payload)
 
     async def _send_to_line(self, platform_user_id: str, content: str) -> None:
         if not self._messaging_api or not platform_user_id:

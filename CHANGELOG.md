@@ -9,6 +9,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- **Messages sent while Core is down are no longer lost.** Adapters dropped
+  user messages when the WebSocket to Core was disconnected (e.g. during a
+  Core restart). Each adapter now buffers outgoing messages in a bounded
+  outbox (last 50) and resends them after reconnecting.
+- **Near-duplicate memory dedup is now enabled by default.** The merge
+  logic existed but `dedup_distance_threshold` defaulted to `0.0` (off),
+  so repeated statements piled up as separate memories and crowded recall.
+  The default is now `0.15` (≈ cosine similarity 0.99), merging only
+  near-identical memories by reinforcing the existing one.
+- **Familiarity now survives history trimming.** The relationship stage was
+  derived from `COUNT(conversation_messages)`, but the nightly sleep phase
+  trims that table to the most recent 100 rows — so a relationship could
+  never grow past "acquaintance" no matter how long you talked. A new
+  `users.total_messages` lifetime counter (migration v5, backfilled from
+  existing history) now drives the familiarity stage.
+- **soul.yaml / soul_notes.md writes are now atomic.** A crash or shutdown
+  mid-write could truncate the personality file and corrupt the soul. Saves
+  now write to a temp file and rename into place.
+- **Message-loop crash no longer leaves a zombie process.** If the queue
+  processing task died, the bot stopped responding while the process kept
+  running silently. The task is now supervised: a crash logs CRITICAL and
+  triggers a clean shutdown so a process manager can restart it.
+- **Memory-extraction failures are now visible.** Extraction and emotion
+  inference errors were logged at DEBUG, so memories could silently stop
+  being recorded for days. They now log at WARNING with the cause.
+- **Out-of-range HEARTBEAT intervals are logged.** An AI-proposed
+  `next_heartbeat_minutes` outside the configured bounds was silently
+  clamped; it now logs a warning so anomalies are noticeable.
 - **`user_id` skill parameter no longer exposed to the AI.** The skill
   catalog shown to the model hid nothing, so `timer`/`read_diary` asked the
   AI to supply `user_id` — but the model only sees platform IDs (e.g.

@@ -199,7 +199,7 @@ class WhatsAppAdapter(RetryableConnection):
         await self._send_to_whatsapp(platform_user_id, content)
 
     async def _forward_to_core(self, *, user_id: str, text: str) -> None:
-        if self._ws is None or not user_id:
+        if not user_id:
             return
 
         # WhatsApp Cloud API is 1:1 — always a DM; no channel filters needed.
@@ -220,10 +220,8 @@ class WhatsAppAdapter(RetryableConnection):
                 },
             }
         )
-        try:
-            await self._ws.send(payload)
-        except Exception:
-            logger.exception("Failed to forward message to Core")
+        # Buffered for resend if Core is unreachable (bounded outbox).
+        await self._send_to_core(payload)
 
     async def _send_to_whatsapp(self, platform_user_id: str, content: str) -> None:
         if not self._http_client or not platform_user_id:

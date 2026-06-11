@@ -514,10 +514,6 @@ class TelegramAdapter(RetryableConnection):
         is_voice: bool = False,
         reply_context: dict[str, Any] | None = None,
     ) -> None:
-        if self._ws is None:
-            logger.warning("Not connected to Core, dropping message")
-            return
-
         payload = json.dumps(
             {
                 "type": "message",
@@ -534,14 +530,11 @@ class TelegramAdapter(RetryableConnection):
                 },
             }
         )
-        try:
-            await self._ws.send(payload)
-        except Exception:
-            logger.exception("Failed to forward message to Core")
-        else:
+        # Buffered for resend if Core is unreachable (bounded outbox).
+        sent = await self._send_to_core(payload)
+        if sent and chat_id:
             # Show typing indicator while core processes the message
-            if chat_id:
-                self._start_typing(chat_id)
+            self._start_typing(chat_id)
 
     def _start_typing(self, chat_id: int) -> None:
         """Start a background typing indicator loop for the given chat."""

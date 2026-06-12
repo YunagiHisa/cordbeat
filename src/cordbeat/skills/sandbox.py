@@ -135,6 +135,10 @@ async def run_skill_in_subprocess(
             "PYTHONNOUSERSITE": "1",
             "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
         },
+        # The result is one NDJSON line and may legitimately contain a large
+        # value such as a base64-encoded image. Match the StreamReader limit
+        # to our explicit stdout cap instead of asyncio's 64 KiB default.
+        limit=cfg.max_stdout_bytes + 1,
     )
     assert proc.stdin is not None
     assert proc.stdout is not None

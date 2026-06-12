@@ -407,6 +407,23 @@ class TestSkillSandbox:
         assert result["network"] is True
         assert result["filesystem"] is False
 
+    async def test_sandbox_accepts_result_line_larger_than_64_kib(
+        self, tmp_path: Path
+    ) -> None:
+        """Large single-line JSON results must use the configured stdout cap."""
+        code = "def execute(**kwargs):\n    return {'output': 'x' * (128 * 1024)}\n"
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "large_result", sandbox=True, main_code=code)
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("large_result")
+        assert skill is not None
+
+        result = await skill.execute({})
+
+        assert len(result["output"]) == 128 * 1024
+
 
 class TestSkillDescriptions:
     def test_get_descriptions_for_prompt(self, tmp_path: Path) -> None:

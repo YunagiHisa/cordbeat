@@ -733,8 +733,14 @@ class OpenAICompatBackend(AIBackend):
         """Generate using OpenAI vision API (content array with image_url blocks)."""
         max_tokens = self._effective_max_tokens(max_tokens)
         messages: list[dict[str, Any]] = []
-        if system:
-            messages.append({"role": "system", "content": system})
+        effective_thinking = self._effective_enable_thinking()
+        effective_system = system
+        if effective_thinking is False:
+            effective_system = (
+                (system + "\n/no_think").lstrip() if system else "/no_think"
+            )
+        if effective_system:
+            messages.append({"role": "system", "content": effective_system})
 
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for b64img in images:
@@ -746,6 +752,9 @@ class OpenAICompatBackend(AIBackend):
                 }
             )
         messages.append({"role": "user", "content": content})
+        payload_thinking = (
+            False if "/no_think" in effective_system.lower() else effective_thinking
+        )
 
         labels = {"backend": "openai_compat", "model": self._model}
         try:
@@ -753,19 +762,25 @@ class OpenAICompatBackend(AIBackend):
                 "openai_compat vision request: model=%s system=%d chars "
                 "prompt=%d chars images=%d",
                 self._model,
-                len(system),
+                len(effective_system),
                 len(prompt),
                 len(images),
             )
+            payload: dict[str, Any] = {
+                "model": self._model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            if payload_thinking is not None:
+                payload["chat_template_kwargs"] = {
+                    "enable_thinking": payload_thinking
+                }
+                payload["enable_thinking"] = payload_thinking
             async with time_block(LLM_GENERATE_LATENCY, labels):
                 resp = await self._client.post(
                     f"{self._base_url}/chat/completions",
-                    json={
-                        "model": self._model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                    },
+                    json=payload,
                 )
                 resp.raise_for_status()
                 data = resp.json()

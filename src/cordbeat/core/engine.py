@@ -880,6 +880,8 @@ class CoreEngine:
                         system=system_prompt,
                     )
                     cleaned = sanitize_reasoning_artifacts(raw)
+                    if not cleaned:
+                        raise ValueError("vision model returned an empty response")
                     return cleaned, system_prompt, prompt
                 except Exception:
                     logger.warning(
@@ -1754,6 +1756,7 @@ class CoreEngine:
                 "\nProduce a complete alternative Draw DSL for the same request."
             )
         system = (
+            "/no_think\n"
             "You are a drawing DSL generator. "
             "Given a description, output ONLY valid Draw DSL"
             " commands — no prose, no markdown fences.\n"
@@ -1764,7 +1767,8 @@ class CoreEngine:
             "details from back to front. Keep important shapes inside the canvas. "
             "Use contrast between subject and background. Stylize difficult "
             "subjects into recognizable geometric forms instead of refusing. "
-            "Prefer 15-70 meaningful lines; use at most 100 lines. "
+            "Prefer 20-60 meaningful lines; never exceed 80 lines. Reserve "
+            "the final line for OUTPUT and finish the composition before it. "
             "Never use SAVE. Always end with OUTPUT as the final line.\n"
             "Available commands (one per line):\n"
             "  SIZE <width> <height>\n"

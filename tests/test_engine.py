@@ -900,6 +900,7 @@ class TestCoreEngine:
             call
             for call in ai.generate.await_args_list
             if "/no_think" in call.kwargs.get("system", "")
+            and call.kwargs.get("max_tokens") == 1024
         )
         assert retry_call.kwargs["max_tokens"] == 1024
         assert retry_call.kwargs["temperature"] == 0.5
@@ -3076,7 +3077,9 @@ class TestAutoDraw:
         call_kwargs = mock_ai.generate.await_args.kwargs
         assert call_kwargs["temperature"] == 0.2
         assert call_kwargs["max_tokens"] == 3000
+        assert "/no_think" in call_kwargs["system"]
         assert "Silently plan the composition" in call_kwargs["system"]
+        assert "never exceed 80 lines" in call_kwargs["system"]
         assert "BEZIER" in call_kwargs["system"]
         assert "REPEAT" in call_kwargs["system"]
 

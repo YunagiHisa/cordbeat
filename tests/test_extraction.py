@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from cordbeat.agent.soul import Soul
-from cordbeat.ai.extraction import MemoryExtractor
+from cordbeat.ai.extraction import MemoryExtractor, _parse_json_object
 from cordbeat.config import MemoryConfig
 from cordbeat.memory import MemoryStore
 
@@ -41,6 +41,13 @@ def extractor(mock_ai: AsyncMock, soul: Soul, memory: MemoryStore) -> MemoryExtr
     return MemoryExtractor(ai=mock_ai, soul=soul, memory=memory)
 
 
+def test_parse_json_object_accepts_fenced_model_output() -> None:
+    result = _parse_json_object(
+        'Here is the result:\n```json\n{"keywords": ["CordBeat"]}\n```'
+    )
+    assert result == {"keywords": ["CordBeat"]}
+
+
 class TestInferAndUpdateEmotion:
     @pytest.mark.anyio
     async def test_updates_emotion(
@@ -52,6 +59,17 @@ class TestInferAndUpdateEmotion:
         await extractor.infer_and_update_emotion("u1", "Great news!", "Wonderful!")
         snap = soul.get_soul_snapshot()
         assert snap["emotion"]["primary"] == "joy"
+        assert "/no_think" in mock_ai.generate.await_args.kwargs["system"]
+
+    @pytest.mark.anyio
+    async def test_accepts_fenced_json(
+        self, extractor: MemoryExtractor, mock_ai: AsyncMock, soul: Soul
+    ) -> None:
+        mock_ai.generate = AsyncMock(
+            return_value='```json\n{"emotion": "joy", "intensity": 0.6}\n```'
+        )
+        await extractor.infer_and_update_emotion("u1", "Great news!", "Wonderful!")
+        assert soul.get_soul_snapshot()["emotion"]["primary"] == "joy"
 
     @pytest.mark.anyio
     async def test_high_intensity_creates_flashbulb(
@@ -109,6 +127,27 @@ class TestExtractAndStoreMemories:
         )
         results = await memory.search_semantic("u1", "Python", n_results=5)
         assert len(results) > 0
+
+    @pytest.mark.anyio
+    async def test_accepts_fenced_json(
+        self,
+        extractor: MemoryExtractor,
+        mock_ai: AsyncMock,
+        memory: MemoryStore,
+    ) -> None:
+        mock_ai.generate = AsyncMock(
+            return_value=(
+                "```json\n"
+                '{"topic":"programming","emotional_tone":"curious",'
+                '"facts":["User likes Python"],"episode_summary":""}'
+                "\n```"
+            )
+        )
+        await memory.get_or_create_user("u1", "Alice")
+        await extractor.extract_and_store_memories(
+            "u1", "Alice", "I like Python", "Cool!"
+        )
+        assert await memory.search_semantic("u1", "Python", n_results=5)
 
     @pytest.mark.anyio
     async def test_stores_episodic_summary(
@@ -228,6 +267,16 @@ class TestExtractRecallKeywords:
         )
         keywords = await extractor.extract_recall_keywords("How are you?")
         assert keywords == ["Python", "OSS", "tired"]
+        assert "/no_think" in mock_ai.generate.await_args.kwargs["system"]
+
+    @pytest.mark.anyio
+    async def test_accepts_fenced_json(
+        self, extractor: MemoryExtractor, mock_ai: AsyncMock
+    ) -> None:
+        mock_ai.generate = AsyncMock(
+            return_value='```json\n{"keywords": ["Python", "OSS"]}\n```'
+        )
+        assert await extractor.extract_recall_keywords("test") == ["Python", "OSS"]
 
     @pytest.mark.anyio
     async def test_includes_history_context(

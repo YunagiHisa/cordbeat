@@ -181,6 +181,33 @@ class TestOpenAIVision:
         assert content[0] == {"type": "text", "text": "inspect"}
         assert content[1]["type"] == "image_url"
 
+    async def test_generate_with_vision_disables_thinking_for_no_think_system(
+        self,
+    ) -> None:
+        backend = OpenAICompatBackend(
+            AIBackendConfig(
+                provider="openai_compat",
+                model="qwen",
+                options={"enable_thinking": True},
+            )
+        )
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "pass"}}]}
+
+        with patch.object(
+            backend._client, "post", new_callable=AsyncMock, return_value=mock_resp
+        ) as mock_post:
+            await backend.generate_with_vision(
+                prompt="Review",
+                images=[_make_b64(b"\xff\xd8\xff")],
+                system="/no_think\nReturn only JSON.",
+            )
+
+        body = mock_post.await_args.kwargs["json"]
+        assert body["enable_thinking"] is False
+        assert body["chat_template_kwargs"] == {"enable_thinking": False}
+
 
 # ── CoreEngine vision routing ─────────────────────────────────────────
 
@@ -297,6 +324,20 @@ class TestCoreEngineVision:
         ai.generate_with_vision.side_effect = RuntimeError(
             "model does not support vision"
         )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="u1",
+            content="What is this?",
+            images=["imgdata"],
+        )
+        await engine.handle_message(msg)
+        ai.generate_with_vision.assert_called_once()
+        ai.generate.assert_called_once()
+
+    async def test_falls_back_to_text_when_vision_returns_empty(self) -> None:
+        engine, ai = self._make_engine(vision_enabled=True)
+        ai.generate_with_vision.return_value = ""
         msg = GatewayMessage(
             type=MessageType.MESSAGE,
             adapter_id="discord",

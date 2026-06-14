@@ -23,7 +23,7 @@ import ipaddress
 import re
 import socket
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -48,6 +48,7 @@ _BLOCKED_IPS = frozenset(
 _DEFAULT_MAX_LENGTH = 8000
 _HARD_MAX_LENGTH = 64_000
 _MAX_RAW_BYTES = 2_000_000  # 2 MB ceiling on the HTTP response body
+_MAX_IMAGE_CANDIDATES = 6
 
 
 def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -136,6 +137,41 @@ def _html_to_text(html: str) -> str:
     return text.strip()
 
 
+def _extract_attr(tag: str, attr: str) -> str:
+    match = re.search(
+        rf"\b{re.escape(attr)}\s*=\s*(['\"])(.*?)\1",
+        tag,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return match.group(2).strip() if match else ""
+
+
+def _extract_image_candidates(html: str, base_url: str) -> list[dict[str, str]]:
+    """Return a bounded list of useful-looking image references."""
+
+    candidates: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for match in re.finditer(r"<img\b[^>]*>", html, flags=re.IGNORECASE | re.DOTALL):
+        tag = match.group(0)
+        src = _extract_attr(tag, "src") or _extract_attr(tag, "data-src")
+        if not src or src.startswith(("data:", "javascript:")):
+            continue
+        resolved = urljoin(base_url, src)
+        if not resolved.startswith(("http://", "https://")) or resolved in seen:
+            continue
+        alt = re.sub(r"\s+", " ", _extract_attr(tag, "alt"))[:300]
+        width = _extract_attr(tag, "width")
+        height = _extract_attr(tag, "height")
+        if width.isdigit() and height.isdigit():
+            if int(width) <= 32 and int(height) <= 32:
+                continue
+        seen.add(resolved)
+        candidates.append({"url": resolved, "alt": alt})
+        if len(candidates) >= _MAX_IMAGE_CANDIDATES:
+            break
+    return candidates
+
+
 async def execute(
     *,
     url: str,
@@ -212,7 +248,9 @@ async def execute(
     except (LookupError, UnicodeDecodeError):
         body_text = raw.decode("utf-8", errors="replace")
 
+    image_candidates: list[dict[str, str]] = []
     if "html" in content_type or body_text.lstrip().startswith("<"):
+        image_candidates = _extract_image_candidates(body_text, url)
         text = _html_to_text(body_text)
     else:
         text = body_text
@@ -229,4 +267,5 @@ async def execute(
         "text": text,
         "length": len(text),
         "truncated": truncated,
+        "images": image_candidates,
     }

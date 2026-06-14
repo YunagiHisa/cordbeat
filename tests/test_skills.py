@@ -1426,7 +1426,7 @@ class TestBuiltinSkillRegistry:
     """Test loading all built-in skills together."""
 
     def test_load_all_builtins(self, tmp_path: Path) -> None:
-        """All 8 built-in skills can be loaded at once."""
+        """All built-in skills can be loaded at once."""
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()
         for name in (
@@ -1438,12 +1438,15 @@ class TestBuiltinSkillRegistry:
             "weather",
             "file_write",
             "api_call",
+            "draw",
+            "fetch_url",
+            "inspect_image",
         ):
             _copy_builtin_skill(skills_dir, name)
 
         registry = SkillRegistry(skills_dir)
         registry.load_all()
-        assert len(registry.available_skills) == 8
+        assert len(registry.available_skills) == 11
 
     def test_enabled_builtins(self, tmp_path: Path) -> None:
         """Only safe skills and requires_confirmation skills are enabled."""
@@ -1458,6 +1461,9 @@ class TestBuiltinSkillRegistry:
             "weather",
             "file_write",
             "api_call",
+            "draw",
+            "fetch_url",
+            "inspect_image",
         ):
             _copy_builtin_skill(skills_dir, name)
 
@@ -1470,9 +1476,12 @@ class TestBuiltinSkillRegistry:
         assert "file_read" in enabled
         assert "web_search" in enabled
         assert "weather" in enabled
+        assert "fetch_url" in enabled
+        assert "inspect_image" in enabled
         # Requires_confirmation skills
         assert "file_write" in enabled
         assert "api_call" in enabled
+        assert "draw" in enabled
         # Dangerous — disabled
         assert "shell_exec" not in enabled
 
@@ -1489,6 +1498,9 @@ class TestBuiltinSkillRegistry:
             "weather",
             "file_write",
             "api_call",
+            "draw",
+            "fetch_url",
+            "inspect_image",
         ):
             _copy_builtin_skill(skills_dir, name)
 
@@ -1502,4 +1514,7 @@ class TestBuiltinSkillRegistry:
         assert "weather" in desc
         assert "file_write" in desc
         assert "api_call" in desc
+        assert "draw" in desc
+        assert "fetch_url" in desc
+        assert "inspect_image" in desc
         assert "shell_exec" not in desc

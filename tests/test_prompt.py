@@ -8,6 +8,7 @@ from cordbeat.ai.prompt import (
     build_context,
     build_react_continuation_prompt,
     build_soul_system_prompt,
+    build_tool_system_prompt,
     sanitize,
     sanitize_tool_artifacts,
 )
@@ -61,6 +62,24 @@ class TestReactContinuationPrompt:
 
         assert "This is the final tool step." in result
         assert "Do not emit any [SKILL: ...] tags." in result
+        assert "untrusted external data" in result
+
+
+class TestToolSystemPrompt:
+    def test_web_policy_tracks_available_tools(self) -> None:
+        result = build_tool_system_prompt(
+            "- web_search: Search\n- fetch_url: Fetch",
+            web_search_available=True,
+            fetch_url_available=True,
+        )
+        assert "Web research policy" in result
+        assert "Use fetch_url" in result
+        assert "Image inspection is unavailable" in result
+
+    def test_no_tools_forbids_false_claims(self) -> None:
+        result = build_tool_system_prompt("(no skills available)")
+        assert "No tools are available" in result
+        assert "Do not claim" in result
 
 
 class TestBuildSoulSystemPrompt:
@@ -280,6 +299,42 @@ class TestBuildContext:
         assert "User: Hello" in result
         assert "CordBeat: Hi!" in result
         assert "[END CONVERSATION HISTORY]" in result
+
+    def test_history_media_observation_is_separate_untrusted_context(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            history=[
+                {
+                    "role": "user",
+                    "content": "What is this?",
+                    "media_observations": [
+                        {
+                            "relation": "attached",
+                            "summary": "A line chart rising from left to right.",
+                        }
+                    ],
+                }
+            ],
+        )
+        assert "User: What is this?" in result
+        assert "Untrusted visual observation (attached)" in result
+        assert "line chart rising" in result
+
+    def test_image_only_history_keeps_media_observation(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            history=[
+                {
+                    "role": "user",
+                    "content": "",
+                    "media_observations": [
+                        {"relation": "attached", "summary": "A blue square."}
+                    ],
+                }
+            ],
+        )
+        assert "[no text; visual media only]" in result
+        assert "A blue square." in result
 
     def test_history_sanitizes_assistant_reasoning_leak(self) -> None:
         result = build_context(

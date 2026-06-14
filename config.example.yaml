@@ -115,6 +115,7 @@ memory:
   decay_rate: 0.1
   archive_threshold: 0.05
   conversation_history_limit: 20     # recent messages loaded into context
+  image_summary_enabled: true        # retain text-only visual observations in history
   memory_search_results: 3           # vector search results per query
   recalled_episode_context_limit: 4  # max deduplicated episodes injected per reply
   diary_max_tokens: 512              # max tokens for diary generation

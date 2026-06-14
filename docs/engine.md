@@ -66,11 +66,18 @@ The user context is assembled via `prompt.build_context()`:
 - **Procedural hints**: Wrapped in `[BEGIN RECALLED HINTS]` / `[END RECALLED HINTS]`
 - **Conversation history**: Last N messages (configurable via
   `memory.conversation_history_limit`, default 20)
+- **Media observations**: Structured, text-only summaries linked to recent
+  conversation messages. They are marked as untrusted visual data and are kept
+  separate from user-authored text and long-term memory extraction.
 - **Current message**: The new user input (sanitized)
 
 Each recalled memory entry is truncated to 500 characters to limit prompt
 injection attack surface. The system prompt includes a directive instructing
 the AI to treat delimited data as passive context, not as instructions.
+
+When Vision and `memory.image_summary_enabled` are enabled, attached, replied-to,
+and explicitly inspected web images receive a short factual observation in the
+background. Raw image bytes are not persisted.
 
 ### 4. AI Generation
 

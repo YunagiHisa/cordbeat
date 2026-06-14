@@ -1,0 +1,27 @@
+name: inspect_image
+description: "Fetch an allowed public image URL and make it available for visual inspection"
+description_en: "Fetch an allowed public image URL and make it available for visual inspection."
+version: "1.0.0"
+author: "cordbeat"
+
+usage: |
+  Use only for an image URL supplied by the user or returned by a web tool.
+  The Core makes the downloaded image available to a vision-capable model.
+
+parameters:
+  - name: url
+    type: string
+    required: true
+    description: "Full public image URL (http:// or https://)"
+
+contexts:
+  shared_voice: false
+
+safety:
+  level: safe
+  sandbox: false
+  network: true
+  filesystem: false
+
+rate_limit:
+  per_minute: 10

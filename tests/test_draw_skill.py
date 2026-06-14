@@ -87,6 +87,15 @@ def test_circle_fill() -> None:
     assert "output" in result
 
 
+def test_common_shapes_accept_hsl_colours() -> None:
+    result = run(
+        "SIZE 100 100\nCANVAS white\n"
+        "CIRCLE 50 50 30 hsl(210,100%,50%) FILL\nOUTPUT PNG"
+    )
+    assert "output" in result
+    assert not result.get("warnings")
+
+
 def test_rect_outline() -> None:
     result = run("SIZE 200 200\nRECT 10 10 100 80 blue\nOUTPUT PNG")
     assert "output" in result
@@ -128,6 +137,52 @@ def test_spiral() -> None:
     assert not result.get("warnings")
 
 
+def test_reversed_gradient_coordinates_render() -> None:
+    result = run("SIZE 40 40\nGRADIENT 40 40 0 0 red blue vertical\nOUTPUT PNG")
+    assert "output" in result
+
+
+def test_reversed_rect_coordinates_render() -> None:
+    result = run("SIZE 100 100\nRECT 90 90 10 10 green FILL\nOUTPUT PNG")
+    assert "output" in result
+    assert not result.get("warnings")
+
+
+def test_reversed_ellipse_and_dots_coordinates_render() -> None:
+    result = run(
+        "SIZE 100 100\n"
+        "ELLIPSE 90 80 10 20 purple FILL\n"
+        "DOTS 90 90 10 10 20 white 2\n"
+        "OUTPUT PNG"
+    )
+    assert "output" in result
+    assert not result.get("warnings")
+
+
+def test_safe_numeric_limits_are_clamped_without_warnings() -> None:
+    dsl = draw_main._DrawDSL()
+    dsl._cmd_size(["5000", "5000"])
+    assert (dsl._width, dsl._height) == (4096, 4096)
+    assert not dsl.warnings
+
+    result = run(
+        "SIZE 100 100\n"
+        "LINE 0 0 50 50 red 1000\n"
+        "BEZIER 0 0 10 10 20 20 30 30 blue -5\n"
+        "DOTS 0 0 50 50 3000 white 1000\n"
+        "OUTPUT PNG"
+    )
+    assert "output" in result
+    assert not result.get("warnings")
+
+
+def test_turtle_command_lifts_pen_before_move() -> None:
+    dsl = draw_main._DrawDSL()
+    dsl._pen_down = True
+    dsl._cmd_turtle(["10", "20"])
+    assert dsl._pen_down is False
+
+
 # ---------------------------------------------------------------------------
 # Text command
 # ---------------------------------------------------------------------------
@@ -162,10 +217,16 @@ def test_comment_lines_are_ignored() -> None:
     assert not result.get("warnings")
 
 
-def test_size_out_of_range_warns() -> None:
-    result = run("SIZE 99999 99999\nCANVAS white\nOUTPUT PNG")
-    warnings = result.get("warnings", [])
-    assert any("SIZE" in w for w in warnings)
+def test_oversized_positive_size_is_clamped_without_warning() -> None:
+    dsl = draw_main._DrawDSL()
+    dsl._cmd_size(["99999", "99999"])
+    assert (dsl._width, dsl._height) == (4096, 4096)
+    assert not dsl.warnings
+
+
+def test_non_positive_size_warns() -> None:
+    result = run("SIZE 0 -1\nCANVAS white\nOUTPUT PNG")
+    assert any("SIZE" in w for w in result.get("warnings", []))
 
 
 def test_size_missing_args_warns() -> None:

@@ -170,6 +170,20 @@ class AIBackend(ABC):
         Used by the ReAct loop for multi-turn generation.
         """
 
+    async def generate_chat_with_vision(
+        self,
+        messages: list[dict[str, Any]],
+        images: list[str],
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> str:
+        """Generate from chat history with images attached to the last user turn."""
+
+        logger.warning(
+            "Multimodal chat not supported by this backend; falling back to text-only"
+        )
+        return await self.generate_chat(messages, temperature, max_tokens)
+
     async def generate_json(
         self,
         prompt: str,
@@ -367,6 +381,20 @@ class OllamaBackend(AIBackend):
             raise
         inc_counter(LLM_GENERATE_TOTAL, {"backend": "ollama", "outcome": "ok"})
         return str(data.get("message", {}).get("content", ""))
+
+    async def generate_chat_with_vision(
+        self,
+        messages: list[dict[str, Any]],
+        images: list[str],
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> str:
+        enriched = [dict(message) for message in messages]
+        for message in reversed(enriched):
+            if message.get("role") == "user":
+                message["images"] = images
+                break
+        return await self.generate_chat(enriched, temperature, max_tokens)
 
 
 class OpenAICompatBackend(AIBackend):
@@ -826,6 +854,34 @@ class OpenAICompatBackend(AIBackend):
         except (KeyError, IndexError) as exc:
             msg = f"Unexpected response format from {self._base_url}"
             raise AIBackendError(msg) from exc
+
+    async def generate_chat_with_vision(
+        self,
+        messages: list[dict[str, Any]],
+        images: list[str],
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> str:
+        enriched = [dict(message) for message in messages]
+        for message in reversed(enriched):
+            if message.get("role") != "user":
+                continue
+            original = message.get("content", "")
+            if isinstance(original, list):
+                content = list(original)
+            else:
+                content = [{"type": "text", "text": str(original)}]
+            for b64img in images:
+                mime = _detect_image_mime(b64img)
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{b64img}"},
+                    }
+                )
+            message["content"] = content
+            break
+        return await self.generate_chat(enriched, temperature, max_tokens)
 
 
 def create_backend(config: AIBackendConfig) -> AIBackend:

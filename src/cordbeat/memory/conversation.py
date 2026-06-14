@@ -21,8 +21,8 @@ class ConversationStore:
         adapter_id: str = "",
         channel_id: str = "",
         is_dm: bool = True,
-    ) -> None:
-        await self._db.execute(
+    ) -> int:
+        cursor = await self._db.execute(
             "INSERT INTO conversation_messages "
             "(user_id, role, content, adapter_id, channel_id, is_dm, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -33,6 +33,35 @@ class ConversationStore:
                 adapter_id,
                 channel_id,
                 1 if is_dm else 0,
+                datetime.now(tz=UTC).isoformat(),
+            ),
+        )
+        await self._db.commit()
+        if cursor.lastrowid is None:
+            raise RuntimeError("conversation message insert returned no row id")
+        return int(cursor.lastrowid)
+
+    async def add_media_observation(
+        self,
+        message_id: int,
+        *,
+        summary: str,
+        relation: str,
+        mime_type: str = "",
+        content_sha256: str = "",
+        source_ref: str = "",
+    ) -> None:
+        await self._db.execute(
+            "INSERT INTO conversation_media_observations "
+            "(message_id, media_kind, relation, mime_type, content_sha256, "
+            "summary, source_ref, created_at) VALUES (?, 'image', ?, ?, ?, ?, ?, ?)",
+            (
+                message_id,
+                relation,
+                mime_type,
+                content_sha256,
+                summary,
+                source_ref,
                 datetime.now(tz=UTC).isoformat(),
             ),
         )
@@ -82,6 +111,54 @@ class ConversationStore:
         rows = await cursor.fetchall()
         return [{"role": row["role"], "content": row["content"]} for row in rows]
 
+    async def get_recent_messages_with_media(
+        self,
+        user_id: str,
+        limit: int = 20,
+        channel_id: str | None = None,
+        is_dm: bool | None = None,
+        adapter_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        conditions = ["user_id = ?"]
+        params: list[object] = [user_id]
+        if channel_id is not None and channel_id != "":
+            conditions.append("channel_id = ?")
+            params.append(channel_id)
+        if is_dm is not None:
+            conditions.append("is_dm = ?")
+            params.append(1 if is_dm else 0)
+        if adapter_id is not None and adapter_id != "":
+            conditions.append("adapter_id = ?")
+            params.append(adapter_id)
+        params.append(limit)
+        cursor = await self._db.execute(
+            "SELECT id, role, content FROM ("
+            "SELECT id, role, content, created_at FROM conversation_messages "
+            f"WHERE {' AND '.join(conditions)} ORDER BY created_at DESC LIMIT ?) "
+            "sub ORDER BY created_at ASC",
+            tuple(params),
+        )
+        rows = await cursor.fetchall()
+        messages: list[dict[str, object]] = []
+        for row in rows:
+            message_id = int(row["id"])
+            media_cursor = await self._db.execute(
+                "SELECT relation, mime_type, content_sha256, summary, source_ref "
+                "FROM conversation_media_observations WHERE message_id = ? "
+                "ORDER BY id ASC",
+                (message_id,),
+            )
+            messages.append(
+                {
+                    "role": row["role"],
+                    "content": row["content"],
+                    "media_observations": [
+                        dict(media_row) for media_row in await media_cursor.fetchall()
+                    ],
+                }
+            )
+        return messages
+
     async def get_todays_messages(
         self,
         user_id: str,
@@ -119,6 +196,13 @@ class ConversationStore:
         user_id: str,
         keep: int = 100,
     ) -> int:
+        await self._db.execute(
+            "DELETE FROM conversation_media_observations WHERE message_id IN ("
+            "SELECT id FROM conversation_messages WHERE user_id = ? "
+            "AND id NOT IN (SELECT id FROM conversation_messages "
+            "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?))",
+            (user_id, user_id, keep),
+        )
         cursor = await self._db.execute(
             "DELETE FROM conversation_messages WHERE user_id = ? "
             "AND id NOT IN ("
@@ -177,6 +261,11 @@ class ConversationStore:
 
     async def clear_conversation_history(self, user_id: str) -> int:
         """Delete all conversation messages for a user. Returns row count deleted."""
+        await self._db.execute(
+            "DELETE FROM conversation_media_observations WHERE message_id IN "
+            "(SELECT id FROM conversation_messages WHERE user_id = ?)",
+            (user_id,),
+        )
         cursor = await self._db.execute(
             "DELETE FROM conversation_messages WHERE user_id = ?",
             (user_id,),

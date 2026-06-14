@@ -10,7 +10,7 @@ import pytest
 
 from cordbeat.agent.soul import Soul
 from cordbeat.config import MemoryConfig, ReActConfig
-from cordbeat.core.engine import CoreEngine
+from cordbeat.core.engine import CoreEngine, _normalize_draw_dsl
 from cordbeat.memory import MemoryStore
 from cordbeat.models import (
     Emotion,
@@ -286,6 +286,43 @@ class TestCoreEngine:
         assert user_id is not None
         msgs = await memory.get_recent_messages(user_id)
         assert len(msgs) == 2
+
+    async def test_image_summary_is_stored_separately_from_user_text(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        mock_ai.generate_with_vision = AsyncMock(
+            side_effect=["I can see it.", "A blue square on a white background."]
+        )
+        engine = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=skills,
+            gateway=mock_gateway,
+            vision_enabled=True,
+        )
+        await engine.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="image-user",
+                content="What is this?",
+                images=["aW1hZ2U="],
+            )
+        )
+        await engine.drain()
+
+        user_id = await memory.resolve_user("test", "image-user")
+        assert user_id is not None
+        history = await memory.get_recent_messages_with_media(user_id)
+        assert history[0]["content"] == "What is this?"
+        observations = history[0]["media_observations"]
+        assert observations[0]["summary"] == "A blue square on a white background."
 
     async def test_voice_message_skips_optional_llm_memory_calls(
         self,
@@ -2437,6 +2474,27 @@ class TestSoulCommands:
 class TestAutoDraw:
     """Tests for the LLM-driven draw pipeline (_maybe_draw + _generate_draw_dsl)."""
 
+    def test_normalize_draw_dsl_reports_only_lost_dsl_commands(self) -> None:
+        result = _normalize_draw_dsl(
+            "Here is the drawing:\n"
+            "SIZE matters in this drawing.\n"
+            "```draw\n"
+            "# layered shape\n"
+            "SIZE 400 400\n"
+            "CANVAS white\n"
+            "CIRCLE 200 200\n"
+            "BAD_COMMAND 1 2 3\n"
+            "CIRCLE 200 200 80 red FILL\n"
+            "```\n"
+            "Done."
+        )
+
+        assert "CIRCLE 200 200 80 red FILL" in result.normalized_dsl
+        assert result.normalized_dsl.endswith("\nOUTPUT")
+        assert len(result.validation_issues) == 2
+        assert "CIRCLE has missing arguments" in result.validation_issues[0]
+        assert "unknown Draw command" in result.validation_issues[1]
+
     async def test_maybe_draw_no_tag(
         self,
         engine: CoreEngine,
@@ -2804,7 +2862,7 @@ class TestAutoDraw:
         fake_skills.get = lambda name: mock_skill if name == "draw" else None
         mock_ai.generate = AsyncMock(
             side_effect=[
-                "SIZE 400 400\nCANVAS white\nBAD command\nCIRCLE 200 200 80 red",
+                "SIZE 400 400\nCANVAS white\nCIRCLE 200 200 80 red",
                 "SIZE 400 400\nCANVAS white\nCIRCLE 200 200 80 red",
             ]
         )
@@ -2823,6 +2881,85 @@ class TestAutoDraw:
         assert mock_ai.generate.await_count == 2
         retry_prompt = mock_ai.generate.await_args.kwargs["prompt"]
         assert "execution warnings" in retry_prompt
+
+    async def test_maybe_draw_retries_before_execution_when_validation_loses_command(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Missing and unknown DSL commands trigger regeneration before execution."""
+        from unittest.mock import MagicMock
+
+        mock_skill = MagicMock()
+        mock_skill.execute = AsyncMock(
+            return_value={"output": "cleanimgdata", "warnings": []}
+        )
+        fake_skills = MagicMock()
+        fake_skills.get = lambda name: mock_skill if name == "draw" else None
+        mock_ai.generate = AsyncMock(
+            side_effect=[
+                (
+                    "SIZE 400 400\nCANVAS white\nCIRCLE 200 200\n"
+                    "BAD_COMMAND 1 2 3\nCIRCLE 200 200 80 red"
+                ),
+                "SIZE 400 400\nCANVAS white\nCIRCLE 200 200 80 red",
+            ]
+        )
+
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=fake_skills,
+            gateway=mock_gateway,
+        )
+        text, images = await eng._maybe_draw("Here [DRAW: a red circle]")
+
+        assert "[DRAW:" not in text
+        assert images == ["cleanimgdata"]
+        assert mock_ai.generate.await_count == 2
+        mock_skill.execute.assert_awaited_once()
+        retry_prompt = mock_ai.generate.await_args.kwargs["prompt"]
+        assert "lost required commands during validation" in retry_prompt
+        assert "missing arguments" in retry_prompt
+        assert "unknown Draw command" in retry_prompt
+
+    async def test_maybe_draw_fails_after_three_validation_failures(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Draw images with known content loss are never executed or attached."""
+        from unittest.mock import MagicMock
+
+        mock_skill = MagicMock()
+        mock_skill.execute = AsyncMock()
+        fake_skills = MagicMock()
+        fake_skills.get = lambda name: mock_skill if name == "draw" else None
+        mock_ai.generate = AsyncMock(
+            return_value=(
+                "SIZE 400 400\nCANVAS white\nCIRCLE 200 200\n"
+                "CIRCLE 200 200 80 red"
+            )
+        )
+
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=fake_skills,
+            gateway=mock_gateway,
+        )
+        text, images = await eng._maybe_draw("Here [DRAW: a red circle]")
+
+        assert "Drawing failed" in text
+        assert images == []
+        assert mock_ai.generate.await_count == 3
+        mock_skill.execute.assert_not_awaited()
 
     async def test_maybe_draw_uses_vision_review_to_retry(
         self,
@@ -2939,7 +3076,7 @@ class TestAutoDraw:
         call_kwargs = mock_ai.generate.await_args.kwargs
         assert call_kwargs["temperature"] == 0.2
         assert call_kwargs["max_tokens"] == 3000
-        assert "/no_think" in call_kwargs["system"]
+        assert "Silently plan the composition" in call_kwargs["system"]
         assert "BEZIER" in call_kwargs["system"]
         assert "REPEAT" in call_kwargs["system"]
 
@@ -2999,6 +3136,7 @@ class TestReActLoop:
         tmp_path: Path,
         react_enabled: bool = True,
         expose_trace_to_user: bool = False,
+        vision_enabled: bool = False,
     ) -> CoreEngine:
         react = ReActConfig(
             enabled=react_enabled,
@@ -3014,6 +3152,7 @@ class TestReActLoop:
             skills=skills,
             gateway=mock_gateway,
             react_config=react,
+            vision_enabled=vision_enabled,
         )
 
     async def test_no_skill_tags_passthrough(
@@ -3036,6 +3175,38 @@ class TestReActLoop:
         mock_ai.generate_chat.assert_not_awaited()
         reply = mock_gateway.send_to_adapter.call_args[0][1]
         assert "Hello there!" in reply.content
+
+    async def test_disabled_web_search_does_not_inject_web_search_policy(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        eng._skills._skills["web_search"] = Skill(
+            meta=SkillMeta(
+                name="web_search",
+                description="Search the web",
+                usage="",
+                enabled=False,
+            )
+        )
+        eng._skills._skills["timer"] = self._make_safe_skill()
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Hello",
+            )
+        )
+        system = mock_ai.generate.await_args.kwargs["system"]
+        await eng.drain()
+        assert "Web research policy" not in system
+        assert "web_search" not in system
 
     async def test_single_safe_skill_calls_generate_chat(
         self,
@@ -3196,6 +3367,95 @@ class TestReActLoop:
         assert '"error":' in continuation
         assert "Search request failed" in continuation
 
+    async def test_fetch_url_rejects_model_generated_url(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        skill = self._make_safe_skill("secret page")
+        skill.execute = AsyncMock(return_value={"output": "secret page"})  # type: ignore[method-assign]
+        eng._skills._skills["fetch_url"] = skill
+        mock_ai.generate = AsyncMock(
+            return_value="[SKILL: fetch_url | url=https://not-from-user.example/]"
+        )
+        mock_ai.generate_chat = AsyncMock(return_value="I could not fetch it.")
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Check the current facts",
+            )
+        )
+
+        skill.execute.assert_not_awaited()  # type: ignore[attr-defined]
+        continuation = mock_ai.generate_chat.await_args.args[0][-2]["content"]
+        assert "URL is not allowed" in continuation
+
+    async def test_inspect_image_uses_multimodal_react_for_user_url(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        eng = self._make_engine(
+            mock_ai,
+            soul,
+            memory,
+            mock_gateway,
+            tmp_path,
+            vision_enabled=True,
+        )
+
+        def inspect(**kwargs: object) -> dict[str, str]:
+            return {
+                "result": "attached",
+                "url": "https://example.com/chart.jpg",
+                "mime_type": "image/jpeg",
+                "image_base64": "aW1hZ2U=",
+            }
+
+        eng._skills._skills["inspect_image"] = Skill(
+            meta=SkillMeta(
+                name="inspect_image",
+                description="Inspect image",
+                usage="",
+                safety_level=SafetyLevel.SAFE,
+            ),
+            _test_callable=inspect,
+        )
+        mock_ai.generate = AsyncMock(
+            return_value=(
+                "[SKILL: inspect_image | url=https://example.com/chart.jpg]"
+            )
+        )
+        mock_ai.generate_chat_with_vision = AsyncMock(
+            return_value="The chart rises."
+        )
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Inspect https://example.com/chart.jpg",
+                metadata={"ephemeral": True},
+            )
+        )
+
+        mock_ai.generate_chat_with_vision.assert_awaited_once()
+        assert (
+            mock_ai.generate_chat_with_vision.await_args.kwargs["images"]
+            == ["aW1hZ2U="]
+        )
+
     async def test_non_safe_skill_requests_confirmation(
         self,
         mock_ai: AsyncMock,
@@ -3290,6 +3550,9 @@ class TestReActLoop:
         reply = mock_gateway.send_to_adapter.call_args[0][1]
         assert "[SKILL:" not in reply.content
         assert "Here is the result" in reply.content
+        system = mock_ai.generate.await_args.kwargs["system"]
+        assert "Tool execution is disabled" in system
+        assert "Available tools:" not in system
 
     async def test_pre_tag_text_flushed(
         self,
@@ -3450,7 +3713,7 @@ class TestReActLoop:
         await eng.handle_message(msg)
 
         fake_skills.get_skill_descriptions_for_prompt.assert_called_once_with(
-            exclude_names={"draw"}
+            exclude_names={"draw", "inspect_image"}
         )
 
     async def test_max_iterations_strips_leaked_tags(

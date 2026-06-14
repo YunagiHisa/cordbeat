@@ -77,6 +77,20 @@ keeping private-memory, filesystem, drawing, and side-effecting skills unavailab
 On startup, built-in skills missing this setting receive the bundled default; an
 explicit user-defined `true` or `false` value is never overwritten.
 
+## Web Research And Images
+
+CordBeat builds web-research guidance from the skills that are actually enabled in
+the current context. `web_search`, `fetch_url`, and `inspect_image` are never
+advertised as available when their skill or required Vision capability is disabled.
+
+`fetch_url` may return a bounded list of image URL/alt-text candidates from a page.
+It does not download every page image. When Vision is enabled, `inspect_image` can
+fetch a relevant public image and attach it to the next ReAct continuation.
+
+For data-exfiltration defense, `fetch_url` and `inspect_image` accept only URLs that
+appeared in the current user message or in a web-tool result from the same ReAct
+turn. Tool and visual results are treated as untrusted data, never instructions.
+
 ---
 
 ## Safety Levels

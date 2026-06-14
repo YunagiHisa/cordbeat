@@ -1,7 +1,7 @@
 name: draw
 description: "Draw images using a line-based DSL for shapes, text, turtle graphics, and more"
 description_en: "Draw images using a rich line-based DSL (circles, rects, text, turtle graphics, bezier, gradients, etc.)"
-version: "1.1.0"
+version: "1.2.0"
 author: "cordbeat"
 
 usage: |

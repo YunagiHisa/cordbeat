@@ -1,14 +1,13 @@
 name: web_search
-description: "Search the web by keyword and return related page titles, URLs, and snippets; use fetch_url to open a URL"
-description_en: "Search the web by keyword and return a list of related pages (title/URL/snippet). To open a specific URL, use fetch_url instead."
-version: "1.0.0"
+description: "Search the web by keyword and return related page titles, URLs, and snippets"
+description_en: "Search the web by keyword and return a list of related pages (title/URL/snippet)."
+version: "1.0.1"
 author: "cordbeat"
 
 usage: |
   Use this skill to search the web by keyword.
   It is useful for checking current information, news, and general knowledge.
-  Pass search keywords to query. To open a URL directly, use fetch_url;
-  passing a URL to web_search may return no results.
+  Pass search keywords to query; passing a URL may return no results.
 
 parameters:
   - name: query

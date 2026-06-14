@@ -72,6 +72,7 @@ class MemoryConfig:
     archive_threshold: float = 0.05
     conversation_history_limit: int = 20
     voice_conversation_history_limit: int = 6
+    image_summary_enabled: bool = True
     memory_search_results: int = 3
     recalled_episode_context_limit: int = 4
     diary_max_tokens: int = 512

@@ -135,6 +135,23 @@ async def test_strips_html_tags() -> None:
     assert "Hello world!" in result["text"]
 
 
+async def test_returns_bounded_image_candidates() -> None:
+    body = (
+        '<html><body><img src="/chart.png" alt="Quarterly chart">'
+        '<img src="data:image/png;base64,abc" alt="inline"></body></html>'
+    )
+    fake = _FakeClient(_FakeResp(body))
+    gai = _fake_getaddrinfo("93.184.216.34")
+    with (
+        patch("_fetch_url_skill_main.socket.getaddrinfo", return_value=gai),
+        patch("_fetch_url_skill_main.httpx.AsyncClient", fake),
+    ):
+        result = await fetch_url.execute(url="https://example.com/report")
+    assert result["images"] == [
+        {"url": "https://example.com/chart.png", "alt": "Quarterly chart"}
+    ]
+
+
 async def test_truncates_to_max_length() -> None:
     body = "<html><body>" + ("x" * 20000) + "</body></html>"
     fake = _FakeClient(_FakeResp(body))

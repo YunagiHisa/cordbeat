@@ -1,13 +1,13 @@
 name: fetch_url
-description: "Fetch a URL and return readable text for viewing or summarizing articles"
-description_en: "Fetch a URL and return its readable text content (for reading or summarizing articles)"
-version: "1.0.0"
+description: "Fetch a URL and return readable text plus a small list of page-image candidates"
+description_en: "Fetch a URL and return readable text plus a small list of page-image candidates."
+version: "1.1.0"
 author: "cordbeat"
 
 usage: |
-  Use this skill to open a URL supplied by the user or returned by web_search.
+  Use this skill to open an allowed URL supplied by the user or returned by a tool.
   HTML tags are removed and only readable body text is returned.
-  Do not use it for search queries; use web_search instead.
+  Do not use it for search queries.
 
 parameters:
   - name: url

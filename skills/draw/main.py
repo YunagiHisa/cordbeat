@@ -191,10 +191,10 @@ class _DrawDSL:
             self.warnings.append("SIZE requires width height")
             return
         w, h = coords
-        if w <= 0 or h <= 0 or w > 4096 or h > 4096:
+        if w <= 0 or h <= 0:
             self.warnings.append(f"SIZE values out of range: {w}×{h}")
             return
-        self._width, self._height = w, h
+        self._width, self._height = min(w, 4096), min(h, 4096)
 
     def _cmd_canvas(self, args: list[str]) -> None:
         if not args:
@@ -215,7 +215,10 @@ class _DrawDSL:
             self.warnings.append("CIRCLE requires cx cy r color [FILL]")
             return
         cx, cy, r = coords
-        colour = args[3]
+        colour = _parse_colour(args[3])
+        if r <= 0:
+            self.warnings.append("CIRCLE radius must be positive")
+            return
         fill = len(args) > 4 and args[4].upper() == "FILL"
         bbox = [cx - r, cy - r, cx + r, cy + r]
         try:
@@ -232,7 +235,9 @@ class _DrawDSL:
             self.warnings.append("RECT requires x1 y1 x2 y2 color [FILL]")
             return
         x1, y1, x2, y2 = coords
-        colour = args[4]
+        x1, x2 = sorted((x1, x2))
+        y1, y2 = sorted((y1, y2))
+        colour = _parse_colour(args[4])
         fill = len(args) > 5 and args[5].upper() == "FILL"
         try:
             if fill:
@@ -248,7 +253,9 @@ class _DrawDSL:
             self.warnings.append("ELLIPSE requires x1 y1 x2 y2 color [FILL]")
             return
         x1, y1, x2, y2 = coords
-        colour = args[4]
+        x1, x2 = sorted((x1, x2))
+        y1, y2 = sorted((y1, y2))
+        colour = _parse_colour(args[4])
         fill = len(args) > 5 and args[5].upper() == "FILL"
         try:
             if fill:
@@ -264,11 +271,11 @@ class _DrawDSL:
             self.warnings.append("LINE requires x1 y1 x2 y2 color [width]")
             return
         x1, y1, x2, y2 = coords
-        colour = args[4]
+        colour = _parse_colour(args[4])
         width = 1
         if len(args) > 5:
             try:
-                width = int(args[5])
+                width = max(1, min(100, int(args[5])))
             except ValueError:
                 pass
         try:
@@ -297,7 +304,7 @@ class _DrawDSL:
             self.warnings.append("POLYGON could not parse coordinates")
             return
         points = [(raw[i], raw[i + 1]) for i in range(0, len(raw), 2)]
-        colour = args[coord_end]
+        colour = _parse_colour(args[coord_end])
         fill = len(args) > coord_end + 1 and args[coord_end + 1].upper() == "FILL"
         try:
             if fill:
@@ -322,11 +329,11 @@ class _DrawDSL:
         if not remaining:
             self.warnings.append("TEXT requires a colour after the quoted text")
             return
-        colour = remaining[0]
+        colour = _parse_colour(remaining[0])
         font_size = 16
         if len(remaining) > 1:
             try:
-                font_size = int(remaining[1])
+                font_size = max(1, min(512, int(remaining[1])))
             except ValueError:
                 pass
         try:
@@ -393,6 +400,9 @@ class _DrawDSL:
             self.warnings.append("ARC requires cx cy r start end color [FILL]")
             return
         cx, cy, r, start, end = coords
+        if r <= 0:
+            self.warnings.append("ARC radius must be positive")
+            return
         colour = _parse_colour(args[5])
         fill = len(args) > 6 and args[6].upper() == "FILL"
         bbox = [cx - r, cy - r, cx + r, cy + r]
@@ -417,7 +427,7 @@ class _DrawDSL:
         width = 1
         if len(args) > 9:
             try:
-                width = int(args[9])
+                width = max(1, min(100, int(args[9])))
             except ValueError:
                 pass
         # Approximate cubic bezier with line segments
@@ -443,6 +453,8 @@ class _DrawDSL:
             )
             return
         x1, y1, x2, y2 = coords
+        left, right = sorted((x1, x2))
+        top, bottom = sorted((y1, y2))
         c1 = _parse_colour(args[4])
         c2 = _parse_colour(args[5])
         direction = args[6].lower() if len(args) > 6 else "horizontal"
@@ -459,21 +471,21 @@ class _DrawDSL:
         except Exception as exc:
             self.warnings.append(f"GRADIENT colour error: {exc}")
             return
-        w = abs(x2 - x1) or 1
-        h = abs(y2 - y1) or 1
-        cx_mid = (x1 + x2) / 2
-        cy_mid = (y1 + y2) / 2
-        r_max = math.dist((x1, y1), (x2, y2)) / 2
+        w = right - left or 1
+        h = bottom - top or 1
+        cx_mid = (left + right) / 2
+        cy_mid = (top + bottom) / 2
+        r_max = max(math.dist((left, top), (right, bottom)) / 2, 1.0)
         try:
-            for gy in range(int(y1), int(y2)):
-                for gx in range(int(x1), int(x2)):
+            for gy in range(int(top), int(bottom)):
+                for gx in range(int(left), int(right)):
                     if direction == "vertical":
-                        t = (gy - y1) / h
+                        t = (gy - top) / h
                     elif direction == "radial":
                         dist = math.dist((gx, gy), (cx_mid, cy_mid))
                         t = min(dist / r_max, 1.0)
                     else:  # horizontal (default)
-                        t = (gx - x1) / w
+                        t = (gx - left) / w
                     t = max(0.0, min(1.0, t))
                     r = int(r1 + (r2 - r1) * t)
                     g = int(g1 + (g2 - g1) * t)
@@ -495,11 +507,16 @@ class _DrawDSL:
             self.warnings.append("DOTS: count must be an integer")
             return
         count = min(count, 2000)  # cap to avoid DoS
+        if count < 0:
+            self.warnings.append("DOTS: count must be non-negative")
+            return
+        x1, x2 = sorted((x1, x2))
+        y1, y2 = sorted((y1, y2))
         colour = _parse_colour(args[5])
         radius = 3
         if len(args) > 6:
             try:
-                radius = int(args[6])
+                radius = max(1, min(100, int(args[6])))
             except ValueError:
                 pass
         rng = random.Random(42)  # deterministic seed for reproducibility
@@ -523,6 +540,7 @@ class _DrawDSL:
             self.warnings.append("TURTLE requires x y")
             return
         self._tx, self._ty = coords
+        self._pen_down = False
 
     def _cmd_heading(self, args: list[str]) -> None:
         """HEADING degrees — set absolute direction."""
@@ -545,7 +563,7 @@ class _DrawDSL:
             self.warnings.append("PENWIDTH requires a number")
             return
         try:
-            self._pen_width = max(1, int(args[0]))
+            self._pen_width = max(1, min(100, int(args[0])))
         except ValueError:
             self.warnings.append(f"PENWIDTH: invalid value {args[0]!r}")
 
@@ -621,7 +639,10 @@ class _DrawDSL:
             self.warnings.append("STAR requires cx cy outer inner points color [FILL]")
             return
         cx, cy, outer_r, inner_r, n_points = coords
-        colour = args[5]
+        if outer_r <= 0 or inner_r < 0 or n_points < 2 or n_points > 100:
+            self.warnings.append("STAR radii/points are out of range")
+            return
+        colour = _parse_colour(args[5])
         fill = len(args) > 6 and args[6].upper() == "FILL"
         pts: list[tuple[int, int]] = []
         for i in range(int(n_points) * 2):
@@ -643,11 +664,14 @@ class _DrawDSL:
             self.warnings.append("SPIRAL requires cx cy turns max_r color [width]")
             return
         cx, cy, turns, max_r = coords
-        colour = args[4]
+        if turns <= 0 or turns > 100 or max_r <= 0:
+            self.warnings.append("SPIRAL turns and max_r must be positive")
+            return
+        colour = _parse_colour(args[4])
         width = 1
         if len(args) > 5:
             try:
-                width = int(args[5])
+                width = max(1, min(100, int(args[5])))
             except ValueError:
                 pass
         steps = max(int(turns * 60), 4)
@@ -710,6 +734,8 @@ class _DrawDSL:
                 parts = stripped.split()
                 try:
                     count = min(int(parts[1]), 1000)
+                    if count < 0:
+                        raise ValueError
                 except (IndexError, ValueError):
                     self.warnings.append(f"REPEAT: invalid count near line {i + 1}")
                     i += 1

@@ -86,6 +86,27 @@ MIGRATIONS: list[Migration] = [
         "trim threshold. Backfilled from the current message count.",
         callable=lambda conn: _migrate_v5_total_messages(conn),
     ),
+    Migration(
+        version=6,
+        description="add structured media observations linked to conversation "
+        "messages without storing raw media binaries",
+        sql="""
+        CREATE TABLE IF NOT EXISTS conversation_media_observations (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id     INTEGER NOT NULL,
+            media_kind     TEXT NOT NULL DEFAULT 'image',
+            relation       TEXT NOT NULL DEFAULT 'attached',
+            mime_type      TEXT NOT NULL DEFAULT '',
+            content_sha256 TEXT NOT NULL DEFAULT '',
+            summary        TEXT NOT NULL,
+            source_ref     TEXT NOT NULL DEFAULT '',
+            created_at     TEXT NOT NULL,
+            FOREIGN KEY (message_id) REFERENCES conversation_messages(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_conv_media_message
+            ON conversation_media_observations (message_id);
+        """,
+    ),
 ]
 
 

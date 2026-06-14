@@ -60,6 +60,22 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 CREATE INDEX IF NOT EXISTS idx_conv_user_time
     ON conversation_messages (user_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS conversation_media_observations (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id     INTEGER NOT NULL,
+    media_kind     TEXT NOT NULL DEFAULT 'image',
+    relation       TEXT NOT NULL DEFAULT 'attached',
+    mime_type      TEXT NOT NULL DEFAULT '',
+    content_sha256 TEXT NOT NULL DEFAULT '',
+    summary        TEXT NOT NULL,
+    source_ref     TEXT NOT NULL DEFAULT '',
+    created_at     TEXT NOT NULL,
+    FOREIGN KEY (message_id) REFERENCES conversation_messages(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_conv_media_message
+    ON conversation_media_observations (message_id);
+
 CREATE INDEX IF NOT EXISTS idx_certain_user_type_time
     ON certain_records (user_id, record_type, created_at DESC);
 """

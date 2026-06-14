@@ -145,6 +145,32 @@ class TestConversationHistory:
         msgs = await memory.get_recent_messages("u1")
         assert len(msgs) == 3
 
+    async def test_media_observations_are_structured_and_trimmed(
+        self, memory: MemoryStore
+    ) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        first_id = await memory.add_message("u1", "user", "First")
+        await memory.add_media_observation(
+            first_id,
+            summary="A red chart on a white background.",
+            relation="attached",
+            mime_type="image/png",
+            content_sha256="abc",
+        )
+        await memory.add_message("u1", "assistant", "Second")
+
+        plain = await memory.get_recent_messages("u1")
+        assert "media_observations" not in plain[0]
+
+        rich = await memory.get_recent_messages_with_media("u1")
+        assert rich[0]["content"] == "First"
+        assert rich[0]["media_observations"][0]["relation"] == "attached"
+        assert "red chart" in rich[0]["media_observations"][0]["summary"]
+
+        await memory.trim_old_messages("u1", keep=1)
+        rich = await memory.get_recent_messages_with_media("u1")
+        assert len(rich) == 1
+
     async def test_filter_by_adapter_id(self, memory: MemoryStore) -> None:
         """Recent messages can be scoped to a single adapter."""
         await memory.get_or_create_user("u1", "Test")

@@ -273,13 +273,33 @@ class MemoryStore:
         adapter_id: str = "",
         channel_id: str = "",
         is_dm: bool = True,
-    ) -> None:
-        await self._conversations.add_message(
+    ) -> int:
+        message_id = await self._conversations.add_message(
             user_id, role, content, adapter_id, channel_id, is_dm
         )
         # Lifetime counter survives nightly history trimming so the
         # familiarity stage keeps growing with the relationship.
         await self._users.increment_total_messages(user_id)
+        return message_id
+
+    async def add_media_observation(
+        self,
+        message_id: int,
+        *,
+        summary: str,
+        relation: str,
+        mime_type: str = "",
+        content_sha256: str = "",
+        source_ref: str = "",
+    ) -> None:
+        await self._conversations.add_media_observation(
+            message_id,
+            summary=summary,
+            relation=relation,
+            mime_type=mime_type,
+            content_sha256=content_sha256,
+            source_ref=source_ref,
+        )
 
     async def get_lifetime_message_count(self, user_id: str) -> int:
         """Total messages ever exchanged (not reduced by trimming)."""
@@ -294,6 +314,22 @@ class MemoryStore:
         adapter_id: str | None = None,
     ) -> list[dict[str, str]]:
         return await self._conversations.get_recent_messages(
+            user_id,
+            limit,
+            channel_id=channel_id,
+            is_dm=is_dm,
+            adapter_id=adapter_id,
+        )
+
+    async def get_recent_messages_with_media(
+        self,
+        user_id: str,
+        limit: int = 20,
+        channel_id: str | None = None,
+        is_dm: bool | None = None,
+        adapter_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        return await self._conversations.get_recent_messages_with_media(
             user_id,
             limit,
             channel_id=channel_id,

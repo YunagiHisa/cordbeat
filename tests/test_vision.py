@@ -111,6 +111,22 @@ class TestOllamaVision:
         roles = [m["role"] for m in body["messages"]]
         assert "system" in roles
 
+    async def test_generate_chat_with_vision_attaches_to_last_user_turn(self) -> None:
+        backend = OllamaBackend(AIBackendConfig(provider="ollama", model="llava"))
+        with patch.object(
+            backend,
+            "generate_chat",
+            new_callable=AsyncMock,
+            return_value="seen",
+        ) as generate_chat:
+            result = await backend.generate_chat_with_vision(
+                [{"role": "user", "content": "inspect"}],
+                ["image-data"],
+            )
+        assert result == "seen"
+        messages = generate_chat.await_args.args[0]
+        assert messages[-1]["images"] == ["image-data"]
+
 
 # ── OpenAICompatBackend.generate_with_vision ─────────────────────────
 
@@ -144,6 +160,26 @@ class TestOpenAIVision:
         assert len(texts) == 1
         assert len(imgs) == 1
         assert "data:image/jpeg;base64," in imgs[0]["image_url"]["url"]
+
+    async def test_generate_chat_with_vision_builds_content_parts(self) -> None:
+        backend = OpenAICompatBackend(
+            AIBackendConfig(provider="openai_compat", model="gpt-4o")
+        )
+        jpeg_b64 = _make_b64(b"\xff\xd8\xff")
+        with patch.object(
+            backend,
+            "generate_chat",
+            new_callable=AsyncMock,
+            return_value="seen",
+        ) as generate_chat:
+            result = await backend.generate_chat_with_vision(
+                [{"role": "user", "content": "inspect"}],
+                [jpeg_b64],
+            )
+        assert result == "seen"
+        content = generate_chat.await_args.args[0][-1]["content"]
+        assert content[0] == {"type": "text", "text": "inspect"}
+        assert content[1]["type"] == "image_url"
 
 
 # ── CoreEngine vision routing ─────────────────────────────────────────

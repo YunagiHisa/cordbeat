@@ -8,7 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Availability-aware web research and visual inspection.** System guidance now
+  encourages fresh multi-source research only when the relevant skills are
+  enabled. `fetch_url` returns bounded image candidates, and the new
+  `inspect_image` skill supports on-demand multimodal ReAct inspection with
+  URL-provenance and SSRF defenses.
+- **Structured conversation media observations.** Vision-generated summaries are
+  stored separately from user-authored conversation text, without persisting raw
+  image bytes or feeding visual observations into long-term fact extraction.
+
 ### Fixed
+- **Draw DSL generation and interpreter consistency.** The generator now receives
+  concrete composition/layering guidance, while common shapes consistently parse
+  HSL colors and Turtle/gradient/shape validation matches the documented DSL.
+  Safe coordinate and numeric corrections render without warnings, while missing
+  or unknown DSL commands trigger regeneration before an incomplete image is sent.
 - **Messages sent while Core is down are no longer lost.** Adapters dropped
   user messages when the WebSocket to Core was disconnected (e.g. during a
   Core restart). Each adapter now buffers outgoing messages in a bounded

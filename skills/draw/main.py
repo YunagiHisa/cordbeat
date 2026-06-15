@@ -59,6 +59,12 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
+# Upper bound on the number of commands that may exist *after* REPEAT blocks
+# are expanded. Per-REPEAT counts and nesting depth are each capped, but their
+# product is not, so nested ``REPEAT 1000 ... END`` blocks could otherwise
+# expand to an astronomically large program and exhaust memory before drawing.
+_MAX_EXPANDED_LINES = 5000
+
 # ── Helpers ────────────────────────────────────────────────────────────
 
 
@@ -116,6 +122,44 @@ def _parse_quoted(tokens: list[str]) -> tuple[str, list[str]] | None:
     return m.group(1), remaining
 
 
+def _load_font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
+    """Load a scalable font at *size*, falling back across common faces.
+
+    ``arial.ttf`` only resolves on Windows; bundled Pillow ships
+    ``DejaVuSans.ttf`` everywhere, and ``load_default(size=...)`` keeps the
+    requested size even when no TrueType face is available (Pillow ≥ 10).
+    """
+    for name in ("arial.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:  # Pillow < 10 has no size parameter
+        return ImageFont.load_default()
+
+
+def _gradient_mask(direction: str, w: int, h: int) -> Image.Image:
+    """Build an ``L`` blend mask (0 → colour1, 255 → colour2) for a region.
+
+    The mask is generated at a small native size and stretched to ``w×h`` so
+    the blend stays smooth regardless of region size without touching every
+    pixel in Python.
+    """
+    if direction == "radial":
+        # 0 at the centre, 255 at the edges — matches colour1→colour2 outward.
+        return Image.radial_gradient("L").resize((w, h))
+    if direction == "vertical":
+        strip = Image.new("L", (1, h))
+        strip.putdata([round(255 * j / max(h - 1, 1)) for j in range(h)])
+        return strip.resize((w, h))
+    # horizontal (default): colour1 on the left, colour2 on the right.
+    strip = Image.new("L", (w, 1))
+    strip.putdata([round(255 * i / max(w - 1, 1)) for i in range(w)])
+    return strip.resize((w, h))
+
+
 # ── DSL interpreter ────────────────────────────────────────────────────
 
 
@@ -139,6 +183,9 @@ class _DrawDSL:
         self._pen_down: bool = True
         self._pen_color: str = "black"
         self._pen_width: int = 1
+        # REPEAT-expansion budget, shared across recursion (see _expand_repeats)
+        self._expand_remaining: int = _MAX_EXPANDED_LINES
+        self._expand_capped: bool = False
         # Build dispatch table from bound methods (avoids getattr at call time)
         self._dispatch: dict[str, Callable[[list[str]], None]] = {
             "SIZE": self._cmd_size,
@@ -337,11 +384,7 @@ class _DrawDSL:
             except ValueError:
                 pass
         try:
-            try:
-                font = ImageFont.truetype("arial.ttf", font_size)
-            except OSError:
-                font = ImageFont.load_default()
-            self._d.text((x, y), text, fill=colour, font=font)
+            self._d.text((x, y), text, fill=colour, font=_load_font(font_size))
         except (ValueError, TypeError) as exc:
             self.warnings.append(f"TEXT error: {exc}")
 
@@ -460,39 +503,19 @@ class _DrawDSL:
         direction = args[6].lower() if len(args) > 6 else "horizontal"
         self._ensure_canvas()
         assert self._img is not None
+        w = max(right - left, 1)
+        h = max(bottom - top, 1)
         try:
-            rgb1 = self._img.getpixel((0, 0))[:3]  # dummy to trigger conversion
-            # Use Pillow to parse colours
-            tmp = Image.new("RGB", (1, 1), c1)
-            r1, g1, b1 = tmp.getpixel((0, 0))
-            tmp = Image.new("RGB", (1, 1), c2)
-            r2, g2, b2 = tmp.getpixel((0, 0))
-            _ = rgb1  # unused but mypy happy
-        except Exception as exc:
+            mask = _gradient_mask(direction, w, h)
+            # ``composite`` smoothly blends c1 (mask=0) into c2 (mask=255),
+            # which avoids the integer banding of per-pixel interpolation and
+            # runs in C instead of a Python loop over every pixel.
+            fill1 = Image.new("RGB", (w, h), c1)
+            fill2 = Image.new("RGB", (w, h), c2)
+            region = Image.composite(fill2, fill1, mask)
+            self._img.paste(region, (left, top))
+        except (ValueError, TypeError) as exc:
             self.warnings.append(f"GRADIENT colour error: {exc}")
-            return
-        w = right - left or 1
-        h = bottom - top or 1
-        cx_mid = (left + right) / 2
-        cy_mid = (top + bottom) / 2
-        r_max = max(math.dist((left, top), (right, bottom)) / 2, 1.0)
-        try:
-            for gy in range(int(top), int(bottom)):
-                for gx in range(int(left), int(right)):
-                    if direction == "vertical":
-                        t = (gy - top) / h
-                    elif direction == "radial":
-                        dist = math.dist((gx, gy), (cx_mid, cy_mid))
-                        t = min(dist / r_max, 1.0)
-                    else:  # horizontal (default)
-                        t = (gx - left) / w
-                    t = max(0.0, min(1.0, t))
-                    r = int(r1 + (r2 - r1) * t)
-                    g = int(g1 + (g2 - g1) * t)
-                    b = int(b1 + (b2 - b1) * t)
-                    self._img.putpixel((gx, gy), (r, g, b, 255))
-        except Exception as exc:
-            self.warnings.append(f"GRADIENT render error: {exc}")
 
     def _cmd_dots(self, args: list[str]) -> None:
         """DOTS x1 y1 x2 y2 count color [radius]"""
@@ -720,7 +743,12 @@ class _DrawDSL:
     # ── REPEAT block expansion ──────────────────────────────────────
 
     def _expand_repeats(self, commands: str, _depth: int = 0) -> str:
-        """Recursively expand ``REPEAT n ... END`` blocks."""
+        """Recursively expand ``REPEAT n ... END`` blocks.
+
+        A budget shared across the recursion (``self._expand_remaining``)
+        bounds the *total* number of expanded lines, so nested ``REPEAT``
+        blocks cannot multiply into an out-of-memory program.
+        """
         if _depth > 10:
             self.warnings.append("REPEAT nesting too deep (max 10)")
             return commands
@@ -730,6 +758,15 @@ class _DrawDSL:
         while i < len(lines):
             stripped = lines[i].strip()
             upper = stripped.upper()
+            if self._expand_remaining <= 0:
+                # Past the budget: stop expanding REPEAT blocks, but keep
+                # literal commands so trailing OUTPUT/SAVE still run and the
+                # drawing produced so far is emitted instead of discarded.
+                self._note_expand_cap()
+                if not upper.startswith("REPEAT ") and upper != "END":
+                    out.append(lines[i])
+                i += 1
+                continue
             if upper.startswith("REPEAT "):
                 parts = stripped.split()
                 try:
@@ -757,12 +794,28 @@ class _DrawDSL:
                     i += 1
                 body = "\n".join(body_lines)
                 expanded_body = self._expand_repeats(body, _depth + 1)
-                for _ in range(count):
-                    out.append(expanded_body)
+                if expanded_body:
+                    body_line_count = expanded_body.count("\n") + 1
+                    for _ in range(count):
+                        if self._expand_remaining <= 0:
+                            self._note_expand_cap()
+                            break
+                        out.append(expanded_body)
+                        self._expand_remaining -= body_line_count
             else:
                 out.append(lines[i])
+                self._expand_remaining -= 1
             i += 1
         return "\n".join(out)
+
+    def _note_expand_cap(self) -> None:
+        """Warn once when REPEAT expansion hits the global command budget."""
+        if not self._expand_capped:
+            self._expand_capped = True
+            self.warnings.append(
+                f"REPEAT expansion exceeded {_MAX_EXPANDED_LINES} commands; "
+                "output truncated"
+            )
 
 
 # ── Public entry point ─────────────────────────────────────────────────

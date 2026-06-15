@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -10,6 +9,7 @@ from typing import Any
 
 from cordbeat.ai.backend import AIBackend
 from cordbeat.ai.compression import ConversationCompressor
+from cordbeat.ai.reasoning import parse_json_object
 from cordbeat.config import MemoryConfig
 from cordbeat.memory.core import MemoryStore
 from cordbeat.models import MemoryEntry, MemoryLayer, UserSummary
@@ -19,6 +19,7 @@ from .soul import Soul
 logger = logging.getLogger(__name__)
 
 _DIARY_SYSTEM_PROMPT = """\
+/no_think
 You are {name}, reviewing today's conversations to write a diary entry.
 Write a brief, reflective diary entry summarizing what happened today.
 Note key topics, emotional moments, and anything worth remembering.
@@ -245,10 +246,10 @@ class SleepPhase:
 
             raw = await self._ai.generate(
                 prompt=("Extract generalizable facts from the episodes above."),
-                system=system,
+                system="/no_think\n" + system,
                 temperature=self._memory_config.consolidation_temperature,
             )
-            data = json.loads(raw)
+            data = parse_json_object(raw)
             facts = data.get("facts", [])
             if not isinstance(facts, list):
                 return

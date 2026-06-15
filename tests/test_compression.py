@@ -46,6 +46,7 @@ async def test_compress_in_memory_above_threshold() -> None:
     # Subsequent entries are the more recent originals
     assert result[1] == history[5]
     ai.generate.assert_awaited_once()
+    assert ai.generate.await_args.kwargs["system"].startswith("/no_think\n")
 
 
 @pytest.mark.asyncio

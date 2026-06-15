@@ -10,7 +10,7 @@ import pytest
 
 from cordbeat.agent.soul import Soul
 from cordbeat.config import MemoryConfig, ReActConfig
-from cordbeat.core.engine import CoreEngine, _normalize_draw_dsl
+from cordbeat.core.engine import CoreEngine
 from cordbeat.memory import MemoryStore
 from cordbeat.models import (
     Emotion,
@@ -2475,27 +2475,6 @@ class TestSoulCommands:
 class TestAutoDraw:
     """Tests for the LLM-driven draw pipeline (_maybe_draw + _generate_draw_dsl)."""
 
-    def test_normalize_draw_dsl_reports_only_lost_dsl_commands(self) -> None:
-        result = _normalize_draw_dsl(
-            "Here is the drawing:\n"
-            "SIZE matters in this drawing.\n"
-            "```draw\n"
-            "# layered shape\n"
-            "SIZE 400 400\n"
-            "CANVAS white\n"
-            "CIRCLE 200 200\n"
-            "BAD_COMMAND 1 2 3\n"
-            "CIRCLE 200 200 80 red FILL\n"
-            "```\n"
-            "Done."
-        )
-
-        assert "CIRCLE 200 200 80 red FILL" in result.normalized_dsl
-        assert result.normalized_dsl.endswith("\nOUTPUT")
-        assert len(result.validation_issues) == 2
-        assert "CIRCLE has missing arguments" in result.validation_issues[0]
-        assert "unknown Draw command" in result.validation_issues[1]
-
     async def test_maybe_draw_no_tag(
         self,
         engine: CoreEngine,
@@ -2837,6 +2816,10 @@ class TestAutoDraw:
         assert mock_skill.execute.await_count == 2
         retry_prompt = mock_ai.generate.await_args.kwargs["prompt"]
         assert "Previous attempt failed" in retry_prompt
+        first_call, retry_call = mock_ai.generate.await_args_list
+        assert first_call.kwargs["max_tokens"] == 3000
+        assert retry_call.kwargs["max_tokens"] == 3000
+        assert "never exceed 200 total" in retry_call.kwargs["system"]
 
     async def test_maybe_draw_retries_when_draw_result_has_severe_warning(
         self,
@@ -3079,7 +3062,8 @@ class TestAutoDraw:
         assert call_kwargs["max_tokens"] == 3000
         assert "/no_think" in call_kwargs["system"]
         assert "Silently plan the composition" in call_kwargs["system"]
-        assert "never exceed 80 lines" in call_kwargs["system"]
+        assert "intermediate renderer specification" in call_kwargs["system"]
+        assert "never exceed 200 total" in call_kwargs["system"]
         assert "BEZIER" in call_kwargs["system"]
         assert "REPEAT" in call_kwargs["system"]
 
@@ -3718,6 +3702,17 @@ class TestReActLoop:
         fake_skills.get_skill_descriptions_for_prompt.assert_called_once_with(
             exclude_names={"draw", "inspect_image"}
         )
+        main_calls = [
+            call
+            for call in mock_ai.generate.await_args_list
+            if "intermediate renderer specification"
+            in str(call.kwargs.get("system", ""))
+        ]
+        assert main_calls
+        draw_guidance = str(main_calls[0].kwargs["system"])
+        assert "not an image-generation prompt" in draw_guidance
+        assert "subject=<main subject>" in draw_guidance
+        assert "mood" in draw_guidance
 
     async def test_max_iterations_strips_leaked_tags(
         self,

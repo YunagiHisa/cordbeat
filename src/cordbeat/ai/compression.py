@@ -14,6 +14,7 @@ DEFAULT_COMPRESS_TEMPERATURE = 0.3
 DEFAULT_COMPRESS_MAX_TOKENS = 256
 
 _COMPRESS_SYSTEM_PROMPT = """\
+/no_think
 You are summarizing an older portion of a conversation between a user and an
 AI assistant. Create a concise summary that preserves the key information:
 topics discussed, decisions made, user preferences or facts mentioned, and the

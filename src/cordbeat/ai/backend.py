@@ -595,7 +595,7 @@ class OpenAICompatBackend(AIBackend):
             len(effective_system),
             len(prompt),
             is_voice_context(),
-            effective_thinking,
+            payload_thinking,
         )
         labels = {"backend": "openai_compat", "model": self._model}
         try:

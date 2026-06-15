@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from cordbeat.agent.soul import Soul
-from cordbeat.ai.extraction import MemoryExtractor, _parse_json_object
+from cordbeat.ai.extraction import MemoryExtractor
+from cordbeat.ai.reasoning import parse_json_object
 from cordbeat.config import MemoryConfig
 from cordbeat.memory import MemoryStore
 
@@ -42,7 +43,7 @@ def extractor(mock_ai: AsyncMock, soul: Soul, memory: MemoryStore) -> MemoryExtr
 
 
 def test_parse_json_object_accepts_fenced_model_output() -> None:
-    result = _parse_json_object(
+    result = parse_json_object(
         'Here is the result:\n```json\n{"keywords": ["CordBeat"]}\n```'
     )
     assert result == {"keywords": ["CordBeat"]}

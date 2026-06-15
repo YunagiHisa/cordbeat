@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import re
+from typing import Any
 
 _DEFAULT_REASONING_STRIP_TAGS = ("think",)
 _REASONING_LEAK_RE = re.compile(
@@ -72,3 +74,20 @@ def sanitize_reasoning_artifacts(raw: str) -> str:
         if candidate and not looks_like_reasoning_text(candidate):
             return candidate
     return ""
+
+
+def parse_json_object(raw: str) -> dict[str, Any]:
+    """Parse the first JSON object from plain, fenced, or explanatory output."""
+
+    cleaned = sanitize_reasoning_artifacts(raw).strip()
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(cleaned):
+        if char != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(cleaned[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    raise json.JSONDecodeError("No JSON object found", cleaned, 0)

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any
 
 from cordbeat.agent.soul import Soul
 from cordbeat.config import MemoryConfig
@@ -13,25 +12,9 @@ from cordbeat.memory.core import MemoryStore
 from cordbeat.models import Emotion, MemoryEntry, MemoryLayer, SoulCaller
 
 from .backend import AIBackend
-from .reasoning import sanitize_reasoning_artifacts
+from .reasoning import parse_json_object
 
 logger = logging.getLogger(__name__)
-
-def _parse_json_object(raw: str) -> dict[str, Any]:
-    """Parse a JSON object from plain or fenced model output."""
-
-    cleaned = sanitize_reasoning_artifacts(raw).strip()
-    decoder = json.JSONDecoder()
-    for index, char in enumerate(cleaned):
-        if char != "{":
-            continue
-        try:
-            value, _ = decoder.raw_decode(cleaned[index:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            return value
-    raise json.JSONDecodeError("No JSON object found", cleaned, 0)
 
 _RECALL_KEYWORD_PROMPT = """\
 Based on the recent conversation context below, extract exactly 3 short \
@@ -127,7 +110,7 @@ class MemoryExtractor:
                 system="/no_think\nRespond in valid JSON only.",
                 temperature=self._memory_config.extraction_temperature,
             )
-            data = _parse_json_object(raw)
+            data = parse_json_object(raw)
             keywords = data.get("keywords", [])
             if isinstance(keywords, list):
                 return [
@@ -158,7 +141,7 @@ class MemoryExtractor:
                 prompt=prompt,
                 system="/no_think\nRespond in valid JSON only.",
             )
-            data = _parse_json_object(raw)
+            data = parse_json_object(raw)
             emotion = Emotion(data["emotion"])
             intensity = float(data["intensity"])
             self._soul.update_emotion(emotion, intensity, caller=SoulCaller.AI)
@@ -203,7 +186,7 @@ class MemoryExtractor:
                 system="/no_think\nRespond in valid JSON only.",
                 temperature=self._memory_config.extraction_temperature,
             )
-            data = _parse_json_object(raw)
+            data = parse_json_object(raw)
         except Exception as exc:
             # Memories silently not being stored breaks relationship growth;
             # make extraction failures visible to operators.

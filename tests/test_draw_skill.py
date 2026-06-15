@@ -176,6 +176,31 @@ def test_safe_numeric_limits_are_clamped_without_warnings() -> None:
     assert not result.get("warnings")
 
 
+def test_nested_repeat_expansion_is_bounded() -> None:
+    """Nested REPEAT must not expand into an out-of-memory program."""
+    # Without a global budget this expands to 1000 * 1000 = 1,000,000 circles.
+    result = run(
+        "SIZE 50 50\n"
+        "REPEAT 1000\n"
+        "REPEAT 1000\n"
+        "CIRCLE 25 25 5 red\n"
+        "END\n"
+        "END\n"
+        "OUTPUT PNG"
+    )
+    assert "output" in result
+    assert any("REPEAT expansion exceeded" in w for w in result.get("warnings", []))
+
+
+def test_modest_repeat_still_expands_without_warning() -> None:
+    """A reasonable REPEAT count must render fully and not trip the cap."""
+    result = run(
+        "SIZE 200 200\nREPEAT 12\nCIRCLE 100 100 40 blue\nEND\nOUTPUT PNG"
+    )
+    assert "output" in result
+    assert not any("REPEAT expansion exceeded" in w for w in result.get("warnings", []))
+
+
 def test_turtle_command_lifts_pen_before_move() -> None:
     dsl = draw_main._DrawDSL()
     dsl._pen_down = True

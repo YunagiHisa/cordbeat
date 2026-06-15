@@ -10,7 +10,6 @@ import logging
 import re
 import uuid
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -38,65 +37,20 @@ from cordbeat.models import (
     SoulCaller,
     UserSummary,
 )
+from cordbeat.skills.draw_dsl import (
+    DRAW_TAG_RE,
+    MAX_AUTO_ATTEMPTS,
+    build_capability_prompt,
+    build_generation_request,
+)
+from cordbeat.skills.draw_dsl import (
+    normalize as normalize_draw_dsl,
+)
 from cordbeat.skills.registry import SkillRegistry
 
 from .gateway import GatewayServer
 
 logger = logging.getLogger(__name__)
-
-# Pattern for inline draw-intent tags the AI may emit in chat responses.
-# Examples: [DRAW: a red circle], [A DRAW: a red circle]
-_DRAW_TAG_RE = re.compile(
-    r"\[(?:A\s+)?DRAW:\s*(.+?)\]",
-    re.DOTALL | re.IGNORECASE,
-)
-
-_DRAW_SAFE_OPCODES = frozenset(
-    {
-        "SIZE",
-        "CANVAS",
-        "CIRCLE",
-        "RECT",
-        "ELLIPSE",
-        "LINE",
-        "POLYGON",
-        "TEXT",
-        "STAR",
-        "SPIRAL",
-        "ARC",
-        "BEZIER",
-        "GRADIENT",
-        "DOTS",
-        "TURTLE",
-        "HEADING",
-        "PENCOLOR",
-        "PENWIDTH",
-        "PENUP",
-        "PENDOWN",
-        "FORWARD",
-        "BACKWARD",
-        "RIGHT",
-        "LEFT",
-        "REPEAT",
-        "END",
-        "OUTPUT",
-    }
-)
-_DRAW_CONTENT_OPCODES = _DRAW_SAFE_OPCODES - {
-    "SIZE",
-    "CANVAS",
-    "HEADING",
-    "PENCOLOR",
-    "PENWIDTH",
-    "PENUP",
-    "PENDOWN",
-    "REPEAT",
-    "END",
-    "OUTPUT",
-}
-_DRAW_MAX_AUTO_LINES = 120
-_DRAW_MAX_AUTO_ATTEMPTS = 3
-_DRAW_DSL_LIKE_LINE_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,}:?(?:\s|$)")
 
 # Pattern for inline skill-invocation tags.
 # Example: [SKILL: web_search | query=latest AI news]
@@ -254,140 +208,6 @@ def _format_react_params(params: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
-def _draw_line_has_minimum_args(opcode: str, line: str) -> bool:
-    """Return True when a DSL line has enough tokens to be plausibly usable."""
-
-    token_count = len(line.split())
-    minimums = {
-        "SIZE": 3,
-        "CANVAS": 2,
-        "CIRCLE": 5,
-        "RECT": 6,
-        "ELLIPSE": 6,
-        "LINE": 6,
-        "POLYGON": 7,
-        "TEXT": 5,
-        "STAR": 7,
-        "SPIRAL": 6,
-        "ARC": 7,
-        "BEZIER": 10,
-        "GRADIENT": 7,
-        "DOTS": 7,
-        "TURTLE": 3,
-        "HEADING": 2,
-        "PENCOLOR": 2,
-        "PENWIDTH": 2,
-        "PENUP": 1,
-        "PENDOWN": 1,
-        "FORWARD": 2,
-        "BACKWARD": 2,
-        "RIGHT": 2,
-        "LEFT": 2,
-        "REPEAT": 2,
-        "END": 1,
-        "OUTPUT": 1,
-    }
-    return token_count >= minimums.get(opcode, 1)
-
-
-def _draw_known_line_is_dsl_like(opcode: str, parts: list[str]) -> bool:
-    """Distinguish malformed numeric DSL commands from ordinary prose."""
-
-    numeric_first_arg = _DRAW_SAFE_OPCODES - {
-        "CANVAS",
-        "PENCOLOR",
-        "PENUP",
-        "PENDOWN",
-        "END",
-        "OUTPUT",
-    }
-    if opcode not in numeric_first_arg or len(parts) < 2:
-        return True
-    first_arg = parts[1].split(maxsplit=1)[0]
-    try:
-        float(first_arg)
-    except ValueError:
-        return False
-    return True
-
-
-@dataclass(frozen=True)
-class _NormalizedDrawDSL:
-    """Safe Draw DSL plus issues that would cause visible content loss."""
-
-    normalized_dsl: str
-    validation_issues: tuple[str, ...] = ()
-
-
-def _draw_validation_issue(lineno: int, reason: str, line: str) -> str:
-    safe_line = sanitize(line, strict=True, max_len=100)
-    return f"line {lineno} {reason}: {safe_line}"
-
-
-def _normalize_draw_dsl(raw_dsl: str) -> _NormalizedDrawDSL:
-    """Keep safe Draw DSL lines and report commands that could not be preserved."""
-
-    normalized: list[str] = []
-    validation_issues: list[str] = []
-    has_size = False
-    has_canvas = False
-    has_content = False
-
-    for lineno, raw_line in enumerate(raw_dsl.splitlines(), start=1):
-        line = raw_line.strip()
-        if not line or line.startswith(("```", "#")):
-            continue
-        parts = line.split(maxsplit=1)
-        opcode = parts[0].upper().rstrip(":")
-        if opcode not in _DRAW_SAFE_OPCODES:
-            if _DRAW_DSL_LIKE_LINE_RE.match(line):
-                validation_issues.append(
-                    _draw_validation_issue(lineno, "uses unknown Draw command", line)
-                )
-            continue
-        if not _draw_known_line_is_dsl_like(opcode, parts):
-            continue
-        normalized_line = f"{opcode} {parts[1]}".strip() if len(parts) > 1 else opcode
-        if not _draw_line_has_minimum_args(opcode, normalized_line):
-            validation_issues.append(
-                _draw_validation_issue(lineno, f"{opcode} has missing arguments", line)
-            )
-            continue
-        if opcode == "OUTPUT":
-            continue
-        if opcode == "SIZE":
-            if has_size:
-                continue
-            has_size = True
-        elif opcode == "CANVAS":
-            if has_canvas:
-                continue
-            has_canvas = True
-        elif opcode == "GRADIENT":
-            has_canvas = True
-        if opcode in _DRAW_CONTENT_OPCODES:
-            has_content = True
-        normalized.append(normalized_line)
-        if len(normalized) >= _DRAW_MAX_AUTO_LINES:
-            validation_issues.append(
-                f"Draw DSL exceeds the {_DRAW_MAX_AUTO_LINES}-command limit"
-            )
-            break
-
-    if not has_content:
-        return _NormalizedDrawDSL("", tuple(validation_issues))
-
-    if not has_size:
-        normalized.insert(0, "SIZE 800 600")
-    if not has_canvas:
-        canvas_index = (
-            1 if normalized and normalized[0].upper().startswith("SIZE") else 0
-        )
-        normalized.insert(canvas_index, "CANVAS #f8fafc")
-    normalized.append("OUTPUT")
-    return _NormalizedDrawDSL("\n".join(normalized), tuple(validation_issues))
-
-
 class CoreEngine:
     """Processes messages from the global queue and generates AI responses."""
 
@@ -476,7 +296,7 @@ class CoreEngine:
             )
 
             if message.metadata.get("shared_voice"):
-                clean_response = _DRAW_TAG_RE.sub("", response).strip()
+                clean_response = DRAW_TAG_RE.sub("", response).strip()
                 if not clean_response:
                     clean_response = (
                         "That action is unavailable in a shared voice channel. "
@@ -673,29 +493,7 @@ class CoreEngine:
             and draw_skill is not None
             and getattr(getattr(draw_skill, "meta", None), "enabled", True)
         ):
-            system_prompt += (
-                "\n\nYou can create procedural illustrations for the user"
-                " through CordBeat's Draw DSL renderer. Draw is not a diffusion"
-                " image generator: describe the intended visible composition,"
-                " subjects, pose, colors, and mood rather than writing an"
-                " image-generation prompt with quality tags. Represent any"
-                " requested content through a suitable stylized composition of"
-                " primitives and curves. For a difficult request, preserve its"
-                " essential visual relationships while simplifying only what"
-                " the renderer cannot express. Do not refuse merely because the"
-                " subject is complex. When the user asks for a drawing, include"
-                " exactly one concise [DRAW: <visible composition and"
-                " relationships in English>] tag."
-                " The tag will be converted to Draw DSL, rendered, and sent"
-                " with your reply."
-                " No image exists unless this reply contains the tag: if you"
-                " say you will draw, are drawing, or have drawn something,"
-                " the SAME reply MUST contain the [DRAW: ...] tag. Never claim"
-                " a drawing is attached, finished, or on its way without the"
-                " tag in this reply."
-                " Do not call the draw skill directly with [SKILL: draw];"
-                " use the [DRAW: ...] tag instead."
-            )
+            system_prompt += build_capability_prompt()
 
         # Inject an availability-aware skill catalog and research policy.
         skills_desc = ""
@@ -1531,11 +1329,11 @@ class CoreEngine:
         ):
             return response, []
 
-        matches = _DRAW_TAG_RE.findall(response)
+        matches = DRAW_TAG_RE.findall(response)
         if not matches:
             return response, []
 
-        clean_text = _DRAW_TAG_RE.sub("", response).strip()
+        clean_text = DRAW_TAG_RE.sub("", response).strip()
         description = matches[0].strip()
 
         if not description:
@@ -1544,12 +1342,12 @@ class CoreEngine:
         skill = draw_skill
 
         retry_reason: str | None = None
-        for attempt in range(_DRAW_MAX_AUTO_ATTEMPTS):
+        for attempt in range(MAX_AUTO_ATTEMPTS):
             raw_dsl = await self._generate_draw_dsl(
                 description,
                 retry_reason=retry_reason,
             )
-            normalized = _normalize_draw_dsl(raw_dsl)
+            normalized = normalize_draw_dsl(raw_dsl)
             dsl = normalized.normalized_dsl
             source = f"llm_attempt_{attempt + 1}"
             if normalized.validation_issues:
@@ -1580,6 +1378,15 @@ class CoreEngine:
                     len(raw_dsl),
                 )
                 continue
+            if normalized.truncated:
+                # Render the capped commands rather than discarding a usable
+                # drawing; only the overflow tail is lost.
+                logger.info(
+                    "Auto-draw DSL truncated to the command cap; rendering "
+                    "anyway (source=%s, description=%r)",
+                    source,
+                    description,
+                )
 
             output, result = await self._execute_auto_draw(
                 skill,
@@ -1609,7 +1416,7 @@ class CoreEngine:
 
         logger.warning(
             "Auto-draw failed after %d attempts (description=%r, final_reason=%s)",
-            _DRAW_MAX_AUTO_ATTEMPTS,
+            MAX_AUTO_ATTEMPTS,
             description,
             sanitize(retry_reason or "unknown failure", strict=True, max_len=500),
         )
@@ -1747,75 +1554,10 @@ class CoreEngine:
 
         Returns an empty string on failure so callers can skip gracefully.
         """
-        safe_desc = sanitize(description, max_len=2000)
-        retry_line = ""
-        if retry_reason:
-            retry_line = (
-                "\nPrevious attempt failed: "
-                f"{sanitize(retry_reason, strict=True, max_len=500)}"
-                "\nProduce a complete alternative Draw DSL for the same request."
-            )
-        system = (
-            "/no_think\n"
-            "You are a drawing DSL generator. "
-            "Given a description, output ONLY valid Draw DSL"
-            " commands — no prose, no markdown fences.\n"
-            "Silently plan the composition before emitting commands. Use an "
-            "800x600 canvas unless another aspect ratio is clearly better. "
-            "Place the main subject in a large focal region, then layer filled "
-            "silhouettes, interior shapes, outlines, and small identifying "
-            "details from back to front. Keep important shapes inside the canvas. "
-            "Use contrast between subject and background. Stylize difficult "
-            "subjects into recognizable geometric forms instead of refusing. "
-            "Prefer 20-60 meaningful lines; never exceed 80 lines. Reserve "
-            "the final line for OUTPUT and finish the composition before it. "
-            "Never use SAVE. Always end with OUTPUT as the final line.\n"
-            "Available commands (one per line):\n"
-            "  SIZE <width> <height>\n"
-            "  CANVAS <color>\n"
-            "  CIRCLE <cx> <cy> <radius> <color> [FILL]\n"
-            "  RECT <x1> <y1> <x2> <y2> <color> [FILL]\n"
-            "  ELLIPSE <x1> <y1> <x2> <y2> <color> [FILL]\n"
-            "  LINE <x1> <y1> <x2> <y2> <color> [width]\n"
-            "  POLYGON <x1> <y1> <x2> <y2> ... <color> [FILL]\n"
-            '  TEXT <x> <y> "<text>" <color> [size]\n'
-            "  STAR <cx> <cy> <outer_r> <inner_r> <points> <color> [FILL]\n"
-            "  SPIRAL <cx> <cy> <turns> <max_radius> <color> [width]\n"
-            "  ARC <cx> <cy> <radius> <start_deg> <end_deg> <color> [FILL]\n"
-            "  BEZIER <x1> <y1> <cx1> <cy1> <cx2> <cy2> <x2> <y2> <color>"
-            " [width]\n"
-            "  GRADIENT <x1> <y1> <x2> <y2> <color1> <color2>"
-            " [horizontal|vertical|radial]\n"
-            "  DOTS <x1> <y1> <x2> <y2> <count> <color> [radius]\n"
-            "  TURTLE <x> <y>\n"
-            "  HEADING <degrees>\n"
-            "  PENCOLOR <color>\n"
-            "  PENWIDTH <width>\n"
-            "  PENUP | PENDOWN\n"
-            "  FORWARD <distance> | BACKWARD <distance>\n"
-            "  RIGHT <degrees> | LEFT <degrees>\n"
-            "  REPEAT <count> ... END\n"
-            "  OUTPUT [PNG]\n"
-            "Colors: named colors (white, red, blue, ...) or #RRGGBB."
-            " Curves, gradients, repeated details, and turtle paths are welcome."
-            " Always end with OUTPUT.\n"
-            "Composition patterns:\n"
-            "- Character/animal: large head/body silhouettes first, then limbs, "
-            "face, markings, and a simple ground/background.\n"
-            "- Landscape: background gradient, distant silhouettes, foreground "
-            "subject, then highlights and texture.\n"
-            "- Icon/diagram: strong central geometry, consistent line widths, "
-            "minimal labels.\n"
-            "Example of valid layering:\n"
-            "SIZE 800 600\n"
-            "GRADIENT 0 0 800 600 #102040 #6aaed6 vertical\n"
-            "ELLIPSE 220 170 580 520 #263238 FILL\n"
-            "CIRCLE 330 290 18 white FILL\n"
-            "CIRCLE 470 290 18 white FILL\n"
-            "ARC 330 300 140 20 160 #f5c16c\n"
-            "OUTPUT"
+        system, prompt = build_generation_request(
+            description,
+            retry_reason=retry_reason,
         )
-        prompt = f"Draw this: {safe_desc}{retry_line}"
         try:
             raw = await self._ai.generate(
                 prompt=prompt,
@@ -1825,7 +1567,10 @@ class CoreEngine:
             )
             return raw.strip()
         except Exception:
-            logger.exception("DSL generation failed for description=%r", safe_desc)
+            logger.exception(
+                "DSL generation failed for description=%r",
+                sanitize(description, max_len=2000),
+            )
             return ""
 
     async def _handle_link_request(self, message: GatewayMessage) -> None:

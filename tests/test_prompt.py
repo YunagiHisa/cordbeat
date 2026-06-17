@@ -74,6 +74,12 @@ class TestToolSystemPrompt:
         )
         assert "Web research policy" in result
         assert "Use fetch_url" in result
+        assert "exact URL" in result
+        assert "unless the user explicitly asks" in result
+        assert "user-supplied nested URL wrapper" in result
+        assert "r.jina.ai" not in result
+        assert "[SKILL: web_search | query=latest AI news]" in result
+        assert "[SKILL: fetch_url | url=https://example.com/article]" in result
         assert "Image inspection is unavailable" in result
 
     def test_no_tools_forbids_false_claims(self) -> None:

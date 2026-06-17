@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from cordbeat.agent.react_types import MediaArtifact, ToolCallResult, ToolTrace
 from cordbeat.agent.soul import Soul
@@ -111,6 +112,74 @@ def _extract_http_urls(value: Any) -> set[str]:
         for item in value:
             urls.update(_extract_http_urls(item))
     return urls
+
+
+def _split_nested_http_url(url: str) -> tuple[str, str] | None:
+    """Split a nested URL like https://reader/https://example.com."""
+
+    parsed = urlsplit(url)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return None
+
+    lower = url.lower()
+    candidates = [
+        pos
+        for needle in ("http://", "https://")
+        if (pos := lower.find(needle, len(parsed.scheme) + 3)) != -1
+    ]
+    if not candidates:
+        return None
+    inner_start = min(candidates)
+    prefix = url[:inner_start]
+    inner_url = url[inner_start:]
+    inner = urlsplit(inner_url)
+    if inner.scheme.lower() in {"http", "https"} and inner.netloc:
+        return prefix, inner_url
+    return None
+
+
+def _extract_user_nested_url_prefixes(value: Any) -> set[str]:
+    """Extract user-authorized wrapper prefixes for nested URL fetches."""
+
+    prefixes: set[str] = set()
+    if isinstance(value, str):
+        for match in _HTTP_URL_RE.finditer(value):
+            url = match.group(0).rstrip(".,;:!?")
+            nested = _split_nested_http_url(url)
+            if nested is not None:
+                prefixes.add(nested[0])
+                continue
+            parsed = urlsplit(url)
+            if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+                continue
+            if not parsed.path and not parsed.query and not parsed.fragment:
+                prefixes.add(f"{url}/")
+            if url.endswith(("/", "=")):
+                prefixes.add(url)
+    elif isinstance(value, dict):
+        for item in value.values():
+            prefixes.update(_extract_user_nested_url_prefixes(item))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            prefixes.update(_extract_user_nested_url_prefixes(item))
+    return prefixes
+
+
+def _is_allowed_web_url(
+    requested_url: str,
+    allowed_web_urls: set[str],
+    *,
+    user_nested_url_prefixes: set[str],
+) -> bool:
+    """Return True when a web URL is explicitly allowed for ReAct tools."""
+
+    if requested_url in allowed_web_urls:
+        return True
+    nested = _split_nested_http_url(requested_url)
+    if nested is None:
+        return False
+    prefix, inner_url = nested
+    return prefix in user_nested_url_prefixes and inner_url in allowed_web_urls
 
 
 def _extract_media_artifacts(
@@ -910,6 +979,7 @@ class CoreEngine:
         trace = ToolTrace()
         collected_media: list[MediaArtifact] = []
         allowed_web_urls = _extract_http_urls(message.content)
+        user_nested_url_prefixes = _extract_user_nested_url_prefixes(message.content)
         shared_voice = bool(message.metadata.get("shared_voice"))
 
         for iteration in range(self._react_config.max_iterations):
@@ -970,7 +1040,15 @@ class CoreEngine:
 
                 if skill_name in {"fetch_url", "inspect_image"}:
                     requested_url = str(params.get("url") or "").strip()
-                    if requested_url not in allowed_web_urls:
+                    if not _is_allowed_web_url(
+                        requested_url,
+                        allowed_web_urls,
+                        user_nested_url_prefixes=(
+                            user_nested_url_prefixes
+                            if skill_name == "fetch_url"
+                            else set()
+                        ),
+                    ):
                         results.append(
                             ToolCallResult(
                                 skill_name=skill_name,

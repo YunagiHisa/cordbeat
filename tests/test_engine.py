@@ -3384,6 +3384,233 @@ class TestReActLoop:
         continuation = mock_ai.generate_chat.await_args.args[0][-2]["content"]
         assert "URL is not allowed" in continuation
 
+    async def test_fetch_url_allows_exact_user_supplied_jina_reader_url(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        skill = self._make_safe_skill("reader page")
+        skill.execute = AsyncMock(  # type: ignore[method-assign]
+            return_value={"text": "reader page"}
+        )
+        eng._skills._skills["fetch_url"] = skill
+        url = "https://r.jina.ai/https://google.com"
+        mock_ai.generate = AsyncMock(
+            return_value=f"[SKILL: fetch_url | url={url}]"
+        )
+        mock_ai.generate_chat = AsyncMock(return_value="Fetched.")
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content=f"Read this {url}",
+            )
+        )
+
+        skill.execute.assert_awaited_once()  # type: ignore[attr-defined]
+        assert skill.execute.await_args.args[0]["url"] == url
+
+    async def test_fetch_url_allows_user_requested_jina_reader_for_search_result(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        source_url = "https://google.com"
+        reader_url = f"https://r.jina.ai/{source_url}"
+
+        search_skill = Skill(
+            meta=SkillMeta(
+                name="web_search",
+                description="Search",
+                usage="",
+                safety_level=SafetyLevel.SAFE,
+            ),
+            _test_callable=AsyncMock(
+                return_value={
+                    "results": [{"title": "Google", "url": source_url}],
+                }
+            ),
+        )
+        fetch_skill = self._make_safe_skill("reader page")
+        fetch_skill.execute = AsyncMock(  # type: ignore[method-assign]
+            return_value={"text": "reader page"}
+        )
+        eng._skills._skills["web_search"] = search_skill
+        eng._skills._skills["fetch_url"] = fetch_skill
+        mock_ai.generate = AsyncMock(
+            return_value="[SKILL: web_search | query=Google]"
+        )
+        mock_ai.generate_chat = AsyncMock(
+            side_effect=[
+                f"[SKILL: fetch_url | url={reader_url}]",
+                "Fetched through the reader.",
+            ]
+        )
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Search Google, then fetch it via https://r.jina.ai/",
+            )
+        )
+
+        fetch_skill.execute.assert_awaited_once()  # type: ignore[attr-defined]
+        assert fetch_skill.execute.await_args.args[0]["url"] == reader_url
+
+    async def test_fetch_url_allows_user_requested_generic_nested_url_prefix(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        source_url = "https://example.com/report"
+        reader_prefix = "https://reader.example/?url="
+        reader_url = f"{reader_prefix}{source_url}"
+
+        search_skill = Skill(
+            meta=SkillMeta(
+                name="web_search",
+                description="Search",
+                usage="",
+                safety_level=SafetyLevel.SAFE,
+            ),
+            _test_callable=AsyncMock(
+                return_value={
+                    "results": [{"title": "Report", "url": source_url}],
+                }
+            ),
+        )
+        fetch_skill = self._make_safe_skill("reader page")
+        fetch_skill.execute = AsyncMock(  # type: ignore[method-assign]
+            return_value={"text": "reader page"}
+        )
+        eng._skills._skills["web_search"] = search_skill
+        eng._skills._skills["fetch_url"] = fetch_skill
+        mock_ai.generate = AsyncMock(
+            return_value="[SKILL: web_search | query=report]"
+        )
+        mock_ai.generate_chat = AsyncMock(
+            side_effect=[
+                f"[SKILL: fetch_url | url={reader_url}]",
+                "Fetched through the generic reader.",
+            ]
+        )
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content=f"Search the report, then fetch it via {reader_prefix}",
+            )
+        )
+
+        fetch_skill.execute.assert_awaited_once()  # type: ignore[attr-defined]
+        assert fetch_skill.execute.await_args.args[0]["url"] == reader_url
+
+    async def test_fetch_url_rejects_model_wrapped_jina_reader_url(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        skill = self._make_safe_skill("reader page")
+        skill.execute = AsyncMock(return_value={"text": "reader page"})  # type: ignore[method-assign]
+        eng._skills._skills["fetch_url"] = skill
+        mock_ai.generate = AsyncMock(
+            return_value=(
+                "[SKILL: fetch_url | "
+                "url=https://r.jina.ai/https://example.com/article]"
+            )
+        )
+        mock_ai.generate_chat = AsyncMock(return_value="I could not fetch it.")
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Read https://example.com/article",
+            )
+        )
+
+        skill.execute.assert_not_awaited()  # type: ignore[attr-defined]
+        continuation = mock_ai.generate_chat.await_args.args[0][-2]["content"]
+        assert "URL is not allowed" in continuation
+
+    async def test_fetch_url_rejects_nested_prefix_from_ordinary_page_url(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        source_url = "https://example.com/report"
+
+        search_skill = Skill(
+            meta=SkillMeta(
+                name="web_search",
+                description="Search",
+                usage="",
+                safety_level=SafetyLevel.SAFE,
+            ),
+            _test_callable=AsyncMock(
+                return_value={
+                    "results": [{"title": "Report", "url": source_url}],
+                }
+            ),
+        )
+        fetch_skill = self._make_safe_skill("reader page")
+        fetch_skill.execute = AsyncMock(  # type: ignore[method-assign]
+            return_value={"text": "reader page"}
+        )
+        eng._skills._skills["web_search"] = search_skill
+        eng._skills._skills["fetch_url"] = fetch_skill
+        mock_ai.generate = AsyncMock(
+            return_value="[SKILL: web_search | query=report]"
+        )
+        mock_ai.generate_chat = AsyncMock(
+            side_effect=[
+                f"[SKILL: fetch_url | url=https://ordinary.example/page/{source_url}]",
+                "Could not fetch through an ordinary URL.",
+            ]
+        )
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Compare the report with https://ordinary.example/page",
+            )
+        )
+
+        fetch_skill.execute.assert_not_awaited()  # type: ignore[attr-defined]
+        continuation = mock_ai.generate_chat.await_args_list[1].args[0][-2][
+            "content"
+        ]
+        assert "URL is not allowed" in continuation
+
     async def test_inspect_image_uses_multimodal_react_for_user_url(
         self,
         mock_ai: AsyncMock,

@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any
 
-_DEFAULT_REASONING_STRIP_TAGS = ("think",)
+_DEFAULT_REASONING_STRIP_TAGS = ("think", "thought")
 _REASONING_LEAK_RE = re.compile(
     r"(?is)"
     r"(^\s*/(?:emotion|memory|system)\b|"

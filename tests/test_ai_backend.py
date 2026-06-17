@@ -204,6 +204,18 @@ class TestOpenAICompatBackend:
         raw = "<analysis>private notes</analysis>\nFinal answer"
         assert strip_thinking_text(raw, tags=("analysis",)) == "Final answer"
 
+    def test_strip_thinking_text_strips_thought_tag_by_default(self) -> None:
+        raw = "<thought>private notes</thought>こんにちは！"
+        assert strip_thinking_text(raw) == "こんにちは！"
+
+    def test_sanitize_reasoning_artifacts_keeps_text_after_thought_tag(self) -> None:
+        raw = (
+            '<thought>* User says: "こんにちは".\n'
+            "* Response: こんにちは！</thought>"
+            "こんにちは！改めて、最近はどう？"
+        )
+        assert sanitize_reasoning_artifacts(raw) == "こんにちは！改めて、最近はどう？"
+
     def test_strip_thinking_text_supports_custom_marker_pairs(self) -> None:
         raw = "<|START_THINKING|>private<|END_THINKING|>\nFinal answer"
         assert (

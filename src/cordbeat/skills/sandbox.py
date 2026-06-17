@@ -131,6 +131,7 @@ async def run_skill_in_subprocess(
         stderr=asyncio.subprocess.PIPE,
         env={
             "PATH": os.environ.get("PATH", ""),
+            "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONNOUSERSITE": "1",
             "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),

@@ -81,6 +81,8 @@ class TestRunServiceCommandLinux:
         assert unit_file.exists()
         assert "/bin/cordbeat" in unit_file.read_text()
         assert mock_run.call_count == 3  # daemon-reload + enable --now + restart
+        out = capsys.readouterr().out
+        assert "loginctl enable-linger $USER" in out
 
     def test_start(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch("cordbeat.tools.service.subprocess.run") as mock_run:
@@ -172,7 +174,9 @@ class TestRunServiceCommandWindows:
         with patch("cordbeat.tools.service._platform", return_value="windows"):
             yield
 
-    def test_install_calls_schtasks(self) -> None:
+    def test_install_calls_schtasks(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         fake_exe = r"C:\bin\cordbeat.exe"
         with (
             patch("cordbeat.tools.service._cordbeat_exe", return_value=fake_exe),
@@ -182,6 +186,9 @@ class TestRunServiceCommandWindows:
             code = run_service_command("install")
         assert code == 0
         assert mock_run.call_count == 2  # /Create + /Run
+        out = capsys.readouterr().out
+        assert "ONLOGON task" in out
+        assert "Run whether user is logged on or not" in out
 
     def test_uninstall_calls_schtasks_delete(self) -> None:
         with patch("cordbeat.tools.service.subprocess.run") as mock_run:

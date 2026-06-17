@@ -3,7 +3,7 @@
 Supports:
   Linux   : systemd user service (~/.config/systemd/user/cordbeat.service)
   macOS   : launchd user agent  (~/Library/LaunchAgents/com.cordbeat.agent.plist)
-  Windows : Task Scheduler      (HKCU scheduled task "CordBeat")
+  Windows : Task Scheduler      (per-user logon task "CordBeat")
 """
 
 from __future__ import annotations
@@ -103,6 +103,8 @@ def _systemd_install(adapters: list[str] | None = None) -> None:
     print()
     print("   Note: always use --user flag")
     print("         (this is a user-level service, not system-wide).")
+    print("         For headless servers, enable lingering so the user service")
+    print("         survives logout: loginctl enable-linger $USER")
 
     for adapter in adapters or []:
         unit_name = f"cordbeat-{adapter}.service"
@@ -297,6 +299,12 @@ def _windows_install(adapters: list[str] | None = None) -> None:
     )
     subprocess.run(["schtasks", "/Run", "/TN", _TASK_NAME], check=True)
     print("✅ CordBeat task registered and started (Task Scheduler).")
+    print(
+        "   Note: this is a per-user ONLOGON task. On Windows servers, the "
+        "process may stop when that user logs out. For 24/7 Discord presence, "
+        "configure the task as 'Run whether user is logged on or not' in Task "
+        "Scheduler, or run CordBeat under a dedicated service wrapper."
+    )
 
     for adapter in adapters or []:
         task_name = f"CordBeat-{adapter.title()}"
@@ -318,6 +326,10 @@ def _windows_install(adapters: list[str] | None = None) -> None:
         )
         subprocess.run(["schtasks", "/Run", "/TN", task_name], check=True)
         print(f"✅ cordbeat-{adapter} adapter task registered and started.")
+        print(
+            f"   Note: {task_name} is also an ONLOGON task; apply the same "
+            "logged-out execution setting for 24/7 adapter uptime."
+        )
 
 
 def _windows_start() -> None:

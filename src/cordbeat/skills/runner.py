@@ -26,6 +26,7 @@ import inspect
 import io
 import json
 import os
+import pathlib
 import socket as _socket_module
 import ssl as _ssl_module
 import sys
@@ -81,15 +82,18 @@ _ORIGINAL_STDIN = sys.stdin
 def _install_network_guard() -> None:
     """Block all socket creation."""
 
-    def _blocked(*_a: Any, **_kw: Any) -> Any:
-        raise SkillPermissionError("Network access is not allowed for this skill")
+    original_socket_type = _socket_module.socket
 
-    _socket_module.socket = _blocked  # type: ignore[assignment, misc]
+    class _BlockedSocket(original_socket_type):  # type: ignore[misc, valid-type]
+        def __new__(cls, *_a: Any, **_kw: Any) -> Any:
+            raise SkillPermissionError("Network access is not allowed for this skill")
+
+    _socket_module.socket = _BlockedSocket  # type: ignore[misc]
     # The C implementation has its own class; block that too.
     try:
         import _socket
 
-        _socket.socket = _blocked  # type: ignore[assignment, misc]
+        _socket.socket = _BlockedSocket  # type: ignore[misc]
     except ImportError:
         pass
 
@@ -99,7 +103,11 @@ def _install_network_guard() -> None:
     _ssl_module.create_default_context = _blocked_ctx
 
 
-def _install_fs_guard(allowed_root: Path) -> None:
+def _install_fs_guard(
+    allowed_root: Path,
+    *,
+    allowed_read_roots: tuple[Path, ...] = (),
+) -> None:
     """Restrict open / os.open to paths inside *allowed_root*.
 
     Uses ``os.path.realpath`` plus (on Unix) ``O_NOFOLLOW`` at the final
@@ -109,10 +117,15 @@ def _install_fs_guard(allowed_root: Path) -> None:
     the final component.
     """
     resolved_root = allowed_root.resolve()
+    resolved_read_roots = tuple(root.resolve() for root in allowed_read_roots)
     original_open = builtins.open
     original_os_open = os.open
+    in_path_check = False
 
-    def _check(path: Any) -> None:
+    def _check(path: Any, *, read_only: bool = False) -> None:
+        nonlocal in_path_check
+        if in_path_check:
+            return
         try:
             p = Path(path)
         except TypeError:
@@ -121,27 +134,50 @@ def _install_fs_guard(allowed_root: Path) -> None:
             p = Path.cwd() / p
         # Canonicalize; if the final component is a symlink to outside,
         # realpath will reveal it.
-        real = Path(os.path.realpath(p))
+        in_path_check = True
+        try:
+            real = Path(os.path.realpath(p))
+        finally:
+            in_path_check = False
         try:
             real.relative_to(resolved_root)
+            return
         except ValueError:
-            raise SkillPermissionError(
-                f"Filesystem access outside work directory is not allowed: {p}"
-            ) from None
+            pass
+        if read_only:
+            for root in resolved_read_roots:
+                try:
+                    real.relative_to(root)
+                    return
+                except ValueError:
+                    continue
+        raise SkillPermissionError(
+            f"Filesystem access outside work directory is not allowed: {p}"
+        ) from None
+
+    def _open_flags_for_mode(mode: Any) -> int:
+        mode_text = str(mode)
+        read_write = "+" in mode_text
+        access = os.O_RDWR if read_write else os.O_WRONLY
+        if "a" in mode_text:
+            return access | os.O_CREAT | os.O_APPEND
+        if "x" in mode_text:
+            return access | os.O_CREAT | os.O_EXCL
+        if "w" in mode_text:
+            return access | os.O_CREAT | os.O_TRUNC
+        return os.O_RDWR if read_write else os.O_RDONLY
 
     def _restricted_open(file: Any, *args: Any, **kwargs: Any) -> Any:
         if isinstance(file, int):
             return original_open(file, *args, **kwargs)
-        _check(file)
+        mode = kwargs.get("mode", args[0] if args else "r")
+        mode_text = str(mode)
+        read_only = not any(marker in mode_text for marker in "wax+")
+        _check(file, read_only=read_only)
         if hasattr(os, "O_NOFOLLOW"):
             # Pre-open with O_NOFOLLOW to ensure the final component isn't
             # a dangling symlink we missed. Then hand the fd to open().
-            mode = kwargs.get("mode", args[0] if args else "r")
-            flags = os.O_RDONLY
-            if any(c in mode for c in "wax"):
-                flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-            elif "+" in mode or "r+" in mode:
-                flags = os.O_RDWR
+            flags = _open_flags_for_mode(mode)
             try:
                 fd = original_os_open(str(file), flags | os.O_NOFOLLOW)
             except OSError:
@@ -153,8 +189,15 @@ def _install_fs_guard(allowed_root: Path) -> None:
         return original_open(file, *args, **kwargs)
 
     def _restricted_os_open(path: Any, *args: Any, **kwargs: Any) -> int:
-        _check(path)
         flags = args[0] if args else kwargs.get("flags", 0)
+        write_flags = (
+            os.O_WRONLY
+            | os.O_RDWR
+            | os.O_CREAT
+            | os.O_TRUNC
+            | os.O_APPEND
+        )
+        _check(path, read_only=(int(flags) & write_flags) == 0)
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
             if args:
@@ -163,9 +206,38 @@ def _install_fs_guard(allowed_root: Path) -> None:
                 kwargs["flags"] = flags
         return original_os_open(path, *args, **kwargs)
 
+    def _pathlib_guard(name: str, *, read_only: bool = False) -> None:
+        original = getattr(pathlib.Path, name)
+
+        def _wrapped(self: Path, *args: Any, **kwargs: Any) -> Any:
+            _check(self, read_only=read_only)
+            if name in {"rename", "replace"} and args:
+                _check(args[0])
+            if name in {"symlink_to", "hardlink_to"} and args:
+                _check(args[0])
+            return original(self, *args, **kwargs)
+
+        for cls in (pathlib.Path, pathlib.PosixPath, pathlib.WindowsPath):
+            if hasattr(cls, name):
+                setattr(cls, name, _wrapped)
+
     builtins.open = _restricted_open
     io.open = _restricted_open
     os.open = _restricted_os_open
+    for name in ("exists", "is_file", "is_dir", "iterdir", "readlink", "stat", "lstat"):
+        _pathlib_guard(name, read_only=True)
+    for name in (
+        "chmod",
+        "hardlink_to",
+        "mkdir",
+        "rename",
+        "replace",
+        "rmdir",
+        "symlink_to",
+        "touch",
+        "unlink",
+    ):
+        _pathlib_guard(name)
 
 
 def _apply_resource_limits(
@@ -359,7 +431,20 @@ def _run_skill(
     if not sandbox.get("network", False):
         _install_network_guard()
     if not sandbox.get("filesystem", False):
-        _install_fs_guard(work_dir)
+        stdlib_roots = tuple(
+            Path(p)
+            for p in {
+                sys.base_prefix,
+                sys.prefix,
+                sys.exec_prefix,
+                sys.base_exec_prefix,
+            }
+        )
+        import_roots = tuple(Path(p) for p in sys.path if p)
+        _install_fs_guard(
+            work_dir,
+            allowed_read_roots=(skill_dir, *stdlib_roots, *import_roots),
+        )
     _restrict_sys_and_env(skill_dir, work_dir)
     _apply_resource_limits(
         memory_mb=int(sandbox.get("memory_mb", 256)),

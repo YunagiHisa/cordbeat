@@ -66,7 +66,7 @@ def run_doctor(home: Path | None = None) -> int:
         print(f"    Partial token : {masked}")
         print(
             "    Copy to adapter .env:\n"
-            f"      CORDBEAT_GATEWAY__AUTH_TOKEN={auth_token}\n"
+            "      CORDBEAT_GATEWAY__AUTH_TOKEN=<copy from config.yaml or .env>\n"
         )
     else:
         print("    Run cordbeat-init to generate one.\n")

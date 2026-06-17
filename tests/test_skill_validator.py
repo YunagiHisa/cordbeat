@@ -124,6 +124,16 @@ class TestImportRestrictions:
         with pytest.raises(SkillValidationError, match="os"):
             validate_skill_source(src, "x")
 
+    def test_forbidden_module_attribute_escape(self) -> None:
+        src = (
+            "import pathlib\n"
+            "def execute(**kw):\n"
+            "    pathlib.os.system('echo nope')\n"
+            "    return {}\n"
+        )
+        with pytest.raises(SkillValidationError, match="os"):
+            validate_skill_source(src, "x")
+
     def test_socket_import_allowed_but_runtime_blocked(self) -> None:
         # Importing socket is allowed (e.g. for getaddrinfo use in
         # SSRF-safe skills); actual socket creation is blocked at

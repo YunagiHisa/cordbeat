@@ -407,6 +407,51 @@ class TestSkillSandbox:
         assert result["network"] is True
         assert result["filesystem"] is False
 
+    async def test_filesystem_guard_blocks_pathlib_stat_outside_work_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """Pathlib metadata calls must not leak information outside work_dir."""
+        outside = tmp_path / "outside.txt"
+        outside.write_text("secret", encoding="utf-8")
+        code = (
+            "from pathlib import Path\n\n"
+            "def execute(path, **kwargs):\n"
+            "    return {'exists': Path(path).exists()}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "pathlib_stat", sandbox=True, main_code=code)
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("pathlib_stat")
+        assert skill is not None
+
+        with pytest.raises(SkillPermissionError, match="outside work directory"):
+            await skill.execute({"path": str(outside)})
+
+    async def test_filesystem_guard_blocks_pathlib_mutation_outside_work_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """Pathlib mutation helpers must stay inside the sandbox work_dir."""
+        outside = tmp_path / "created_outside"
+        code = (
+            "from pathlib import Path\n\n"
+            "def execute(path, **kwargs):\n"
+            "    Path(path).mkdir()\n"
+            "    return {'created': True}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "pathlib_mkdir", sandbox=True, main_code=code)
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("pathlib_mkdir")
+        assert skill is not None
+
+        with pytest.raises(SkillPermissionError, match="outside work directory"):
+            await skill.execute({"path": str(outside)})
+        assert not outside.exists()
+
     async def test_sandbox_accepts_result_line_larger_than_64_kib(
         self, tmp_path: Path
     ) -> None:

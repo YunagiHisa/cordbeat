@@ -49,6 +49,18 @@ class TestRunDoctor:
         with patch("cordbeat.tools.doctor._probe", return_value=True):
             assert run_doctor(home) == 0
 
+    def test_doctor_masks_gateway_auth_token(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        home = tmp_path / ".cordbeat"
+        self._setup_healthy(home)
+        with patch("cordbeat.tools.doctor._probe", return_value=True):
+            assert run_doctor(home) == 0
+
+        out = capsys.readouterr().out
+        assert "test-token-1234567890" not in out
+        assert "test-t...7890" in out
+
     def test_missing_config(self, tmp_path: Path) -> None:
         home = tmp_path / ".cordbeat"
         home.mkdir()

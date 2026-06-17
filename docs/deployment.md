@@ -98,8 +98,15 @@ cordbeat service install --adapter discord --adapter telegram
 > ⚠️ **Important**: Always use the `--user` flag when managing this service.
 > Without it, `systemctl` looks for a system-level service and will report
 > "Unit cordbeat.service could not be found."
+>
+> On headless servers, enable linger so the user service keeps running after
+> you log out. Without linger, Discord/Telegram adapters may go offline when
+> the SSH session ends.
 
 ```bash
+# Keep the user service alive without an active login session
+loginctl enable-linger "$USER"
+
 # Status / restart / stop
 systemctl --user status  cordbeat
 systemctl --user restart cordbeat
@@ -130,11 +137,19 @@ cordbeat service uninstall
 
 ### Windows (Task Scheduler)
 
-`cordbeat service install` registers a Task Scheduler task that runs at login.
+`cordbeat service install` registers per-user Task Scheduler tasks that run at
+login (`CordBeat`, plus `CordBeat-Discord` when the Discord adapter is enabled).
+On Windows servers this is not the same as a system service: if the task is left
+as "Run only when user is logged on", the Discord bot can go offline when that
+RDP/session user logs out.
 
 ```powershell
 # Check task
 schtasks /Query /TN CordBeat /FO LIST
+schtasks /Query /TN CordBeat-Discord /FO LIST
+
+# For 24/7 Discord presence, open Task Scheduler and change each CordBeat task:
+# General -> Security options -> Run whether user is logged on or not
 
 # Uninstall
 cordbeat service uninstall

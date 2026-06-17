@@ -798,6 +798,82 @@ class TestOpenAICompatBackend:
         assert "chat_template_kwargs" not in payload
         assert "/no_think" not in payload["messages"][0]["content"]
 
+    async def test_strict_openai_sends_reasoning_effort(self) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            options={
+                "compatibility_mode": "strict_openai",
+                "reasoning_effort": "medium",
+            },
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"choices": [{"message": {"content": "Hi!"}}]}
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        await backend.generate("test")
+
+        payload = backend._client.post.call_args[1]["json"]
+        assert payload["reasoning_effort"] == "medium"
+        assert "enable_thinking" not in payload
+        assert "chat_template_kwargs" not in payload
+
+    async def test_generate_chat_sends_reasoning_effort_for_strict_openai(
+        self,
+    ) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            options={
+                "compatibility_mode": "strict_openai",
+                "reasoning_effort": "high",
+            },
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"choices": [{"message": {"content": "Hi!"}}]}
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        await backend.generate_chat([{"role": "user", "content": "test"}])
+
+        payload = backend._client.post.call_args[1]["json"]
+        assert payload["reasoning_effort"] == "high"
+
+    @pytest.mark.parametrize("mode", ["llama_cpp", "vllm"])
+    async def test_non_strict_modes_do_not_send_reasoning_effort(
+        self,
+        mode: str,
+    ) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={
+                "compatibility_mode": mode,
+                "reasoning_effort": "medium",
+            },
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"choices": [{"message": {"content": "Hi!"}}]}
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        await backend.generate("test")
+
+        payload = backend._client.post.call_args[1]["json"]
+        assert "reasoning_effort" not in payload
+
     async def test_llama_cpp_mode_sends_both_thinking_payload_fields(self) -> None:
         cfg = AIBackendConfig(
             provider="openai_compat",

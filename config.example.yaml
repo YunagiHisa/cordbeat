@@ -91,7 +91,7 @@ ai_backend:
   # options:
   #   api_key: "${GEMINI_API_KEY}"
   #   compatibility_mode: "strict_openai"
-  #   reasoning_mode: "none"
+  #   reasoning_effort: "medium"  # optional: none | minimal | low | medium | high
 
   # --- Alternative: OpenAI API ---
   # provider: openai

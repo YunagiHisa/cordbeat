@@ -133,6 +133,8 @@ Groq, Together, and DeepInfra, set
 llama.cpp/vLLM-only fields like `enable_thinking` and `chat_template_kwargs`
 out of the request payload. Local llama.cpp should use
 `compatibility_mode: "llama_cpp"`; vLLM should use `compatibility_mode: "vllm"`.
+For strict providers that support OpenAI-style reasoning controls, add
+`ai_backend.options.reasoning_effort: "medium"` explicitly.
 See [AI Backends](docs/ai-backends.md) for examples.
 
 #### Installation

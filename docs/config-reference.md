@@ -112,6 +112,7 @@ Common options for `openai_compat`:
 | `api_key` | string | API key; prefer environment expansion such as `${GEMINI_API_KEY}` |
 | `compatibility_mode` | string | `strict_openai`, `llama_cpp`, or `vllm`. Defaults to `strict_openai` for remote URLs and infers `llama_cpp` only for local host URLs. |
 | `enable_thinking` | bool | Sent only in compatibility modes that support thinking control. `llama_cpp` sends both top-level `enable_thinking` and `chat_template_kwargs.enable_thinking`; `vllm` sends only `chat_template_kwargs.enable_thinking`; `strict_openai` sends neither. |
+| `reasoning_effort` | string | Optional top-level OpenAI-compatible reasoning control (`none`, `minimal`, `low`, `medium`, or `high`). Sent only when `compatibility_mode` is `strict_openai`. |
 | `reasoning_content_keys` | list[string] | Message fields treated as internal reasoning, for example `reasoning_content` or `reasoning` |
 | `reasoning_strip_tags` | list[string] | Inline reasoning tags to strip from user-facing content |
 

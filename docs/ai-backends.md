@@ -40,13 +40,16 @@ ai_backend:
   options:
     api_key: "${GEMINI_API_KEY}"
     compatibility_mode: "strict_openai"
-    reasoning_mode: "none"
+    reasoning_effort: "medium"
 ```
 
 In `strict_openai` mode, CordBeat does not include `enable_thinking` or
 `chat_template_kwargs` in the request payload, does not run no-think retries,
 and does not drop a successful response just because its content looks like
-reasoning or model-control text.
+reasoning or model-control text. If `reasoning_effort` is set explicitly,
+CordBeat sends it as a top-level OpenAI-compatible request field. This is useful
+for providers such as OpenAI and Google's OpenAI-compatible Gemini API; remove
+it for strict providers that reject unknown reasoning controls.
 
 ### llama.cpp
 

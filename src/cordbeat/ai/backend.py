@@ -41,6 +41,7 @@ _OPENAI_COMPAT_MODES = {
     _VLLM_COMPAT,
 }
 _LOCAL_OPENAI_COMPAT_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+_REASONING_EFFORT_VALUES = {"none", "minimal", "low", "medium", "high"}
 
 
 def _resolve_configured_max_tokens(
@@ -425,6 +426,9 @@ class OpenAICompatBackend(AIBackend):
         self._compatibility_mode_value = self._resolve_compatibility_mode(
             options.get("compatibility_mode")
         )
+        self._reasoning_effort = self._coerce_reasoning_effort(
+            options.get("reasoning_effort")
+        )
         # Qwen3 / DeepSeek-R1 thinking models: set enable_thinking: false in
         # ai.options to skip the <think> phase for JSON-mode requests.
         # Defaults to None (not sent) to avoid breaking non-thinking models.
@@ -481,8 +485,33 @@ class OpenAICompatBackend(AIBackend):
             return _LLAMA_CPP_COMPAT
         return _STRICT_OPENAI_COMPAT
 
+    @staticmethod
+    def _coerce_reasoning_effort(raw_effort: Any) -> str | None:
+        if raw_effort is None:
+            return None
+        if not isinstance(raw_effort, str):
+            logger.warning(
+                "Ignoring openai_compat reasoning_effort=%r; expected string",
+                raw_effort,
+            )
+            return None
+        effort = raw_effort.strip().lower()
+        if not effort:
+            return None
+        if effort not in _REASONING_EFFORT_VALUES:
+            logger.warning(
+                "Ignoring openai_compat reasoning_effort=%r; expected one of %s",
+                raw_effort,
+                ", ".join(sorted(_REASONING_EFFORT_VALUES)),
+            )
+            return None
+        return effort
+
     def _compatibility_mode(self) -> str:
         return self._compatibility_mode_value
+
+    def _supports_reasoning_effort(self) -> bool:
+        return self._compatibility_mode() == _STRICT_OPENAI_COMPAT
 
     def _supports_chat_template_kwargs(self) -> bool:
         return self._compatibility_mode() in {_LLAMA_CPP_COMPAT, _VLLM_COMPAT}
@@ -507,6 +536,17 @@ class OpenAICompatBackend(AIBackend):
             payload["chat_template_kwargs"] = {"enable_thinking": payload_thinking}
         if self._supports_top_level_enable_thinking():
             payload["enable_thinking"] = payload_thinking
+
+    def _apply_reasoning_effort_payload(self, payload: dict[str, Any]) -> None:
+        if self._reasoning_effort is None:
+            return
+        if self._supports_reasoning_effort():
+            payload["reasoning_effort"] = self._reasoning_effort
+            return
+        logger.debug(
+            "openai_compat: ignoring reasoning_effort for compatibility_mode=%s",
+            self._compatibility_mode(),
+        )
 
     @staticmethod
     def _raise_for_status_with_body(resp: httpx.Response) -> None:
@@ -681,6 +721,7 @@ class OpenAICompatBackend(AIBackend):
                 "max_tokens": max_tokens,
             }
             self._apply_thinking_payload(payload, payload_thinking)
+            self._apply_reasoning_effort_payload(payload)
             async with time_block(LLM_GENERATE_LATENCY, labels):
                 resp = await self._client.post(
                     f"{self._base_url}/chat/completions",
@@ -869,6 +910,7 @@ class OpenAICompatBackend(AIBackend):
                 "max_tokens": max_tokens,
             }
             self._apply_thinking_payload(payload, payload_thinking)
+            self._apply_reasoning_effort_payload(payload)
             async with time_block(LLM_GENERATE_LATENCY, labels):
                 resp = await self._client.post(
                     f"{self._base_url}/chat/completions",
@@ -918,6 +960,7 @@ class OpenAICompatBackend(AIBackend):
                 "max_tokens": max_tokens,
             }
             self._apply_thinking_payload(payload, payload_thinking)
+            self._apply_reasoning_effort_payload(payload)
             async with time_block(LLM_GENERATE_LATENCY, labels):
                 resp = await self._client.post(
                     f"{self._base_url}/chat/completions",

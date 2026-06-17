@@ -208,6 +208,37 @@ class TestOpenAIVision:
         assert body["enable_thinking"] is False
         assert body["chat_template_kwargs"] == {"enable_thinking": False}
 
+    async def test_generate_with_vision_sends_reasoning_effort_for_strict_openai(
+        self,
+    ) -> None:
+        backend = OpenAICompatBackend(
+            AIBackendConfig(
+                provider="openai_compat",
+                model="gemini-3.5-flash",
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                options={
+                    "compatibility_mode": "strict_openai",
+                    "reasoning_effort": "low",
+                },
+            )
+        )
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "pass"}}]}
+
+        with patch.object(
+            backend._client, "post", new_callable=AsyncMock, return_value=mock_resp
+        ) as mock_post:
+            await backend.generate_with_vision(
+                prompt="Review",
+                images=[_make_b64(b"\xff\xd8\xff")],
+            )
+
+        body = mock_post.await_args.kwargs["json"]
+        assert body["reasoning_effort"] == "low"
+        assert "enable_thinking" not in body
+        assert "chat_template_kwargs" not in body
+
 
 # ── CoreEngine vision routing ─────────────────────────────────────────
 

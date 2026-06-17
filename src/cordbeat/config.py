@@ -394,7 +394,8 @@ def _load_dotenv(path: Path) -> None:
     """Load .env file into os.environ if it exists.
 
     Supports simple KEY=VALUE lines. Ignores comments and blank lines.
-    Strips optional surrounding quotes from values.
+    Strips optional surrounding quotes from values and ignores comments after
+    quoted values.
     """
     if not path.is_file():
         return
@@ -407,11 +408,38 @@ def _load_dotenv(path: Path) -> None:
                 continue
             key, _, value = line.partition("=")
             key = key.strip()
-            value = value.strip()
-            # Strip surrounding quotes
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-                value = value[1:-1]
+            value = _parse_dotenv_value(value)
             os.environ.setdefault(key, value)
+
+
+def _parse_dotenv_value(value: str) -> str:
+    """Parse the value half of a simple dotenv ``KEY=VALUE`` line."""
+    value = value.strip()
+    if not value:
+        return ""
+
+    quote = value[0]
+    if quote in ("'", '"'):
+        escaped = False
+        out: list[str] = []
+        for char in value[1:]:
+            if escaped:
+                out.append(char)
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                return "".join(out)
+            else:
+                out.append(char)
+        return "".join(out)
+
+    for marker in (" #", "\t#"):
+        idx = value.find(marker)
+        if idx != -1:
+            value = value[:idx].rstrip()
+            break
+    return value
 
 
 def _apply_env_overrides(raw: dict[str, Any]) -> None:

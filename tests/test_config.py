@@ -190,6 +190,26 @@ class TestLoadDotenv:
         assert os.environ["MY_KEY"] == "my_value"
         assert os.environ["QUOTED"] == "quoted_val"
 
+    def test_loads_quoted_value_with_inline_comment(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            'API_KEY="secret-value"  # required for provider\n'
+            "URL=https://example.test/path#fragment\n"
+            "PLAIN=plain-value # local comment\n",
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("API_KEY", raising=False)
+        monkeypatch.delenv("URL", raising=False)
+        monkeypatch.delenv("PLAIN", raising=False)
+
+        _load_dotenv(env_file)
+
+        assert os.environ["API_KEY"] == "secret-value"
+        assert os.environ["URL"] == "https://example.test/path#fragment"
+        assert os.environ["PLAIN"] == "plain-value"
+
     def test_does_not_overwrite_existing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

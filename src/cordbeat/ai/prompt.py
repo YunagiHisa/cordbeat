@@ -404,7 +404,10 @@ def build_tool_system_prompt(
         "search, check, investigate, fetch, inspect, confirm, or perform any "
         "other action that needs a tool, include the corresponding [SKILL: ...] "
         "tag in the SAME reply. Never claim an action was completed without a "
-        "tool result from this turn. Drawing is separate: never use "
+        "tool result from this turn. If the user asks you to try, test, or "
+        "verify a tool or URL pattern, either emit the relevant safe tool tag "
+        "in the same reply or ask for the missing concrete input. Drawing is "
+        "separate: never use "
         "[SKILL: draw]; use [DRAW: ...] only when the Draw guidance applies."
     )
 

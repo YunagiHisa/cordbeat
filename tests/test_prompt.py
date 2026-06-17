@@ -75,6 +75,7 @@ class TestToolSystemPrompt:
         assert "Web research policy" in result
         assert "Use fetch_url" in result
         assert "exact URL" in result
+        assert "try, test, or verify a tool or URL pattern" in result
         assert "unless the user explicitly asks" in result
         assert "user-supplied nested URL wrapper" in result
         assert "r.jina.ai" not in result

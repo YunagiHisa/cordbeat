@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from cordbeat.agent.soul import Soul
@@ -904,6 +905,62 @@ class TestCoreEngine:
         )
         assert retry_call.kwargs["max_tokens"] == 1024
         assert retry_call.kwargs["temperature"] == 0.5
+
+    async def test_text_generation_retryable_http_error_retries_once(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Transient provider overload errors retry once before failing."""
+        sleep = AsyncMock()
+        monkeypatch.setattr("cordbeat.core.engine.asyncio.sleep", sleep)
+        ai = AsyncMock()
+        main_attempts = 0
+
+        async def _generate(**kwargs: object) -> str:
+            nonlocal main_attempts
+            prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if isinstance(prompt, str) and "what emotion" in prompt.lower():
+                return '{"emotion": "neutral", "intensity": 0.4}'
+            if isinstance(prompt, str) and "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "retry", "emotional_tone": "neutral",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            main_attempts += 1
+            if main_attempts == 1:
+                request = httpx.Request("POST", "https://api.example.test/chat")
+                response = httpx.Response(503, request=request)
+                raise httpx.HTTPStatusError(
+                    "Service Unavailable",
+                    request=request,
+                    response=response,
+                )
+            return "Recovered after provider retry."
+
+        ai.generate = AsyncMock(side_effect=_generate)
+        eng = CoreEngine(
+            ai=ai, soul=soul, memory=memory, skills=skills, gateway=mock_gateway
+        )
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Hi!",
+        )
+        await eng.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args.args[1]
+        assert reply.type == MessageType.MESSAGE
+        assert reply.content == "Recovered after provider retry."
+        assert main_attempts == 2
+        sleep.assert_awaited_once()
 
     async def test_memory_extraction_stores_facts(
         self,

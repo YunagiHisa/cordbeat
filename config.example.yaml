@@ -49,6 +49,7 @@ ai_backend:
   # model: "default"
   # max_tokens: 8192         # Qwen3 thinking needs headroom; 8192 recommended
   # options:
+  #   compatibility_mode: "llama_cpp"
   #   enable_thinking: false # recommended for CordBeat runtime replies/JSON tasks:
   #                          # skip <think> entirely to prevent reasoning leakage,
   #                          # reduce latency, and avoid token-budget exhaustion.
@@ -66,6 +67,31 @@ ai_backend:
   #   # reasoning_strip_markers:
   #   #   - start: "<|START_THINKING|>"
   #   #     end: "<|END_THINKING|>"
+
+  # --- Alternative: vLLM OpenAI-compatible server ---
+  # provider: openai_compat
+  # base_url: "http://localhost:8000/v1"
+  # model: "Qwen/Qwen3-..."
+  # max_tokens: 4096
+  # options:
+  #   compatibility_mode: "vllm"
+  #   enable_thinking: false
+  #   reasoning_content_keys: ["reasoning", "reasoning_content"]
+  #   reasoning_strip_tags: ["think", "thinking", "analysis", "reasoning"]
+
+  # --- Alternative: Google Gemini/Gemma OpenAI-compatible API ---
+  # Strict OpenAI-compatible providers do not receive llama.cpp/vLLM-only
+  # fields such as enable_thinking or chat_template_kwargs, and CordBeat will
+  # not run no-think retries or drop successful reasoning-like content.
+  # provider: openai_compat
+  # base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+  # model: "gemma-4-31b-it"
+  # timeout: 300.0
+  # max_tokens: 2048
+  # options:
+  #   api_key: "${GEMINI_API_KEY}"
+  #   compatibility_mode: "strict_openai"
+  #   reasoning_mode: "none"
 
   # --- Alternative: OpenAI API ---
   # provider: openai

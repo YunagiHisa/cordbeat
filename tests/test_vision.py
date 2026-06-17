@@ -188,7 +188,7 @@ class TestOpenAIVision:
             AIBackendConfig(
                 provider="openai_compat",
                 model="qwen",
-                options={"enable_thinking": True},
+                options={"compatibility_mode": "llama_cpp", "enable_thinking": True},
             )
         )
         mock_resp = MagicMock()

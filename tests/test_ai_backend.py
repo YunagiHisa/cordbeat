@@ -405,7 +405,10 @@ class TestOpenAICompatBackend:
     ) -> None:
         cfg = AIBackendConfig(
             provider="openai_compat",
-            options={"reasoning_content_keys": ["reasoning"]},
+            options={
+                "compatibility_mode": "llama_cpp",
+                "reasoning_content_keys": ["reasoning"],
+            },
         )
         backend = OpenAICompatBackend(cfg)
 
@@ -436,7 +439,7 @@ class TestOpenAICompatBackend:
     ) -> None:
         cfg = AIBackendConfig(
             provider="openai_compat",
-            options={"enable_thinking": True},
+            options={"compatibility_mode": "llama_cpp", "enable_thinking": True},
         )
         backend = OpenAICompatBackend(cfg)
 
@@ -495,7 +498,10 @@ class TestOpenAICompatBackend:
     async def test_generate_drops_reasoning_like_content_when_retry_fails(
         self,
     ) -> None:
-        cfg = AIBackendConfig(provider="openai_compat")
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={"compatibility_mode": "llama_cpp"},
+        )
         backend = OpenAICompatBackend(cfg)
 
         first_response = MagicMock()
@@ -520,10 +526,77 @@ class TestOpenAICompatBackend:
         assert result == ""
         assert backend._client.post.await_count == 2
 
+    async def test_strict_openai_keeps_reasoning_like_content_without_retry(
+        self,
+    ) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            options={"compatibility_mode": "strict_openai"},
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        content = (
+            "3. **Formulate Response:**\n"
+            "- Text: This is the final user-facing answer."
+        )
+        first_response = MagicMock()
+        first_response.json.return_value = {
+            "choices": [{"message": {"content": content}}]
+        }
+        first_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=first_response)
+
+        result = await backend.generate("test")
+        assert result == content
+        assert backend._client.post.await_count == 1
+
+    async def test_vllm_mode_retries_reasoning_like_content_without_top_level_field(
+        self,
+    ) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={"compatibility_mode": "vllm"},
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        first_response = MagicMock()
+        first_response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "3. **Formulate Response:**\n- Text: final"
+                    }
+                }
+            ]
+        }
+        first_response.raise_for_status = MagicMock()
+
+        retry_response = MagicMock()
+        retry_response.json.return_value = {
+            "choices": [{"message": {"content": "final"}}]
+        }
+        retry_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(side_effect=[first_response, retry_response])
+
+        result = await backend.generate("test")
+        assert result == "final"
+        assert backend._client.post.await_count == 2
+        retry_payload = backend._client.post.call_args_list[1][1]["json"]
+        assert "enable_thinking" not in retry_payload
+        assert retry_payload["chat_template_kwargs"]["enable_thinking"] is False
+
     async def test_generate_retries_emotion_control_without_reasoning_content(
         self,
     ) -> None:
-        cfg = AIBackendConfig(provider="openai_compat")
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={"compatibility_mode": "llama_cpp"},
+        )
         backend = OpenAICompatBackend(cfg)
 
         first_response = MagicMock()
@@ -562,7 +635,7 @@ class TestOpenAICompatBackend:
     async def test_no_think_system_overrides_enable_thinking_true(self) -> None:
         cfg = AIBackendConfig(
             provider="openai_compat",
-            options={"enable_thinking": True},
+            options={"compatibility_mode": "llama_cpp", "enable_thinking": True},
         )
         backend = OpenAICompatBackend(cfg)
 
@@ -682,7 +755,7 @@ class TestOpenAICompatBackend:
         """enable_thinking: false should be included in the API payload."""
         cfg = AIBackendConfig(
             provider="openai_compat",
-            options={"enable_thinking": False},
+            options={"compatibility_mode": "llama_cpp", "enable_thinking": False},
         )
         backend = OpenAICompatBackend(cfg)
 
@@ -698,6 +771,73 @@ class TestOpenAICompatBackend:
         call_kwargs = backend._client.post.call_args
         payload = call_kwargs[1]["json"]
         assert payload.get("enable_thinking") is False
+        assert payload["chat_template_kwargs"]["enable_thinking"] is False
+
+    async def test_strict_openai_omits_thinking_payload_fields(self) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            options={
+                "compatibility_mode": "strict_openai",
+                "enable_thinking": False,
+            },
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"choices": [{"message": {"content": "Hi!"}}]}
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        await backend.generate("test")
+
+        payload = backend._client.post.call_args[1]["json"]
+        assert "enable_thinking" not in payload
+        assert "chat_template_kwargs" not in payload
+        assert "/no_think" not in payload["messages"][0]["content"]
+
+    async def test_llama_cpp_mode_sends_both_thinking_payload_fields(self) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            base_url="https://example.test/v1",
+            options={"compatibility_mode": "llama_cpp", "enable_thinking": False},
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"choices": [{"message": {"content": "Hi!"}}]}
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        await backend.generate("test")
+
+        payload = backend._client.post.call_args[1]["json"]
+        assert payload["enable_thinking"] is False
+        assert payload["chat_template_kwargs"]["enable_thinking"] is False
+
+    async def test_vllm_mode_sends_only_chat_template_kwargs(self) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={"compatibility_mode": "vllm", "enable_thinking": False},
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"choices": [{"message": {"content": "Hi!"}}]}
+        mock_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=mock_response)
+
+        await backend.generate("test")
+
+        payload = backend._client.post.call_args[1]["json"]
+        assert "enable_thinking" not in payload
+        assert payload["chat_template_kwargs"]["enable_thinking"] is False
 
     async def test_enable_thinking_not_sent_by_default(self) -> None:
         """enable_thinking should NOT be sent when not configured.

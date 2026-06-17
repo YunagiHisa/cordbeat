@@ -127,6 +127,14 @@ uv run cordbeat-chat     # interactive CLI chat
   - [llama.cpp](https://github.com/ggerganov/llama.cpp) server (auto-detected at `localhost:8080`)
   - Any OpenAI-compatible API
 
+For hosted OpenAI-compatible APIs such as Google Gemini/Gemma, OpenRouter,
+Groq, Together, and DeepInfra, set
+`ai_backend.options.compatibility_mode: "strict_openai"`. This keeps
+llama.cpp/vLLM-only fields like `enable_thinking` and `chat_template_kwargs`
+out of the request payload. Local llama.cpp should use
+`compatibility_mode: "llama_cpp"`; vLLM should use `compatibility_mode: "vllm"`.
+See [AI Backends](docs/ai-backends.md) for examples.
+
 #### Installation
 
 ```bash

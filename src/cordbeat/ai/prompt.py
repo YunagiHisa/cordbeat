@@ -467,5 +467,5 @@ def build_tool_system_prompt(
         examples.append("[SKILL: inspect_image | url=https://example.com/chart.png]")
     if examples:
         prompt += "\nExamples: " + " ; ".join(examples)
-    prompt += "\nUse only tool names listed below.\nAvailable tools:\n" f"{skills_desc}"
+    prompt += f"\nUse only tool names listed below.\nAvailable tools:\n{skills_desc}"
     return prompt

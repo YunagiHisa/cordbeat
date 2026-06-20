@@ -2983,8 +2983,7 @@ class TestAutoDraw:
         fake_skills.get = lambda name: mock_skill if name == "draw" else None
         mock_ai.generate = AsyncMock(
             return_value=(
-                "SIZE 400 400\nCANVAS white\nCIRCLE 200 200\n"
-                "CIRCLE 200 200 80 red"
+                "SIZE 400 400\nCANVAS white\nCIRCLE 200 200\nCIRCLE 200 200 80 red"
             )
         )
 
@@ -3456,9 +3455,7 @@ class TestReActLoop:
         )
         eng._skills._skills["fetch_url"] = skill
         url = "https://r.jina.ai/https://google.com"
-        mock_ai.generate = AsyncMock(
-            return_value=f"[SKILL: fetch_url | url={url}]"
-        )
+        mock_ai.generate = AsyncMock(return_value=f"[SKILL: fetch_url | url={url}]")
         mock_ai.generate_chat = AsyncMock(return_value="Fetched.")
 
         await eng.handle_message(
@@ -3504,9 +3501,7 @@ class TestReActLoop:
         )
         eng._skills._skills["web_search"] = search_skill
         eng._skills._skills["fetch_url"] = fetch_skill
-        mock_ai.generate = AsyncMock(
-            return_value="[SKILL: web_search | query=Google]"
-        )
+        mock_ai.generate = AsyncMock(return_value="[SKILL: web_search | query=Google]")
         mock_ai.generate_chat = AsyncMock(
             side_effect=[
                 f"[SKILL: fetch_url | url={reader_url}]",
@@ -3558,9 +3553,7 @@ class TestReActLoop:
         )
         eng._skills._skills["web_search"] = search_skill
         eng._skills._skills["fetch_url"] = fetch_skill
-        mock_ai.generate = AsyncMock(
-            return_value="[SKILL: web_search | query=report]"
-        )
+        mock_ai.generate = AsyncMock(return_value="[SKILL: web_search | query=report]")
         mock_ai.generate_chat = AsyncMock(
             side_effect=[
                 f"[SKILL: fetch_url | url={reader_url}]",
@@ -3594,8 +3587,7 @@ class TestReActLoop:
         eng._skills._skills["fetch_url"] = skill
         mock_ai.generate = AsyncMock(
             return_value=(
-                "[SKILL: fetch_url | "
-                "url=https://r.jina.ai/https://example.com/article]"
+                "[SKILL: fetch_url | url=https://r.jina.ai/https://example.com/article]"
             )
         )
         mock_ai.generate_chat = AsyncMock(return_value="I could not fetch it.")
@@ -3643,9 +3635,7 @@ class TestReActLoop:
         )
         eng._skills._skills["web_search"] = search_skill
         eng._skills._skills["fetch_url"] = fetch_skill
-        mock_ai.generate = AsyncMock(
-            return_value="[SKILL: web_search | query=report]"
-        )
+        mock_ai.generate = AsyncMock(return_value="[SKILL: web_search | query=report]")
         mock_ai.generate_chat = AsyncMock(
             side_effect=[
                 f"[SKILL: fetch_url | url=https://ordinary.example/page/{source_url}]",
@@ -3663,9 +3653,7 @@ class TestReActLoop:
         )
 
         fetch_skill.execute.assert_not_awaited()  # type: ignore[attr-defined]
-        continuation = mock_ai.generate_chat.await_args_list[1].args[0][-2][
-            "content"
-        ]
+        continuation = mock_ai.generate_chat.await_args_list[1].args[0][-2]["content"]
         assert "URL is not allowed" in continuation
 
     async def test_inspect_image_uses_multimodal_react_for_user_url(
@@ -3703,13 +3691,9 @@ class TestReActLoop:
             _test_callable=inspect,
         )
         mock_ai.generate = AsyncMock(
-            return_value=(
-                "[SKILL: inspect_image | url=https://example.com/chart.jpg]"
-            )
+            return_value=("[SKILL: inspect_image | url=https://example.com/chart.jpg]")
         )
-        mock_ai.generate_chat_with_vision = AsyncMock(
-            return_value="The chart rises."
-        )
+        mock_ai.generate_chat_with_vision = AsyncMock(return_value="The chart rises.")
 
         await eng.handle_message(
             GatewayMessage(
@@ -3722,10 +3706,9 @@ class TestReActLoop:
         )
 
         mock_ai.generate_chat_with_vision.assert_awaited_once()
-        assert (
-            mock_ai.generate_chat_with_vision.await_args.kwargs["images"]
-            == ["aW1hZ2U="]
-        )
+        assert mock_ai.generate_chat_with_vision.await_args.kwargs["images"] == [
+            "aW1hZ2U="
+        ]
 
     async def test_non_safe_skill_requests_confirmation(
         self,

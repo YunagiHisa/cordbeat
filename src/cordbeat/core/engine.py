@@ -91,10 +91,7 @@ def _retryable_http_status_code(exc: BaseException) -> int | None:
     while current is not None:
         response = getattr(current, "response", None)
         status_code = getattr(response, "status_code", None)
-        if (
-            isinstance(status_code, int)
-            and status_code in _RETRYABLE_HTTP_STATUS_CODES
-        ):
+        if isinstance(status_code, int) and status_code in _RETRYABLE_HTTP_STATUS_CODES:
             return status_code
         current = current.__cause__ or current.__context__
     return None
@@ -826,8 +823,7 @@ class CoreEngine:
                     "directly. Do not use hidden reasoning."
                 )
                 logger.warning(
-                    "AI generation timed out; retrying once with no-think "
-                    "short output"
+                    "AI generation timed out; retrying once with no-think short output"
                 )
                 return await self._ai.generate(
                     prompt=prompt,

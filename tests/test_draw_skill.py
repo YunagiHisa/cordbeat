@@ -89,8 +89,7 @@ def test_circle_fill() -> None:
 
 def test_common_shapes_accept_hsl_colours() -> None:
     result = run(
-        "SIZE 100 100\nCANVAS white\n"
-        "CIRCLE 50 50 30 hsl(210,100%,50%) FILL\nOUTPUT PNG"
+        "SIZE 100 100\nCANVAS white\nCIRCLE 50 50 30 hsl(210,100%,50%) FILL\nOUTPUT PNG"
     )
     assert "output" in result
     assert not result.get("warnings")
@@ -180,13 +179,7 @@ def test_nested_repeat_expansion_is_bounded() -> None:
     """Nested REPEAT must not expand into an out-of-memory program."""
     # Without a global budget this expands to 1000 * 1000 = 1,000,000 circles.
     result = run(
-        "SIZE 50 50\n"
-        "REPEAT 1000\n"
-        "REPEAT 1000\n"
-        "CIRCLE 25 25 5 red\n"
-        "END\n"
-        "END\n"
-        "OUTPUT PNG"
+        "SIZE 50 50\nREPEAT 1000\nREPEAT 1000\nCIRCLE 25 25 5 red\nEND\nEND\nOUTPUT PNG"
     )
     assert "output" in result
     assert any("REPEAT expansion exceeded" in w for w in result.get("warnings", []))
@@ -194,9 +187,7 @@ def test_nested_repeat_expansion_is_bounded() -> None:
 
 def test_modest_repeat_still_expands_without_warning() -> None:
     """A reasonable REPEAT count must render fully and not trip the cap."""
-    result = run(
-        "SIZE 200 200\nREPEAT 12\nCIRCLE 100 100 40 blue\nEND\nOUTPUT PNG"
-    )
+    result = run("SIZE 200 200\nREPEAT 12\nCIRCLE 100 100 40 blue\nEND\nOUTPUT PNG")
     assert "output" in result
     assert not any("REPEAT expansion exceeded" in w for w in result.get("warnings", []))
 

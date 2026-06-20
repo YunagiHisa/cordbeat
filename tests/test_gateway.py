@@ -313,6 +313,62 @@ class TestGatewayServer:
         error_payload = json.loads(calls[-1][0][0])
         assert error_payload["type"] == "error"
 
+    async def test_handle_connection_rejects_invalid_auth_token(self) -> None:
+        config = GatewayConfig(auth_token="s3cret")
+        server = GatewayServer(config, MessageQueue())
+
+        mock_ws = AsyncMock()
+        mock_ws.recv = AsyncMock(
+            return_value=json.dumps({"adapter_id": "a", "auth_token": "wrong"})
+        )
+        mock_ws.close = AsyncMock()
+
+        with patch("cordbeat.core.gateway.logger") as log:
+            await server._handle_connection(mock_ws)
+        mock_ws.close.assert_awaited_once_with(1008, "Invalid auth_token")
+        assert "a" not in server._connections
+        log.warning.assert_called()
+
+    async def test_handle_connection_accepts_valid_auth_token(self) -> None:
+        config = GatewayConfig(auth_token="s3cret")
+        server = GatewayServer(config, MessageQueue())
+
+        mock_ws = AsyncMock()
+        mock_ws.recv = AsyncMock(
+            return_value=json.dumps({"adapter_id": "a", "auth_token": "s3cret"})
+        )
+        mock_ws.__aiter__ = lambda self: _AsyncIter([])
+        mock_ws.send = AsyncMock()
+        mock_ws.close = AsyncMock()
+
+        await server._handle_connection(mock_ws)
+        ack = json.loads(mock_ws.send.call_args_list[0][0][0])
+        assert ack["type"] == "ack"
+
+    async def test_handle_connection_logs_on_disconnect(self) -> None:
+        import websockets
+
+        config = GatewayConfig()
+        server = GatewayServer(config, MessageQueue())
+
+        class _ClosedIter:
+            def __aiter__(self) -> Any:
+                return self
+
+            async def __anext__(self) -> str:
+                raise websockets.ConnectionClosed(None, None)
+
+        mock_ws = AsyncMock()
+        mock_ws.recv = AsyncMock(return_value=json.dumps({"adapter_id": "gone"}))
+        mock_ws.__aiter__ = lambda self: _ClosedIter()
+        mock_ws.send = AsyncMock()
+
+        with patch("cordbeat.core.gateway.logger") as log:
+            await server._handle_connection(mock_ws)
+        # Disconnect is logged and the adapter is removed from the registry.
+        assert "gone" not in server._connections
+        log.info.assert_any_call("Adapter disconnected: %s", "gone")
+
     async def test_queue_receives_valid_message(self) -> None:
         config = GatewayConfig()
         queue = MessageQueue()
@@ -490,3 +546,97 @@ class TestRetryableConnection:
         assert len(conn._outbox) == _OUTBOX_MAX
         # Oldest messages were evicted
         assert conn._outbox[0] == "payload-10"
+
+    async def test_connect_to_core_handshake_and_listen(self) -> None:
+        conn = _ConcreteConnection()
+        conn._running = True
+        conn._ws_url = "ws://core"
+        conn._auth_token = "tok"
+        conn.adapter_id = "test"
+
+        ws = AsyncMock()
+        ws.recv = AsyncMock(return_value=json.dumps({"content": "OK"}))
+
+        async def fake_listen() -> None:
+            conn._running = False  # break the reconnect loop after one pass
+
+        conn._listen_core = fake_listen  # type: ignore[assignment]
+
+        with patch(
+            "cordbeat.core.gateway.websockets.connect", AsyncMock(return_value=ws)
+        ):
+            await conn._connect_to_core()
+
+        handshake = json.loads(ws.send.call_args_list[0][0][0])
+        assert handshake == {"adapter_id": "test", "auth_token": "tok"}
+
+    async def test_connect_to_core_retries_on_failure(self) -> None:
+        conn = _ConcreteConnection()
+        conn._running = True
+        conn._ws_url = "ws://core"
+        conn._auth_token = ""
+        conn.adapter_id = "test"
+
+        async def stop_sleep(_delay: float) -> None:
+            conn._running = False  # exit after the first backoff
+
+        with (
+            patch(
+                "cordbeat.core.gateway.websockets.connect",
+                side_effect=OSError("refused"),
+            ),
+            patch("cordbeat.core.gateway.asyncio.sleep", stop_sleep),
+        ):
+            await conn._connect_to_core()
+        assert conn._ws is None  # stale socket cleared on failure
+
+    async def test_flush_outbox_empty_is_noop(self) -> None:
+        conn = _ConcreteConnection()
+        conn._ws = AsyncMock()
+        await conn._flush_outbox()
+        conn._ws.send.assert_not_awaited()
+
+    async def test_flush_outbox_requeues_on_send_failure(self) -> None:
+        conn = _ConcreteConnection()
+        conn._ws = None
+        await conn._send_to_core("payload-1")
+
+        conn._ws = AsyncMock()
+        conn._ws.send = AsyncMock(side_effect=RuntimeError("ws down"))
+        await conn._flush_outbox()
+        # The payload remains buffered for the next reconnect.
+        assert list(conn._outbox) == ["payload-1"]
+
+    async def test_listen_core_dispatches_skill_confirm(self) -> None:
+        conn = _ConcreteConnection()
+        confirms: list[str] = []
+
+        async def fake_confirm(uid: str, data: dict[str, Any]) -> None:
+            confirms.append(uid)
+
+        conn._dispatch_skill_confirm = fake_confirm  # type: ignore[assignment]
+        msg = json.dumps({"type": "skill_confirm", "platform_user_id": "u1"})
+        mock_ws = AsyncMock()
+        mock_ws.__aiter__ = lambda self: _AsyncIter([msg])
+        conn._ws = mock_ws
+
+        await conn._listen_core()
+        assert confirms == ["u1"]
+
+    async def test_listen_core_handles_connection_closed(self) -> None:
+        import websockets
+
+        conn = _ConcreteConnection()
+
+        class _ClosedIter:
+            def __aiter__(self) -> Any:
+                return self
+
+            async def __anext__(self) -> str:
+                raise websockets.ConnectionClosed(None, None)
+
+        mock_ws = AsyncMock()
+        mock_ws.__aiter__ = lambda self: _ClosedIter()
+        conn._ws = mock_ws
+
+        await conn._listen_core()  # must not raise

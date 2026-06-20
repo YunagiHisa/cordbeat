@@ -142,22 +142,6 @@ def _find_example_config() -> Path | None:
 # ── fix-config ────────────────────────────────────────────────────────────────
 
 
-def _deep_missing_keys(
-    user: dict[str, Any],
-    example: dict[str, Any],
-    prefix: str = "",
-) -> list[str]:
-    """Return dotted paths for keys in *example* not present in *user*."""
-    missing: list[str] = []
-    for k, v in example.items():
-        full = f"{prefix}.{k}" if prefix else k
-        if k not in user:
-            missing.append(full)
-        elif isinstance(v, dict) and isinstance(user.get(k), dict):
-            missing.extend(_deep_missing_keys(user[k], v, full))
-    return missing
-
-
 def run_fix_config(home: Path) -> int:
     """Compare config.yaml against config.example.yaml; offer to add missing keys."""
     config_path = home / "config.yaml"

@@ -145,6 +145,45 @@ class TestConversationHistory:
         msgs = await memory.get_recent_messages("u1")
         assert len(msgs) == 3
 
+    async def test_get_oldest_messages_returns_ascending_with_ids(
+        self, memory: MemoryStore
+    ) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        for i in range(5):
+            await memory.add_message("u1", "user", f"msg{i}")
+        oldest = await memory.get_oldest_messages("u1", limit=2)
+        assert [m["content"] for m in oldest] == ["msg0", "msg1"]
+        # Each row carries its primary-key id and timestamp for promotion.
+        assert all(m["id"] and m["created_at"] for m in oldest)
+
+    async def test_delete_messages_with_ids(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        for i in range(3):
+            await memory.add_message("u1", "user", f"msg{i}")
+        rows = await memory.get_oldest_messages("u1", limit=3)
+        target_ids = [rows[0]["id"], rows[2]["id"]]
+        deleted = await memory.delete_messages_with_ids(target_ids)
+        assert deleted == 2
+        remaining = await memory.get_recent_messages("u1")
+        assert [m["content"] for m in remaining] == ["msg1"]
+        # Empty input is a no-op (no SQL executed).
+        assert await memory.delete_messages_with_ids([]) == 0
+
+    async def test_clear_conversation_history_removes_messages_and_media(
+        self, memory: MemoryStore
+    ) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        mid = await memory.add_message("u1", "user", "hello")
+        await memory.add_media_observation(mid, summary="an image", relation="attached")
+        await memory.add_message("u2", "user", "other user")
+        deleted = await memory.clear_conversation_history("u1")
+        assert deleted == 1
+        assert await memory.get_recent_messages("u1") == []
+        # Media observations for the cleared user are gone too.
+        assert await memory.get_recent_messages_with_media("u1") == []
+        # A different user's history is untouched.
+        assert len(await memory.get_recent_messages("u2")) == 1
+
     async def test_media_observations_are_structured_and_trimmed(
         self, memory: MemoryStore
     ) -> None:

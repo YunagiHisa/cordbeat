@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
 
 from cordbeat.tools.doctor import (
+    _find_example_config,
+    _find_project_config,
     _mask_secrets,
+    _probe,
+    main,
     run_doctor,
     run_fix_config,
     run_show_config,
@@ -100,6 +105,110 @@ class TestRunDoctor:
         shutil.rmtree(home / "skills")
         with patch("cordbeat.tools.doctor._probe", return_value=True):
             assert run_doctor(home) == 1
+
+
+class TestProbe:
+    def test_probe_success(self) -> None:
+        cm = MagicMock()
+        cm.__enter__ = MagicMock(return_value=MagicMock())
+        cm.__exit__ = MagicMock(return_value=False)
+        with patch("cordbeat.tools.doctor.urllib.request.urlopen", return_value=cm):
+            assert _probe("http://localhost:11434/api/tags") is True
+
+    def test_probe_failure(self) -> None:
+        import urllib.error
+
+        with patch(
+            "cordbeat.tools.doctor.urllib.request.urlopen",
+            side_effect=urllib.error.URLError("nope"),
+        ):
+            assert _probe("http://localhost:11434/api/tags") is False
+
+
+class TestDoctorExtraBranches:
+    def test_non_ollama_provider_probes_models_endpoint(self, tmp_path: Path) -> None:
+        home = tmp_path / ".cordbeat"
+        home.mkdir(parents=True)
+        soul_dir = home / "soul"
+        soul_dir.mkdir()
+        (soul_dir / "soul_core.yaml").write_text("immutable_rules: []\n")
+        (soul_dir / "soul.yaml").write_text("identity:\n  name: T\n")
+        (home / "skills").mkdir()
+        cfg = {
+            "ai_backend": {"provider": "openai", "base_url": "https://api.example.com"},
+            "soul": {"soul_dir": str(soul_dir)},
+            "skills_dir": str(home / "skills"),
+            "gateway": {"auth_token": "x" * 20},
+        }
+        (home / "config.yaml").write_text(yaml.dump(cfg), encoding="utf-8")
+
+        with patch("cordbeat.tools.doctor._probe", return_value=True) as probe:
+            run_doctor(home)
+        probe.assert_called_once_with("https://api.example.com/models")
+
+    def test_sqlite_vec_load_failure_is_reported(self, tmp_path: Path) -> None:
+        home = tmp_path / ".cordbeat"
+        home.mkdir(parents=True)
+        (home / "config.yaml").write_text("ai_backend: {}\n", encoding="utf-8")
+        with (
+            patch("cordbeat.tools.doctor._probe", return_value=True),
+            patch("sqlite_vec.load", side_effect=RuntimeError("vec missing")),
+        ):
+            # Returns 1 overall (other checks also fail), but must not raise.
+            assert run_doctor(home) == 1
+
+
+class TestFindExampleConfig:
+    def test_locates_repo_example_config(self) -> None:
+        found = _find_example_config()
+        assert found is not None
+        assert found.name == "config.example.yaml"
+        assert found.is_file()
+
+    def test_returns_none_when_no_example_in_ancestry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Point __file__ at an isolated tree with no config.example.yaml above it.
+        fake_file = tmp_path / "a" / "b" / "doctor.py"
+        fake_file.parent.mkdir(parents=True)
+        monkeypatch.setattr("cordbeat.tools.doctor.__file__", str(fake_file))
+        assert _find_example_config() is None
+
+
+class TestFindProjectConfig:
+    def test_finds_config_in_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "config.yaml").write_text("ai_backend: {}\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        assert _find_project_config() == tmp_path / "config.yaml"
+
+    def test_finds_config_in_repo_ancestor(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A project root is recognised by config.yaml + pyproject.toml together.
+        proj = tmp_path / "proj"
+        (proj / "pkg").mkdir(parents=True)
+        (proj / "config.yaml").write_text("ai_backend: {}\n", encoding="utf-8")
+        (proj / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+        empty_cwd = tmp_path / "elsewhere"
+        empty_cwd.mkdir()
+        monkeypatch.chdir(empty_cwd)  # cwd has no config.yaml
+        monkeypatch.setattr(
+            "cordbeat.tools.doctor.__file__", str(proj / "pkg" / "doctor.py")
+        )
+        assert _find_project_config() == proj / "config.yaml"
+
+    def test_returns_none_when_no_project_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        empty_cwd = tmp_path / "elsewhere"
+        empty_cwd.mkdir()
+        monkeypatch.chdir(empty_cwd)
+        fake_file = tmp_path / "iso" / "pkg" / "doctor.py"
+        fake_file.parent.mkdir(parents=True)
+        monkeypatch.setattr("cordbeat.tools.doctor.__file__", str(fake_file))
+        assert _find_project_config() is None
 
 
 class TestCordBeatHome:
@@ -195,6 +304,25 @@ class TestRunFixConfig:
         updated = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
         assert "metrics" not in updated
 
+    def test_eof_at_prompt_aborts_cleanly(self, tmp_path: Path) -> None:
+        home = tmp_path / ".cordbeat"
+        example_path = tmp_path / "config.example.yaml"
+        self._write_cfg(home, {"ai_backend": {}})
+        self._write_example(
+            example_path, {"ai_backend": {}, "metrics": {"enabled": False}}
+        )
+        with (
+            patch(
+                "cordbeat.tools.doctor._find_example_config",
+                return_value=example_path,
+            ),
+            patch("builtins.input", side_effect=EOFError),
+        ):
+            assert run_fix_config(home) == 0
+        # Nothing was appended.
+        updated = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+        assert "metrics" not in updated
+
 
 # ── show-config ───────────────────────────────────────────────────────────────
 
@@ -244,6 +372,11 @@ class TestMaskSecrets:
         d: dict = {"token": ""}
         _mask_secrets(d)
         assert d["token"] == ""
+
+    def test_non_dict_input_is_noop(self) -> None:
+        # Guard clause: non-dict values are ignored without error.
+        _mask_secrets("not a dict")
+        _mask_secrets(["list", "of", "things"])
 
 
 # ── sync-config ───────────────────────────────────────────────────────────────
@@ -321,3 +454,48 @@ class TestRunSyncConfig:
 
         result = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
         assert result["ai_backend"]["provider"] == "ollama"
+
+    def test_eof_at_prompt_aborts_cleanly(self, tmp_path: Path) -> None:
+        home = tmp_path / ".cordbeat"
+        src = tmp_path / "src" / "config.yaml"
+        self._make_cfg(src, {"ai_backend": {"provider": "openai"}})
+        self._make_cfg(home / "config.yaml", {"ai_backend": {"provider": "ollama"}})
+
+        with patch("builtins.input", side_effect=KeyboardInterrupt):
+            assert run_sync_config(home, src_path=src) == 0
+        # Unchanged because the user aborted at the prompt.
+        result = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+        assert result["ai_backend"]["provider"] == "ollama"
+
+
+class TestMainMenu:
+    def test_runs_selected_action_then_exits(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # "1" → health check, "bad" → non-numeric, "9" → out of range, "0" → exit.
+        answers = iter(["1", "bad", "9", "0"])
+        monkeypatch.setattr("builtins.input", lambda *_: next(answers))
+        monkeypatch.setattr(sys, "argv", ["cordbeat-doctor", str(tmp_path)])
+        with patch("cordbeat.tools.doctor.run_doctor", return_value=0) as health:
+            main()
+        health.assert_called_once()
+
+    def test_eof_exits_menu(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("builtins.input", MagicMock(side_effect=EOFError))
+        monkeypatch.setattr(sys, "argv", ["cordbeat-doctor", str(tmp_path)])
+        main()  # must not raise
+
+    def test_config_file_arg_sets_home_to_parent(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("ai_backend: {}\n", encoding="utf-8")
+        monkeypatch.setattr("builtins.input", MagicMock(side_effect=EOFError))
+        monkeypatch.setattr(sys, "argv", ["cordbeat-doctor", str(cfg)])
+        main()  # EOF exits immediately; banner shows the resolved home (parent)
+        assert str(tmp_path) in capsys.readouterr().out

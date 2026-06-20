@@ -549,8 +549,7 @@ class TestOpenAICompatBackend:
         backend = OpenAICompatBackend(cfg)
 
         content = (
-            "3. **Formulate Response:**\n"
-            "- Text: This is the final user-facing answer."
+            "3. **Formulate Response:**\n- Text: This is the final user-facing answer."
         )
         first_response = MagicMock()
         first_response.json.return_value = {
@@ -577,11 +576,7 @@ class TestOpenAICompatBackend:
         first_response = MagicMock()
         first_response.json.return_value = {
             "choices": [
-                {
-                    "message": {
-                        "content": "3. **Formulate Response:**\n- Text: final"
-                    }
-                }
+                {"message": {"content": "3. **Formulate Response:**\n- Text: final"}}
             ]
         }
         first_response.raise_for_status = MagicMock()
@@ -1045,3 +1040,72 @@ class TestGenerateJsonEmptyResponse:
 
         with pytest.raises(json.JSONDecodeError):
             await backend.generate_json("test")
+
+
+class TestGenerateChat:
+    def _ollama(self) -> OllamaBackend:
+        return OllamaBackend(
+            AIBackendConfig(provider="ollama", model="m", base_url="http://x")
+        )
+
+    def _openai(self) -> OpenAICompatBackend:
+        return OpenAICompatBackend(
+            AIBackendConfig(provider="openai", model="m", base_url="http://x")
+        )
+
+    async def test_ollama_generate_chat_returns_content(self) -> None:
+        backend = self._ollama()
+        resp = MagicMock()
+        resp.json.return_value = {"message": {"content": "chat reply"}}
+        resp.raise_for_status = MagicMock()
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=resp)
+
+        result = await backend.generate_chat([{"role": "user", "content": "hi"}])
+        assert result == "chat reply"
+        assert "/api/chat" in backend._client.post.call_args[0][0]
+
+    async def test_ollama_generate_chat_propagates_errors(self) -> None:
+        backend = self._ollama()
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(side_effect=RuntimeError("network"))
+        with pytest.raises(RuntimeError):
+            await backend.generate_chat([{"role": "user", "content": "hi"}])
+
+    async def test_ollama_generate_chat_with_vision_attaches_images(self) -> None:
+        backend = self._ollama()
+        resp = MagicMock()
+        resp.json.return_value = {"message": {"content": "ok"}}
+        resp.raise_for_status = MagicMock()
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=resp)
+
+        await backend.generate_chat_with_vision(
+            [{"role": "user", "content": "describe"}], ["b64img"]
+        )
+        sent_messages = backend._client.post.call_args[1]["json"]["messages"]
+        # Images are attached to the most recent user message.
+        assert sent_messages[-1]["images"] == ["b64img"]
+
+    async def test_openai_generate_chat_returns_content(self) -> None:
+        backend = self._openai()
+        resp = MagicMock()
+        resp.json.return_value = {"choices": [{"message": {"content": "hello"}}]}
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=resp)
+        backend._raise_for_status_with_body = MagicMock()  # type: ignore[method-assign]
+
+        result = await backend.generate_chat([{"role": "user", "content": "hi"}])
+        assert result == "hello"
+        assert "/chat/completions" in backend._client.post.call_args[0][0]
+
+    async def test_openai_generate_chat_unexpected_format_raises(self) -> None:
+        backend = self._openai()
+        resp = MagicMock()
+        resp.json.return_value = {"unexpected": "shape"}
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=resp)
+        backend._raise_for_status_with_body = MagicMock()  # type: ignore[method-assign]
+
+        with pytest.raises(AIBackendError, match="Unexpected response format"):
+            await backend.generate_chat([{"role": "user", "content": "hi"}])

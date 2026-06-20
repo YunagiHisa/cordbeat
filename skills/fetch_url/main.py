@@ -15,6 +15,14 @@ SSRF hardening mirrors ``api_call``:
 4. Redirects are not followed automatically; the resolved IP is pinned
    into the request URL and the original hostname is preserved via the
    ``Host`` header to defeat DNS rebinding.
+
+These pre-flight checks are intentionally duplicated with ``api_call`` (and
+deliberately not shared via a ``cordbeat`` import): skills run self-contained
+inside the subprocess sandbox, which restricts ``sys.path`` and forbids
+importing the host package. The subprocess runner additionally enforces SSRF
+centrally at ``connect()`` time (see ``_install_ssrf_guard``), so this block
+is defense-in-depth and provides clear, early error messages — it is no
+longer the only safeguard.
 """
 
 from __future__ import annotations

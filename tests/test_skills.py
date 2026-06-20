@@ -651,6 +651,52 @@ class TestSandboxEnforcement:
         result = await skill.execute({})
         assert result["result"] == "connected"
 
+    async def test_ssrf_blocked_for_network_skill(self, tmp_path: Path) -> None:
+        """A network=True skill cannot connect to the cloud metadata endpoint.
+
+        SSRF protection is enforced centrally by the runner, so even a skill
+        that never implements its own host checks is covered.
+        """
+        code = (
+            "import socket\n"
+            "def execute(**kwargs):\n"
+            "    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+            "    s.connect(('169.254.169.254', 80))\n"
+            "    return {'result': 'connected'}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(
+            skills_dir, "ssrf_skill", sandbox=True, network=True, main_code=code
+        )
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("ssrf_skill")
+        assert skill is not None
+        with pytest.raises(SkillPermissionError, match="SSRF protection"):
+            await skill.execute({})
+
+    async def test_ssrf_blocks_private_ip_for_network_skill(
+        self, tmp_path: Path
+    ) -> None:
+        """Private-range addresses are also blocked for network skills."""
+        code = (
+            "import socket\n"
+            "def execute(**kwargs):\n"
+            "    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+            "    s.connect(('10.0.0.1', 8080))\n"
+            "    return {'result': 'connected'}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(
+            skills_dir, "ssrf_private", sandbox=True, network=True, main_code=code
+        )
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("ssrf_private")
+        assert skill is not None
+        with pytest.raises(SkillPermissionError, match="SSRF protection"):
+            await skill.execute({})
+
     async def test_filesystem_blocked_outside_workdir(self, tmp_path: Path) -> None:
         """Sandboxed skill with filesystem=False cannot write outside work_dir."""
         outside_path = str(tmp_path / "outside.txt").replace("\\", "\\\\")

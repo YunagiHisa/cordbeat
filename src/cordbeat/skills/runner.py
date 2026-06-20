@@ -24,6 +24,7 @@ import builtins
 import importlib.util
 import inspect
 import io
+import ipaddress
 import json
 import os
 import pathlib
@@ -101,6 +102,92 @@ def _install_network_guard() -> None:
         raise SkillPermissionError("SSL contexts are not allowed for this skill")
 
     _ssl_module.create_default_context = _blocked_ctx
+
+
+# Cloud metadata endpoints — blocked regardless of address class so that a
+# skill cannot reach AWS/GCP/Azure instance credentials.
+_BLOCKED_METADATA_IPS: frozenset[Any] = frozenset(
+    {
+        ipaddress.ip_address("169.254.169.254"),
+        ipaddress.ip_address("fd00:ec2::254"),
+    }
+)
+
+
+def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True for addresses a sandboxed skill must never connect to."""
+    if ip in _BLOCKED_METADATA_IPS:
+        return True
+    return bool(
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _install_ssrf_guard() -> None:
+    """Block outbound connections to internal/metadata addresses (SSRF).
+
+    Installed for ``network=true`` skills as a framework-level, defense-in-
+    depth enforcement point: even a skill that uses ``httpx`` or raw sockets
+    naively cannot reach private/loopback/link-local/metadata services. The
+    check runs at ``connect()`` time against the *actual* destination IP,
+    which also defeats DNS-rebinding (the resolved address is validated, not
+    the hostname). Individual network skills (``fetch_url``, ``api_call``)
+    keep their own pre-flight checks as a first line of defense and for
+    clearer error messages, but they are no longer the *only* guard.
+    """
+    original_connect = _socket_module.socket.connect
+    original_connect_ex = _socket_module.socket.connect_ex
+
+    def _reject(host: Any, resolved: Any = None) -> None:
+        detail = f"{host} ({resolved})" if resolved is not None else f"{host}"
+        raise SkillPermissionError(
+            f"Connection to internal address {detail} is blocked (SSRF protection)"
+        )
+
+    def _check_address(address: Any) -> None:
+        # TCP/UDP addresses are (host, port[, flowinfo, scope_id]); other
+        # families (e.g. AF_UNIX str paths) are left to the lower layers.
+        if not isinstance(address, tuple) or not address:
+            return
+        host = address[0]
+        try:
+            ip = ipaddress.ip_address(str(host).split("%")[0])
+        except ValueError:
+            # A hostname literal was passed straight to connect(): resolve it
+            # and reject if any candidate address is internal.
+            port = address[1] if len(address) > 1 else None
+            try:
+                infos = _socket_module.getaddrinfo(
+                    host, port, type=_socket_module.SOCK_STREAM
+                )
+            except _socket_module.gaierror:
+                return
+            for *_unused, sockaddr in infos:
+                try:
+                    resolved = ipaddress.ip_address(str(sockaddr[0]).split("%")[0])
+                except ValueError:
+                    continue
+                if _is_blocked_ip(resolved):
+                    _reject(host, resolved)
+            return
+        if _is_blocked_ip(ip):
+            _reject(host)
+
+    def _guarded_connect(self: Any, address: Any) -> Any:
+        _check_address(address)
+        return original_connect(self, address)
+
+    def _guarded_connect_ex(self: Any, address: Any) -> Any:
+        _check_address(address)
+        return original_connect_ex(self, address)
+
+    _socket_module.socket.connect = _guarded_connect  # type: ignore[method-assign]
+    _socket_module.socket.connect_ex = _guarded_connect_ex  # type: ignore[method-assign]
 
 
 def _install_fs_guard(
@@ -190,13 +277,7 @@ def _install_fs_guard(
 
     def _restricted_os_open(path: Any, *args: Any, **kwargs: Any) -> int:
         flags = args[0] if args else kwargs.get("flags", 0)
-        write_flags = (
-            os.O_WRONLY
-            | os.O_RDWR
-            | os.O_CREAT
-            | os.O_TRUNC
-            | os.O_APPEND
-        )
+        write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
         _check(path, read_only=(int(flags) & write_flags) == 0)
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
@@ -430,6 +511,10 @@ def _run_skill(
 
     if not sandbox.get("network", False):
         _install_network_guard()
+    else:
+        # Network is permitted, but still enforce SSRF protection centrally so
+        # every network skill (including AI-proposed ones) is covered.
+        _install_ssrf_guard()
     if not sandbox.get("filesystem", False):
         stdlib_roots = tuple(
             Path(p)

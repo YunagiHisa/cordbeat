@@ -94,6 +94,14 @@ outbound HTTP. It hardens against common SSRF vectors:
 - All HTTP is via ``httpx.AsyncClient``; raw ``socket`` / ``urllib`` /
   ``requests`` are forbidden by the validator.
 
+In addition to the per-skill checks above, the subprocess runner installs a
+**central SSRF guard** for every ``network=true`` skill. It intercepts
+``connect()`` and rejects the connection if the *resolved* destination IP is
+private, loopback, link-local, multicast, reserved, or a cloud-metadata
+address. Because it validates the actual IP at connect time, it also defeats
+DNS rebinding and covers any skill (including AI-proposed ones) that talks to
+the network without implementing its own checks.
+
 ### AI Output Validation
 
 All AI-generated output passes through ``validation.py`` before being

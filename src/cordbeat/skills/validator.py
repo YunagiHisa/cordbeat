@@ -100,8 +100,13 @@ ALLOWED_IMPORTS: frozenset[str] = frozenset(
         "ipaddress",
         "socket",
         "ssl",
-        # HTTP client (skills requiring network must also set
-        # safety.network=true and pass host checks in the skill runner).
+        # HTTP client. Skills requiring network must set
+        # safety.network=true; the subprocess sandbox then permits socket
+        # use. SSRF protection (blocking private/loopback/metadata hosts) is
+        # enforced centrally by the runner's connect-time guard
+        # (_install_ssrf_guard), so every network skill is covered. Skills
+        # such as fetch_url / api_call additionally pre-flight via
+        # _resolve_and_check for clearer errors and redirect handling.
         "httpx",
         "httpcore",
         # Markdown / YAML / other lightweight parsers often useful

@@ -15,6 +15,12 @@ Before sending any request we:
 
 This is intentionally conservative; cloud VM deployments in particular
 must *not* be able to reach their metadata service.
+
+The checks below are intentionally duplicated with ``fetch_url`` (and not
+shared via a ``cordbeat`` import): sandboxed skills are self-contained and
+cannot import the host package. The subprocess runner also enforces SSRF
+centrally at ``connect()`` time (see ``_install_ssrf_guard``), so this is
+defense-in-depth plus clear, early error messages — not the only safeguard.
 """
 
 from __future__ import annotations

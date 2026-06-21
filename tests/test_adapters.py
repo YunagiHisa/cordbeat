@@ -734,7 +734,8 @@ class TestDiscordSkillConfirm:
             view = channel.send.call_args.kwargs["view"]
 
             inter = MagicMock()
-            inter.response.edit_message = AsyncMock()
+            inter.response.defer = AsyncMock()
+            inter.edit_original_response = AsyncMock()
             await view.allow_once(inter, MagicMock())
             await view.deny(inter, MagicMock())
 
@@ -743,6 +744,43 @@ class TestDiscordSkillConfirm:
         ]
         assert "/approve p1" in sent
         assert "/reject p1" in sent
+        assert inter.response.defer.await_count == 2
+        assert inter.edit_original_response.await_count == 2
+
+    async def test_button_acknowledges_before_core_send_failure(self) -> None:
+        adapter = self._adapter()
+        channel = MagicMock()
+        channel.send = AsyncMock()
+        adapter._bot = MagicMock()
+        adapter._bot.get_channel.return_value = channel
+        adapter._user_channels["u1"] = 123
+        adapter._ws = AsyncMock()
+        adapter._ws.send = AsyncMock(side_effect=RuntimeError("closed"))
+        data = {
+            "content": "fallback",
+            "metadata": {
+                "proposal_id": "p1",
+                "skill_name": "draw",
+                "skill_params": {"a": "b"},
+            },
+        }
+
+        with (
+            patch.dict("sys.modules", {"discord": _discord_ui_mock()}),
+            patch("cordbeat.adapters.discord.logger"),
+        ):
+            await adapter._dispatch_skill_confirm("u1", data)
+            view = channel.send.call_args.kwargs["view"]
+
+            inter = MagicMock()
+            inter.response.defer = AsyncMock()
+            inter.edit_original_response = AsyncMock()
+            await view.allow_once(inter, MagicMock())
+
+        inter.response.defer.assert_awaited_once()
+        inter.edit_original_response.assert_awaited_once()
+        content = inter.edit_original_response.call_args.kwargs["content"]
+        assert "Failed to send approval" in content
 
     async def test_falls_back_to_text_when_no_channel(self) -> None:
         adapter = self._adapter()

@@ -1,0 +1,6 @@
+[project]
+name = "cordbeat-skill-file-search"
+version = "1.0.0"
+description = "CordBeat builtin skill: search files in an approved local directory"
+requires-python = ">=3.11"
+dependencies = []

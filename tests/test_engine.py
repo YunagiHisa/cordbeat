@@ -20,6 +20,7 @@ from cordbeat.models import (
     MemoryLayer,
     MessageType,
     ProposalStatus,
+    ProposalType,
     SafetyLevel,
     SkillMeta,
     SoulCaller,
@@ -3761,6 +3762,82 @@ class TestReActLoop:
         assert user_id is not None
         proposals = await memory.get_certain_records(user_id, record_type="proposal")
         assert len(proposals) == 1
+
+    async def test_create_skill_virtual_tool_is_advertised(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Normal text chat can see the parent-implemented create_skill tool."""
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Can you create a skill?",
+        )
+        await eng.handle_message(msg)
+
+        system = mock_ai.generate.await_args.kwargs["system"]
+        assert "create_skill" in system
+        assert "Propose a new local CordBeat skill" in system
+
+    async def test_create_skill_virtual_tool_requests_confirmation(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """create_skill stores a skill proposal instead of failing as unknown."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return (
+                "[SKILL: create_skill | name=hello_tool | "
+                "description=Say hello | usage=Use for greeting | "
+                "code=def execute(**kwargs):\\n    return {'msg': 'hello'}]"
+            )
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Create a hello skill",
+        )
+        await eng.handle_message(msg)
+
+        mock_ai.generate_chat.assert_not_awaited()
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        confirm = next(m for m in sent if m.type == MessageType.SKILL_CONFIRM)
+        assert confirm.metadata["skill_name"] == "create_skill"
+        assert confirm.metadata["skill_params"]["name"] == "hello_tool"
+
+        user_id = await memory.resolve_user("test", "user1")
+        assert user_id is not None
+        proposals = await memory.get_certain_records(user_id, record_type="proposal")
+        assert len(proposals) == 1
+        meta = json.loads(proposals[0]["metadata"])
+        assert meta["proposal_type"] == ProposalType.SKILL_PROPOSAL
+        assert meta["proposed_skill"]["name"] == "hello_tool"
+        assert "\n    return" in meta["proposed_skill"]["code"]
 
     async def test_react_disabled_strips_tags(
         self,

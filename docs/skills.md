@@ -22,6 +22,11 @@ skills/
 Skills are user-created. Drop a directory containing `skill.yaml` and
 `main.py` into the skills directory, and CordBeat auto-detects it.
 
+Direct text chat also exposes a built-in `create_skill` proposal tool. It does
+not install code immediately; it stores a skill-creation proposal for user
+approval, then the approved proposal is validated and installed by the proposal
+executor.
+
 ---
 
 ## skill.yaml Format
@@ -115,6 +120,12 @@ system creates a **proposal** instead of executing immediately:
 
 See [Heartbeat — Proposal Approval System](heartbeat.md#proposal-approval-system)
 for the full lifecycle.
+
+Filesystem tools are intentionally split by scope:
+
+- `file_read` reads one approved file.
+- `file_search` scans an approved directory for filenames or text content.
+- `file_write` writes one approved file.
 
 ---
 

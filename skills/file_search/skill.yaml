@@ -1,0 +1,41 @@
+name: file_search
+description: "Search local files by filename or text content"
+description_en: "Search local files by filename or text content"
+version: "1.0.0"
+author: "cordbeat"
+
+usage: |
+  Use this skill to scan a local directory requested by the user.
+  It can list matching file paths and optionally search text file contents.
+  Scanning the approved path requires user confirmation before execution.
+
+parameters:
+  - name: root
+    type: string
+    required: true
+    description: "Directory to scan"
+  - name: query
+    type: string
+    required: false
+    description: "Text to search for in filenames and file contents"
+  - name: name_glob
+    type: string
+    required: false
+    description: "Filename glob pattern such as *.py (default: *)"
+  - name: max_results
+    type: integer
+    required: false
+    description: "Maximum matching files to return (default: 50)"
+  - name: max_file_bytes
+    type: integer
+    required: false
+    description: "Maximum bytes to read from each file when searching content"
+
+contexts:
+  shared_voice: false
+
+safety:
+  level: requires_confirmation
+  sandbox: true
+  network: false
+  filesystem: true

@@ -59,6 +59,13 @@ _SKILL_TAG_RE = re.compile(
     r"\[SKILL:\s*([^\|\]\n]+?)(?:\s*\|\s*([^\]\n]*))?\]",
     re.IGNORECASE,
 )
+_CREATE_SKILL_TOOL_NAME = "create_skill"
+_CREATE_SKILL_TOOL_DESCRIPTION = (
+    "- create_skill: Propose a new local CordBeat skill for user approval "
+    "(safety=requires_confirmation, params=[name: string, description: string, "
+    "usage: string, parameters: string, code: string]). Use code with escaped "
+    "\\n newlines. The optional parameters value is a JSON list."
+)
 _HTTP_URL_RE = re.compile(r"https?://[^\s<>\]\)\"']+", re.IGNORECASE)
 _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 _TRANSIENT_HTTP_RETRY_DELAY_SECONDS = 1.0
@@ -290,6 +297,70 @@ def _format_react_params(params: dict[str, Any]) -> str:
             rendered = json.dumps(rendered, ensure_ascii=False)
         parts.append(f"{safe_key}={rendered}")
     return ", ".join(parts)
+
+
+def _append_virtual_chat_tools(skills_desc: str) -> str:
+    """Expose parent-implemented chat tools beside registry-backed skills."""
+
+    if not skills_desc or skills_desc == "(no skills available)":
+        return _CREATE_SKILL_TOOL_DESCRIPTION
+    return f"{skills_desc}\n{_CREATE_SKILL_TOOL_DESCRIPTION}"
+
+
+def _decode_skill_param_text(value: Any) -> str:
+    """Decode lightweight escape sequences used inside single-line skill tags."""
+
+    return str(value or "").replace("\\r\\n", "\n").replace("\\n", "\n").replace(
+        "\\t", "\t"
+    )
+
+
+def _parse_skill_parameters_param(value: Any) -> list[dict[str, Any]]:
+    """Parse create_skill's optional JSON parameter-list string."""
+
+    text = str(value or "").strip()
+    if not text:
+        return []
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(raw, list):
+        return []
+    params: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        params.append(
+            {
+                "name": name,
+                "type": str(item.get("type") or "string"),
+                "required": item.get("required", True) is not False,
+                "description": str(item.get("description") or ""),
+            }
+        )
+    return params
+
+
+def _build_proposed_skill_from_react_params(
+    params: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Convert a create_skill tag into ProposalExecutor's proposed_skill shape."""
+
+    name = str(params.get("name") or "").strip()
+    code = _decode_skill_param_text(params.get("code"))
+    if not name or not code.strip():
+        return None
+    return {
+        "name": name,
+        "description": str(params.get("description") or "AI-generated skill"),
+        "usage": _decode_skill_param_text(params.get("usage")),
+        "parameters": _parse_skill_parameters_param(params.get("parameters")),
+        "code": code,
+    }
 
 
 class CoreEngine:
@@ -593,6 +664,7 @@ class CoreEngine:
             skills_desc = self._skills.get_skill_descriptions_for_prompt(
                 exclude_names=excluded_skills
             )
+            skills_desc = _append_virtual_chat_tools(skills_desc)
         web_search_available = self._skill_is_available(
             "web_search", shared_voice=shared_voice, is_voice=message.is_voice
         )
@@ -1046,6 +1118,50 @@ class CoreEngine:
                         k, _, v = part.partition("=")
                         params[k.strip()] = v.strip()
 
+                if skill_name == _CREATE_SKILL_TOOL_NAME:
+                    if shared_voice or message.is_voice:
+                        results.append(
+                            ToolCallResult(
+                                skill_name=skill_name,
+                                params=params,
+                                output="Unavailable in this context",
+                                is_error=True,
+                            )
+                        )
+                        continue
+                    proposed = _build_proposed_skill_from_react_params(params)
+                    if proposed is None:
+                        results.append(
+                            ToolCallResult(
+                                skill_name=skill_name,
+                                params=params,
+                                output=(
+                                    "Missing required create_skill parameters: "
+                                    "name and code"
+                                ),
+                                is_error=True,
+                            )
+                        )
+                        continue
+                    logger.info(
+                        "ReAct: create_skill requires confirmation; requesting approval"
+                    )
+                    proposal_id = await self._request_skill_creation_confirmation(
+                        user_id=user_id,
+                        message=message,
+                        proposed_skill=proposed,
+                    )
+                    results.append(
+                        ToolCallResult(
+                            skill_name=skill_name,
+                            params=params,
+                            output=f"Approval required: {proposal_id}",
+                            is_error=True,
+                        )
+                    )
+                    stopped_early = True
+                    break
+
                 skill = self._skills.get(skill_name)
                 if skill is not None and any(
                     p.name == "user_id" for p in skill.meta.parameters
@@ -1415,6 +1531,50 @@ class CoreEngine:
                 "proposal_id": proposal_id,
                 "skill_name": skill_name,
                 "skill_params": skill_params,
+            },
+        )
+        await self._gateway.send_to_adapter(message.adapter_id, confirm)
+        return proposal_id
+
+    async def _request_skill_creation_confirmation(
+        self,
+        *,
+        user_id: str,
+        message: GatewayMessage,
+        proposed_skill: dict[str, Any],
+    ) -> str:
+        """Persist a skill-creation proposal and ask the adapter to confirm it."""
+        skill_name = str(proposed_skill.get("name") or "unknown")
+        metadata: dict[str, Any] = {
+            "status": ProposalStatus.PENDING,
+            "proposal_type": ProposalType.SKILL_PROPOSAL,
+            "proposed_skill": proposed_skill,
+            "adapter_id": message.adapter_id,
+        }
+        content = (
+            f"Skill creation requires confirmation.\n"
+            f"Skill: {skill_name}\n"
+            f"Description: {proposed_skill.get('description', '')}"
+        )
+        proposal_id = await self._memory.add_certain_record(
+            user_id=user_id,
+            content=content,
+            record_type="proposal",
+            metadata=metadata,
+        )
+        confirm = GatewayMessage(
+            type=MessageType.SKILL_CONFIRM,
+            adapter_id=message.adapter_id,
+            platform_user_id=message.platform_user_id,
+            content=f"🔧 New skill '{skill_name}' requires approval.",
+            metadata={
+                **self._reply_metadata(message),
+                "proposal_id": proposal_id,
+                "skill_name": _CREATE_SKILL_TOOL_NAME,
+                "skill_params": {
+                    "name": skill_name,
+                    "description": proposed_skill.get("description", ""),
+                },
             },
         )
         await self._gateway.send_to_adapter(message.adapter_id, confirm)

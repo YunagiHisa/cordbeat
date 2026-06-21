@@ -78,6 +78,22 @@ class TestSkillRegistry:
         registry.load_all()
         assert len(registry.available_skills) == 0
 
+    async def test_relative_skills_dir_executes_after_child_chdir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Relative skills_dir is resolved before the runner changes cwd."""
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "echo", sandbox=True)
+        monkeypatch.chdir(tmp_path)
+
+        registry = SkillRegistry("skills")
+        registry.load_all()
+        skill = registry.get("echo")
+        assert skill is not None
+
+        result = await skill.execute({})
+        assert result["result"] == "ok"
+
     def test_dangerous_skill_disabled_by_default(self, tmp_path: Path) -> None:
         skills_dir = tmp_path / "skills"
         _create_skill(skills_dir, "danger", safety="dangerous")
@@ -1121,6 +1137,51 @@ class TestFileReadSkill:
         assert meta.network is False
 
 
+class TestFileSearchSkill:
+    async def test_file_search_finds_filename_and_content(self, tmp_path: Path) -> None:
+        """file_search scans an approved directory for names and text content."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "file_search")
+        root = tmp_path / "project"
+        root.mkdir()
+        (root / "alpha.py").write_text("print('hello')\n", encoding="utf-8")
+        (root / "notes.txt").write_text("needle lives here\n", encoding="utf-8")
+        (root / "image.bin").write_bytes(b"\x00\x01needle")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("file_search")
+        assert skill is not None
+
+        result = await skill.execute(
+            {
+                "root": str(root),
+                "query": "needle",
+                "name_glob": "*",
+                "max_results": 10,
+            }
+        )
+
+        paths = {item["relative_path"] for item in result["matches"]}
+        assert "notes.txt" in paths
+        assert "image.bin" not in paths
+        assert result["returned"] == 1
+
+    async def test_file_search_meta(self, tmp_path: Path) -> None:
+        """file_search requires confirmation and exposes filesystem access."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "file_search")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        meta = registry.available_skills["file_search"]
+        assert meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION
+        assert meta.sandbox is True
+        assert meta.filesystem is True
+
+
 class TestShellExecSkill:
     def test_shell_exec_disabled_by_default(self, tmp_path: Path) -> None:
         """shell_exec is loaded as dangerous and disabled."""
@@ -1524,6 +1585,7 @@ class TestBuiltinSkillRegistry:
             "read_diary",
             "timer",
             "file_read",
+            "file_search",
             "shell_exec",
             "web_search",
             "weather",
@@ -1537,7 +1599,7 @@ class TestBuiltinSkillRegistry:
 
         registry = SkillRegistry(skills_dir)
         registry.load_all()
-        assert len(registry.available_skills) == 11
+        assert len(registry.available_skills) == 12
 
     def test_enabled_builtins(self, tmp_path: Path) -> None:
         """Only safe skills and requires_confirmation skills are enabled."""
@@ -1547,6 +1609,7 @@ class TestBuiltinSkillRegistry:
             "read_diary",
             "timer",
             "file_read",
+            "file_search",
             "shell_exec",
             "web_search",
             "weather",
@@ -1565,6 +1628,7 @@ class TestBuiltinSkillRegistry:
         assert "read_diary" in enabled
         assert "timer" in enabled
         assert "file_read" in enabled
+        assert "file_search" in enabled
         assert "web_search" in enabled
         assert "weather" in enabled
         assert "fetch_url" in enabled
@@ -1584,6 +1648,7 @@ class TestBuiltinSkillRegistry:
             "read_diary",
             "timer",
             "file_read",
+            "file_search",
             "shell_exec",
             "web_search",
             "weather",
@@ -1601,6 +1666,7 @@ class TestBuiltinSkillRegistry:
         assert "read_diary" in desc
         assert "timer" in desc
         assert "file_read" in desc
+        assert "file_search" in desc
         assert "web_search" in desc
         assert "weather" in desc
         assert "file_write" in desc

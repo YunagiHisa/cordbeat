@@ -169,7 +169,7 @@ class SkillRegistry:
         env_manager: SkillEnvManager | None = None,
         rate_limiter: SkillRateLimiter | None = None,
     ) -> None:
-        self._skills_dir = Path(skills_dir)
+        self._skills_dir = Path(skills_dir).expanduser().resolve()
         self._skills: dict[str, Skill] = {}
         self._sandbox_config = sandbox_config or DEFAULT_CONFIG
         self._env_manager = (

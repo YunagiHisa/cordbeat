@@ -540,12 +540,43 @@ class TestDiscordAdapterInternals:
         interaction = MagicMock()
         interaction.user.id = 55
         interaction.channel_id = 99
-        interaction.response.send_message = AsyncMock()
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
         await adapter._forward_core_command_interaction(interaction, "/link")
+        interaction.response.defer.assert_awaited_once_with(
+            ephemeral=True,
+            thinking=True,
+        )
         adapter._ws.send.assert_awaited_once()
         payload = json.loads(adapter._ws.send.call_args[0][0])
         assert payload["content"] == "/link"
         assert adapter._user_channels["55"] == 99
+        interaction.followup.send.assert_awaited_once_with(
+            "Command sent to CordBeat.",
+            ephemeral=True,
+        )
+
+    async def test_forward_core_command_interaction_acknowledges_send_failure(
+        self,
+    ) -> None:
+        adapter = self._adapter()
+        adapter._ws = AsyncMock()
+        adapter._ws.send = AsyncMock(side_effect=RuntimeError("closed"))
+        interaction = MagicMock()
+        interaction.user.id = 55
+        interaction.channel_id = 99
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+
+        with patch("cordbeat.adapters.discord.logger"):
+            await adapter._forward_core_command_interaction(interaction, "/link")
+
+        interaction.response.defer.assert_awaited_once_with(
+            ephemeral=True,
+            thinking=True,
+        )
+        interaction.followup.send.assert_awaited_once()
+        assert "Failed to send command" in interaction.followup.send.call_args.args[0]
 
     # ── dispatch routing ─────────────────────────────────────────────
     async def test_dispatch_core_message_plain_text(self) -> None:
@@ -1618,6 +1649,42 @@ class TestTelegramAdapter:
         payload = json.loads(adapter._ws.send.call_args[0][0])
         assert payload["content"] == "/approve prop-9"
         assert payload["platform_user_id"] == "5"
+        query.answer.assert_awaited_once()
+
+    async def test_callback_handler_acknowledges_before_core_send_failure(self) -> None:
+        from cordbeat.adapters.telegram import TelegramAdapter
+
+        adapter = TelegramAdapter(AdapterConfig(options={"token": "t"}))
+        _, handlers = await _start_telegram_and_capture(adapter)
+        calls: list[str] = []
+
+        async def answer() -> None:
+            calls.append("answer")
+
+        async def send(payload: str) -> None:
+            calls.append("send")
+            raise RuntimeError("closed")
+
+        adapter._ws = AsyncMock()
+        adapter._ws.send = AsyncMock(side_effect=send)
+
+        update = MagicMock()
+        query = update.callback_query
+        query.data = "skill_confirm:approve:prop-9"
+        query.answer = AsyncMock(side_effect=answer)
+        query.edit_message_reply_markup = AsyncMock()
+        query.message.reply_text = AsyncMock()
+        update.effective_user.id = 5
+
+        with patch("cordbeat.adapters.telegram.logger"):
+            await handlers["callback"](update, MagicMock())
+
+        assert calls == ["answer", "send"]
+        query.message.reply_text.assert_awaited_once()
+        assert (
+            "Failed to send approval"
+            in query.message.reply_text.call_args.args[0]
+        )
 
     async def test_callback_handler_ignores_unmatched_data(self) -> None:
         from cordbeat.adapters.telegram import TelegramAdapter

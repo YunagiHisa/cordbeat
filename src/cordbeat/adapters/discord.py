@@ -856,22 +856,59 @@ class DiscordAdapter(RetryableConnection):
     async def _forward_core_command_interaction(
         self, interaction: Any, command: str
     ) -> None:
+        async def maybe_await(value: Any) -> None:
+            if inspect.isawaitable(value):
+                await value
+
         if self._ws is None:
-            await interaction.response.send_message(
-                "CordBeat Core is not connected.", ephemeral=True
+            await maybe_await(
+                interaction.response.send_message(
+                    "CordBeat Core is not connected.", ephemeral=True
+                )
             )
             return
+
+        deferred = False
+        try:
+            await maybe_await(interaction.response.defer(ephemeral=True, thinking=True))
+            deferred = True
+        except Exception:
+            logger.warning("Failed to defer Discord command interaction", exc_info=True)
 
         platform_user_id = str(interaction.user.id)
         channel_id = getattr(interaction, "channel_id", None)
         if channel_id is not None:
             self._remember_user_channel(platform_user_id, int(channel_id))
 
-        self._mark_proposal_action_sent(command)
-        await self._ws.send(self._core_command_payload(command, platform_user_id))
-        await interaction.response.send_message(
-            "Command sent to CordBeat.", ephemeral=True
-        )
+        try:
+            self._mark_proposal_action_sent(command)
+            await self._ws.send(self._core_command_payload(command, platform_user_id))
+        except Exception:
+            logger.warning("Failed to forward Discord command to Core", exc_info=True)
+            if deferred:
+                await maybe_await(
+                    interaction.followup.send(
+                        "Failed to send command to CordBeat Core.", ephemeral=True
+                    )
+                )
+            else:
+                await maybe_await(
+                    interaction.response.send_message(
+                        "Failed to send command to CordBeat Core.", ephemeral=True
+                    )
+                )
+            return
+
+        if deferred:
+            await maybe_await(
+                interaction.followup.send("Command sent to CordBeat.", ephemeral=True)
+            )
+        else:
+            await maybe_await(
+                interaction.response.send_message(
+                    "Command sent to CordBeat.", ephemeral=True
+                )
+            )
 
     def _start_typing(self, channel_id: int, channel: Any) -> None:
         """Start a background typing indicator loop for the given channel."""

@@ -316,6 +316,8 @@ class TelegramAdapter(RetryableConnection):
                 await query.answer("Unknown action")
                 return
 
+            await query.answer()
+            sent = False
             if self._ws is not None:
                 try:
                     user = update.effective_user
@@ -331,6 +333,7 @@ class TelegramAdapter(RetryableConnection):
                             }
                         )
                     )
+                    sent = True
                 except Exception:
                     logger.warning("Failed to forward skill confirm to Core")
 
@@ -338,10 +341,12 @@ class TelegramAdapter(RetryableConnection):
                 "approve": "✅ Approved once",
                 "reject": "❌ Denied",
             }
-            await query.answer()
+            label = label_map[action]
+            if not sent:
+                label = "⚠️ Failed to send approval to CordBeat Core."
             try:
                 await query.edit_message_reply_markup(reply_markup=None)
-                await query.message.reply_text(f"{label_map[action]}")
+                await query.message.reply_text(label)
             except Exception:
                 pass
 

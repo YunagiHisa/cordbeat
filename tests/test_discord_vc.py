@@ -1008,7 +1008,8 @@ class TestSlashCommands:
         interaction.user.id = 123
         interaction.channel_id = 456
         interaction.response = AsyncMock()
-        interaction.response.send_message = AsyncMock()
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
 
         await adapter._forward_core_command_interaction(
             interaction, "/approve prop-alpha"
@@ -1019,7 +1020,14 @@ class TestSlashCommands:
         assert sent["platform_user_id"] == "123"
         assert sent["content"] == "/approve prop-alpha"
         assert adapter._user_channels["123"] == 456
-        interaction.response.send_message.assert_awaited_once()
+        interaction.response.defer.assert_awaited_once_with(
+            ephemeral=True,
+            thinking=True,
+        )
+        interaction.followup.send.assert_awaited_once_with(
+            "Command sent to CordBeat.",
+            ephemeral=True,
+        )
 
 
 # ---------------------------------------------------------------------------

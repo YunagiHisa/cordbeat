@@ -367,7 +367,7 @@ class ProposalExecutor:
         self._skills.load_all()
         logger.info("Installed proposed skill: %s", name)
 
-    async def execute_approved(self) -> None:
+    async def execute_approved(self, proposal_id: str | None = None) -> None:
         """Check for approved proposals and execute them."""
         proposals = await self._memory.get_pending_proposals(
             status=ProposalStatus.APPROVED,
@@ -376,7 +376,9 @@ class ProposalExecutor:
         for proposal in proposals:
             meta = json.loads(proposal.get("metadata") or "{}")
             proposal_type = meta.get("proposal_type", ProposalType.GENERAL)
-            proposal_id = proposal["id"]
+            current_id = proposal["id"]
+            if proposal_id is not None and current_id != proposal_id:
+                continue
 
             if proposal_type == ProposalType.SKILL_EXECUTION:
                 await self._execute_skill_proposal(proposal, meta)
@@ -387,10 +389,10 @@ class ProposalExecutor:
             else:
                 logger.info(
                     "General proposal %s acknowledged",
-                    proposal_id,
+                    current_id,
                 )
                 await self._memory.update_proposal_status(
-                    proposal_id, ProposalStatus.EXECUTED
+                    current_id, ProposalStatus.EXECUTED
                 )
                 await self._notify_result(
                     proposal,

@@ -1730,11 +1730,61 @@ class TestProposalCommands:
         proposal = await memory.get_proposal(pid)
         assert proposal is not None
         meta = json.loads(proposal["metadata"])
-        assert meta["status"] == ProposalStatus.APPROVED
+        assert meta["status"] == ProposalStatus.EXECUTED
 
         # Verify reply was sent
-        reply_call = mock_gateway.send_to_adapter.call_args
-        assert "approved" in reply_call[0][1].content.lower()
+        sent = [
+            c[0][1].content.lower()
+            for c in mock_gateway.send_to_adapter.call_args_list
+        ]
+        assert any("approved" in content for content in sent)
+
+    async def test_approve_skill_proposal_executes_immediately(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        skills: SkillRegistry,
+    ) -> None:
+        """Approving a skill creation proposal installs it without heartbeat wait."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        pid = await memory.add_certain_record(
+            user_id="u1",
+            content="Create skill hello",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.PENDING,
+                "proposal_type": ProposalType.SKILL_PROPOSAL,
+                "adapter_id": "test",
+                "proposed_skill": {
+                    "name": "hello",
+                    "description": "Say hello",
+                    "usage": "Greeting",
+                    "parameters": [],
+                    "code": "def execute(**kw):\n    return {'msg': 'hello'}\n",
+                },
+            },
+        )
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content=f"/approve {pid}",
+        )
+        await engine.handle_message(msg)
+
+        proposal = await memory.get_proposal(pid)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.EXECUTED
+        assert skills.get("hello") is not None
+        assert (skills.skills_dir / "hello" / "main.py").exists()
+
+        sent = [c[0][1].content for c in mock_gateway.send_to_adapter.call_args_list]
+        assert any("Proposal approved" in content for content in sent)
+        assert any("installed successfully" in content for content in sent)
 
     async def test_reject_proposal(
         self,

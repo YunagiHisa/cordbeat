@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
+from cordbeat.agent.proposals import ProposalExecutor
 from cordbeat.agent.react_types import MediaArtifact, ToolCallResult, ToolTrace
 from cordbeat.agent.soul import Soul
 from cordbeat.ai.backend import AIBackend, voice_context_scope
@@ -2248,6 +2249,13 @@ class CoreEngine:
             f"✅ Proposal approved: {proposal['content'][:80]}",
         )
         logger.info("Proposal %s approved by user %s", proposal_id, user_id)
+        executor = ProposalExecutor(
+            self._memory,
+            self._skills,
+            self._gateway,
+            self._soul,
+        )
+        await executor.execute_approved(proposal_id=proposal_id)
 
     async def _cmd_reject(self, message: GatewayMessage, proposal_id: str) -> None:
         """Reject a pending proposal."""

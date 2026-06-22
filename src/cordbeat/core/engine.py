@@ -72,7 +72,7 @@ _CREATE_SKILL_TOOL_DESCRIPTION = (
 )
 _HTTP_URL_RE = re.compile(r"https?://[^\s<>\]\)\"']+", re.IGNORECASE)
 _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
-_TRANSIENT_HTTP_RETRY_DELAY_SECONDS = 1.0
+_TRANSIENT_HTTP_RETRY_DELAYS_SECONDS = (1.0, 2.0)
 
 
 _SANDBOX_LOCAL_FILE_PARAMS: dict[str, str] = {
@@ -1199,40 +1199,47 @@ class CoreEngine:
         prompt: str,
         system_prompt: str,
     ) -> str:
-        """Generate chat text, retrying transient provider failures once."""
+        """Generate chat text, retrying transient provider failures briefly."""
 
-        try:
-            return await self._ai.generate(prompt=prompt, system=system_prompt)
-        except Exception as exc:
-            if _is_timeout_exception(exc):
-                retry_system = (
-                    system_prompt + "\n/no_think\n"
-                    "The previous generation timed out. Reply concisely and "
-                    "directly. Do not use hidden reasoning."
-                )
+        for attempt in range(len(_TRANSIENT_HTTP_RETRY_DELAYS_SECONDS) + 1):
+            try:
+                return await self._ai.generate(prompt=prompt, system=system_prompt)
+            except Exception as exc:
+                if _is_timeout_exception(exc):
+                    retry_system = (
+                        system_prompt + "\n/no_think\n"
+                        "The previous generation timed out. Reply concisely and "
+                        "directly. Do not use hidden reasoning."
+                    )
+                    logger.warning(
+                        "AI generation timed out; retrying once with no-think "
+                        "short output"
+                    )
+                    return await self._ai.generate(
+                        prompt=prompt,
+                        system=retry_system,
+                        temperature=0.5,
+                        max_tokens=1024,
+                    )
+
+                status_code = _retryable_http_status_code(exc)
+                if status_code is None:
+                    raise
+                if attempt >= len(_TRANSIENT_HTTP_RETRY_DELAYS_SECONDS):
+                    raise
+
+                delay = _TRANSIENT_HTTP_RETRY_DELAYS_SECONDS[attempt]
                 logger.warning(
-                    "AI generation timed out; retrying once with no-think short output"
+                    "AI generation failed with retryable HTTP %d; retrying "
+                    "%d/%d in %.1fs",
+                    status_code,
+                    attempt + 1,
+                    len(_TRANSIENT_HTTP_RETRY_DELAYS_SECONDS),
+                    delay,
                 )
-                return await self._ai.generate(
-                    prompt=prompt,
-                    system=retry_system,
-                    temperature=0.5,
-                    max_tokens=1024,
-                )
+                await asyncio.sleep(delay)
 
-            status_code = _retryable_http_status_code(exc)
-            if status_code is None:
-                raise
-
-        logger.warning(
-            "AI generation failed with retryable HTTP %d; retrying once",
-            status_code,
-        )
-        await asyncio.sleep(_TRANSIENT_HTTP_RETRY_DELAY_SECONDS)
-        return await self._ai.generate(
-            prompt=prompt,
-            system=system_prompt,
-        )
+        raise RuntimeError("unreachable retry state")
 
     async def _post_process_message(
         self,

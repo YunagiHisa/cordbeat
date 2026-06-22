@@ -907,7 +907,7 @@ class TestCoreEngine:
         assert retry_call.kwargs["max_tokens"] == 1024
         assert retry_call.kwargs["temperature"] == 0.5
 
-    async def test_text_generation_retryable_http_error_retries_once(
+    async def test_text_generation_retryable_http_error_retries_until_recovered(
         self,
         soul: Soul,
         memory: MemoryStore,
@@ -915,7 +915,7 @@ class TestCoreEngine:
         mock_gateway: AsyncMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Transient provider overload errors retry once before failing."""
+        """Transient provider overload errors retry briefly before failing."""
         sleep = AsyncMock()
         monkeypatch.setattr("cordbeat.core.engine.asyncio.sleep", sleep)
         ai = AsyncMock()
@@ -962,6 +962,66 @@ class TestCoreEngine:
         assert reply.content == "Recovered after provider retry."
         assert main_attempts == 2
         sleep.assert_awaited_once()
+
+    async def test_text_generation_retryable_http_error_retries_two_failures(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Provider 503 followed by 500 can still recover on the next attempt."""
+        sleep = AsyncMock()
+        monkeypatch.setattr("cordbeat.core.engine.asyncio.sleep", sleep)
+        ai = AsyncMock()
+        main_attempts = 0
+
+        async def _generate(**kwargs: object) -> str:
+            nonlocal main_attempts
+            prompt = kwargs.get("prompt", "")
+            if isinstance(prompt, str) and "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if isinstance(prompt, str) and "what emotion" in prompt.lower():
+                return '{"emotion": "neutral", "intensity": 0.4}'
+            if isinstance(prompt, str) and "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "retry", "emotional_tone": "neutral",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            main_attempts += 1
+            if main_attempts <= 2:
+                request = httpx.Request("POST", "https://api.example.test/chat")
+                response = httpx.Response(
+                    503 if main_attempts == 1 else 500,
+                    request=request,
+                )
+                raise httpx.HTTPStatusError(
+                    "Transient provider error",
+                    request=request,
+                    response=response,
+                )
+            return "Recovered after two provider retries."
+
+        ai.generate = AsyncMock(side_effect=_generate)
+        eng = CoreEngine(
+            ai=ai, soul=soul, memory=memory, skills=skills, gateway=mock_gateway
+        )
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Hi!",
+        )
+        await eng.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args.args[1]
+        assert reply.type == MessageType.MESSAGE
+        assert reply.content == "Recovered after two provider retries."
+        assert main_attempts == 3
+        assert sleep.await_count == 2
+        assert [call.args[0] for call in sleep.await_args_list] == [1.0, 2.0]
 
     async def test_memory_extraction_stores_facts(
         self,

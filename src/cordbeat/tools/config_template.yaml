@@ -194,6 +194,7 @@ react:
 skills:
   default_rate_limit_per_minute: 0  # 0 = unlimited; per-skill rate limit (calls/min)
   sandbox:
+    # Sandbox-local skill files are stored under <data_dir>/sandbox.
     timeout_seconds: 30            # hard timeout per skill invocation
     memory_limit_mb: 256           # address-space cap (Unix: RLIMIT_AS)
     max_output_bytes: 1048576      # 1 MiB cap on skill stdout

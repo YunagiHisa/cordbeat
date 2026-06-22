@@ -19,7 +19,7 @@ from cordbeat.main import (
     _sync_managed_builtin_skill,
 )
 from cordbeat.models import SafetyLevel
-from cordbeat.skills import SkillPermissionError, SkillRegistry
+from cordbeat.skills import SandboxConfig, SkillPermissionError, SkillRegistry
 
 
 def _create_skill(
@@ -115,6 +115,7 @@ class TestSkillRegistry:
     def test_get_safe_skills(self, tmp_path: Path) -> None:
         skills_dir = tmp_path / "skills"
         _create_skill(skills_dir, "safe_one", safety="safe")
+        _create_skill(skills_dir, "net_safe", safety="safe", network=True)
         _create_skill(skills_dir, "risky", safety="dangerous")
 
         registry = SkillRegistry(skills_dir)
@@ -122,6 +123,7 @@ class TestSkillRegistry:
         safe = registry.get_safe_skills()
         safe_names = [s.name for s in safe]
         assert "safe_one" in safe_names
+        assert "net_safe" not in safe_names
         assert "risky" not in safe_names
 
     def test_shared_voice_context_is_loaded(self, tmp_path: Path) -> None:
@@ -525,7 +527,8 @@ class TestSkillDescriptions:
 
     def test_can_limit_prompt_to_shared_voice_skills(self, tmp_path: Path) -> None:
         skills_dir = tmp_path / "skills"
-        _create_skill(skills_dir, "web_search", shared_voice=True)
+        _create_skill(skills_dir, "local_note", shared_voice=True)
+        _create_skill(skills_dir, "web_search", network=True, shared_voice=True)
         _create_skill(skills_dir, "timer", safety="safe", shared_voice=False)
         _create_skill(
             skills_dir,
@@ -538,7 +541,8 @@ class TestSkillDescriptions:
 
         desc = registry.get_skill_descriptions_for_prompt(context="shared_voice")
 
-        assert "web_search" in desc
+        assert "local_note" in desc
+        assert "web_search" not in desc
         assert "timer" not in desc
         assert "api_call" not in desc
 
@@ -761,6 +765,42 @@ class TestSandboxEnforcement:
         result = await skill.execute({})
         assert result["result"] == "wrote"
 
+    async def test_configured_sandbox_workdir_persists_between_calls(
+        self, tmp_path: Path
+    ) -> None:
+        """Configured sandbox storage persists for sandbox-local skill files."""
+        code = (
+            "def execute(context=None, **kwargs):\n"
+            "    state = context.work_dir / 'state.txt'\n"
+            "    count = int(state.read_text()) if state.exists() else 0\n"
+            "    state.write_text(str(count + 1))\n"
+            "    return {'count': count + 1, 'path': str(state)}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        sandbox_root = tmp_path / "sandbox"
+        _create_skill(
+            skills_dir,
+            "persistent",
+            sandbox=True,
+            filesystem=False,
+            main_code=code,
+        )
+        registry = SkillRegistry(
+            skills_dir,
+            sandbox_config=SandboxConfig(work_dir=sandbox_root),
+        )
+        registry.load_all()
+        skill = registry.get("persistent")
+        assert skill is not None
+
+        first = await skill.execute({})
+        second = await skill.execute({})
+
+        assert first["count"] == 1
+        assert second["count"] == 2
+        state_path = Path(second["path"]).resolve()
+        assert sandbox_root.resolve() in state_path.parents
+
     async def test_filesystem_allowed_when_flag_true(self, tmp_path: Path) -> None:
         """Sandboxed skill with filesystem=True can write anywhere."""
         outside = tmp_path / "output.txt"
@@ -786,6 +826,34 @@ class TestSandboxEnforcement:
         result = await skill.execute({})
         assert result["result"] == "wrote"
         assert outside.read_text() == "allowed"
+
+    async def test_filesystem_override_keeps_external_skill_inside_sandbox(
+        self, tmp_path: Path
+    ) -> None:
+        """Call-time overrides can run a filesystem skill with sandbox guards."""
+        outside = tmp_path / "output.txt"
+        outside_path = str(outside).replace("\\", "\\\\")
+        code = (
+            f"from pathlib import Path\n"
+            f"def execute(**kwargs):\n"
+            f"    Path('{outside_path}').write_text('blocked')\n"
+            f"    return {{'result': 'wrote'}}\n"
+        )
+        skills_dir = tmp_path / "skills"
+        _create_skill(
+            skills_dir,
+            "fs_guarded",
+            sandbox=True,
+            filesystem=True,
+            main_code=code,
+        )
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("fs_guarded")
+        assert skill is not None
+
+        with pytest.raises(SkillPermissionError, match="Filesystem access"):
+            await skill.execute({}, sandbox_overrides={"filesystem": False})
 
     async def test_non_sandboxed_not_restricted(self, tmp_path: Path) -> None:
         """In the new subprocess sandbox the ``sandbox`` flag is irrelevant:
@@ -1227,7 +1295,7 @@ class TestWebSearchSkill:
     """Tests for the web_search built-in skill."""
 
     async def test_web_search_meta(self, tmp_path: Path) -> None:
-        """web_search is safe with network access."""
+        """web_search requires confirmation because it uses network access."""
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()
         _copy_builtin_skill(skills_dir, "web_search")
@@ -1235,9 +1303,9 @@ class TestWebSearchSkill:
         registry = SkillRegistry(skills_dir)
         registry.load_all()
         meta = registry.available_skills["web_search"]
-        assert meta.safety_level == SafetyLevel.SAFE
+        assert meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION
         assert meta.network is True
-        assert meta.sandbox is False
+        assert meta.sandbox is True
 
     async def test_web_search_parse_results(self) -> None:
         """_parse_results extracts titles and URLs from HTML."""
@@ -1337,7 +1405,7 @@ class TestWeatherSkill:
     """Tests for the weather built-in skill."""
 
     async def test_weather_meta(self, tmp_path: Path) -> None:
-        """weather is safe with network access."""
+        """weather requires confirmation because it uses network access."""
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()
         _copy_builtin_skill(skills_dir, "weather")
@@ -1345,8 +1413,9 @@ class TestWeatherSkill:
         registry = SkillRegistry(skills_dir)
         registry.load_all()
         meta = registry.available_skills["weather"]
-        assert meta.safety_level == SafetyLevel.SAFE
+        assert meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION
         assert meta.network is True
+        assert meta.sandbox is True
 
     async def test_weather_format(self) -> None:
         """_format_weather extracts temperature and forecast."""

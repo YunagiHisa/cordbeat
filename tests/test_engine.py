@@ -3813,6 +3813,163 @@ class TestReActLoop:
         proposals = await memory.get_certain_records(user_id, record_type="proposal")
         assert len(proposals) == 1
 
+    async def test_network_skill_requests_confirmation_even_when_marked_safe(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Network access crosses the sandbox boundary and needs approval."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "[SKILL: web_search | query=CordBeat]"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        eng._skills._skills["web_search"] = Skill(
+            meta=SkillMeta(
+                name="web_search",
+                description="Search the web",
+                usage="",
+                safety_level=SafetyLevel.SAFE,
+                network=True,
+            )
+        )
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Search it",
+            )
+        )
+
+        mock_ai.generate_chat.assert_not_awaited()
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        confirm = next(m for m in sent if m.type == MessageType.SKILL_CONFIRM)
+        assert confirm.metadata["skill_name"] == "web_search"
+
+    async def test_external_filesystem_skill_requests_confirmation_even_when_safe(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """External filesystem access crosses the sandbox boundary."""
+        outside_path = (tmp_path / "notes.md").as_posix()
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return f"[SKILL: file_read | path=\"{outside_path}\"]"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        eng._skills._skills["file_read"] = Skill(
+            meta=SkillMeta(
+                name="file_read",
+                description="Read a file",
+                usage="",
+                safety_level=SafetyLevel.SAFE,
+                filesystem=True,
+            )
+        )
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Read it",
+            )
+        )
+
+        mock_ai.generate_chat.assert_not_awaited()
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        confirm = next(m for m in sent if m.type == MessageType.SKILL_CONFIRM)
+        assert confirm.metadata["skill_name"] == "file_read"
+
+    async def test_sandbox_local_file_skill_runs_without_confirmation(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Relative file paths stay inside the sandbox and do not need approval."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "[SKILL: file_read | path=notes.md]"
+
+        calls: list[tuple[str, bool]] = []
+
+        async def read_file(path: str, context: object) -> dict[str, str]:
+            filesystem = bool(getattr(context, "filesystem"))
+            calls.append((path, filesystem))
+            return {"content": "sandbox note"}
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(return_value="Read sandbox note.")
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        eng._skills._skills["file_read"] = Skill(
+            meta=SkillMeta(
+                name="file_read",
+                description="Read a file",
+                usage="",
+                safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
+                filesystem=True,
+            ),
+            _test_callable=read_file,
+        )
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Read sandbox note",
+            )
+        )
+
+        assert calls == [("notes.md", False)]
+        mock_ai.generate_chat.assert_awaited_once()
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        assert all(m.type != MessageType.SKILL_CONFIRM for m in sent)
+
     async def test_create_skill_virtual_tool_is_advertised(
         self,
         mock_ai: AsyncMock,

@@ -27,6 +27,6 @@ contexts:
 
 safety:
   level: safe
-  sandbox: false
+  sandbox: true
   network: false
   filesystem: false

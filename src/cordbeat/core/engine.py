@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -64,13 +65,66 @@ _CREATE_SKILL_TOOL_DESCRIPTION = (
     "(safety=requires_confirmation, params=[name: string, description: string, "
     "usage: string, parameters: string, code: string]). Use code with escaped "
     "\\n newlines. The code must define a top-level execute(...) function and "
-    "must not include top-level calls or returns. Do not use os, open, "
-    "subprocess, eval/exec, or direct filesystem access. The optional "
-    "parameters value is a JSON list."
+    "must not include top-level calls or returns. Sandbox-local files may be "
+    "read or written with pathlib under context.work_dir; do not use os, open, "
+    "subprocess, eval/exec, absolute paths, parent-directory paths, network, "
+    "or CLI access. The optional parameters value is a JSON list."
 )
 _HTTP_URL_RE = re.compile(r"https?://[^\s<>\]\)\"']+", re.IGNORECASE)
 _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 _TRANSIENT_HTTP_RETRY_DELAY_SECONDS = 1.0
+
+
+_SANDBOX_LOCAL_FILE_PARAMS: dict[str, str] = {
+    "file_read": "path",
+    "file_write": "path",
+    "file_search": "root",
+}
+
+
+def _is_sandbox_relative_path(value: Any) -> bool:
+    text = str(value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        text = text[1:-1].strip()
+    if not text:
+        return False
+    windows = PureWindowsPath(text)
+    posix = PurePosixPath(text)
+    if (
+        windows.is_absolute()
+        or posix.is_absolute()
+        or windows.drive
+        or windows.root
+        or posix.root
+    ):
+        return False
+    parts = tuple(windows.parts) + tuple(posix.parts)
+    if any(part == ".." or part.startswith("~") for part in parts):
+        return False
+    return True
+
+
+def _sandbox_overrides_for_skill(
+    skill_name: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    path_param = _SANDBOX_LOCAL_FILE_PARAMS.get(skill_name)
+    if path_param is None:
+        return {}
+    if _is_sandbox_relative_path(params.get(path_param)):
+        return {"filesystem": False}
+    return {}
+
+
+def _skill_requires_confirmation(skill: Any, params: dict[str, Any]) -> bool:
+    meta = skill.meta
+    if _sandbox_overrides_for_skill(meta.name, params).get("filesystem") is False:
+        return bool(meta.network)
+    return (
+        meta.safety_level != SafetyLevel.SAFE
+        or bool(meta.network)
+        or bool(meta.filesystem)
+    )
 
 
 @dataclass(frozen=True)
@@ -1488,10 +1542,12 @@ class CoreEngine:
                     )
                     continue
 
-                if skill.meta.safety_level != SafetyLevel.SAFE:
+                sandbox_overrides = _sandbox_overrides_for_skill(skill_name, params)
+                if _skill_requires_confirmation(skill, params):
                     if shared_voice:
                         logger.info(
-                            "ReAct: blocking non-safe skill %r in shared voice",
+                            "ReAct: blocking confirmation-required skill %r "
+                            "in shared voice",
                             skill_name,
                         )
                         results.append(
@@ -1589,7 +1645,11 @@ class CoreEngine:
                         )
 
                 try:
-                    result = await skill.execute(params, memory=self._memory)
+                    result = await skill.execute(
+                        params,
+                        memory=self._memory,
+                        sandbox_overrides=sandbox_overrides,
+                    )
                     output, is_error = _serialize_skill_result(result)
                     if skill_name in {"web_search", "fetch_url"}:
                         allowed_web_urls.update(_extract_http_urls(result))

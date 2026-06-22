@@ -10,7 +10,7 @@ usage: |
   ARC, BEZIER, GRADIENT, DOTS, STAR, SPIRAL,
   TURTLE, HEADING, PENCOLOR, PENWIDTH, PENUP, PENDOWN,
   FORWARD, BACKWARD, RIGHT, LEFT, REPEAT ... END,
-  SAVE and OUTPUT commands are also available.
+  SAVE and OUTPUT commands are also available. SAVE writes inside the skill sandbox.
   OUTPUT returns a base64-encoded image.
   HSL colors are supported in hsl(h,s%,l%) format.
   REPEAT n ... END repeats a block up to 1000 times with up to 10 nesting levels.
@@ -25,10 +25,10 @@ contexts:
   shared_voice: false
 
 safety:
-  level: requires_confirmation
+  level: safe
   sandbox: true
   network: false
-  filesystem: true
+  filesystem: false
 
 rate_limit:
   per_minute: 10

@@ -36,6 +36,6 @@ contexts:
 
 safety:
   level: requires_confirmation
-  sandbox: false
+  sandbox: true
   network: true
   filesystem: false

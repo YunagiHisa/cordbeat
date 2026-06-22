@@ -2276,7 +2276,10 @@ class TestSkillCreationProposal:
         # Skill loaded in registry
         skill = heartbeat._skills.get("greet")
         assert skill is not None
-        assert skill.meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION
+        assert skill.meta.safety_level == SafetyLevel.SAFE
+        assert skill.meta.sandbox is True
+        assert skill.meta.network is False
+        assert skill.meta.filesystem is False
 
     async def test_install_rejects_invalid_name(
         self,
@@ -2399,8 +2402,8 @@ class TestSkillCreationProposal:
         yaml_path = skills_dir / "injected" / "skill.yaml"
         data = yaml.safe_load(yaml_path.read_text())
 
-        assert data["safety"]["level"] == "requires_confirmation"
-        assert data["safety"]["sandbox"] is False
+        assert data["safety"]["level"] == "safe"
+        assert data["safety"]["sandbox"] is True
         assert data["safety"]["network"] is False
         assert data["safety"]["filesystem"] is False
         assert data["contexts"]["shared_voice"] is False
@@ -2408,7 +2411,7 @@ class TestSkillCreationProposal:
 
         skill = heartbeat._skills.get("injected")
         assert skill is not None
-        assert skill.meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION
+        assert skill.meta.safety_level == SafetyLevel.SAFE
 
     async def test_execute_approved_skill_proposal(
         self,
@@ -2488,11 +2491,11 @@ class TestSkillCreationProposal:
         msg = mock_gateway.send_to_adapter.call_args[0][1]
         assert "❌" in msg.content
 
-    async def test_forced_safety_level(
+    async def test_forced_sandbox_local_safety_level(
         self,
         heartbeat: HeartbeatLoop,
     ) -> None:
-        """AI-generated skills always get requires_confirmation level."""
+        """Approved added skills default to sandbox-local safe execution."""
         skills_dir = heartbeat._skills.skills_dir
         skills_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2507,7 +2510,10 @@ class TestSkillCreationProposal:
         yaml_content = (skills_dir / "safeskill" / "skill.yaml").read_text(
             encoding="utf-8"
         )
-        assert "requires_confirmation" in yaml_content
+        assert "level: safe" in yaml_content
+        assert "sandbox: true" in yaml_content
+        assert "network: false" in yaml_content
+        assert "filesystem: false" in yaml_content
         # AI cannot set dangerous level
         assert "dangerous" not in yaml_content
 

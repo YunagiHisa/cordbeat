@@ -34,6 +34,7 @@ class SandboxConfig:
     timeout_seconds: int = 30
     memory_mb: int = 256
     max_stdout_bytes: int = 1 * 1024 * 1024  # 1 MiB
+    work_dir: Path | None = None
 
 
 DEFAULT_CONFIG = SandboxConfig()

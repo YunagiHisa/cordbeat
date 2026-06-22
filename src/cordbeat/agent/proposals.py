@@ -341,8 +341,8 @@ class ProposalExecutor:
                 "  shared_voice: false",
                 "",
                 "safety:",
-                "  level: requires_confirmation",
-                "  sandbox: false",
+                "  level: safe",
+                "  sandbox: true",
                 "  network: false",
                 "  filesystem: false",
             ]

@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +75,8 @@ class Skill:
         self,
         params: dict[str, Any],
         memory: Any = None,
+        *,
+        sandbox_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Execute the skill in an isolated subprocess.
 
@@ -90,7 +94,7 @@ class Skill:
             )
         try:
             async with time_block(SKILL_EXEC_LATENCY, labels):
-                result = await self._execute_inner(params, memory)
+                result = await self._execute_inner(params, memory, sandbox_overrides)
         except Exception:
             inc_counter(SKILL_EXEC_TOTAL, {**labels, "outcome": "error"})
             raise
@@ -101,7 +105,12 @@ class Skill:
         self,
         params: dict[str, Any],
         memory: Any,
+        sandbox_overrides: dict[str, Any] | None,
     ) -> dict[str, Any]:
+        sandbox_overrides = sandbox_overrides or {}
+        network = bool(sandbox_overrides.get("network", self.meta.network))
+        filesystem = bool(sandbox_overrides.get("filesystem", self.meta.filesystem))
+
         if self._test_callable is not None:
             # Test-only in-process path. Never taken for skills loaded
             # from disk via SkillRegistry.
@@ -114,8 +123,8 @@ class Skill:
 
                 call_kwargs["context"] = SimpleNamespace(
                     sandbox=self.meta.sandbox,
-                    network=self.meta.network,
-                    filesystem=self.meta.filesystem,
+                    network=network,
+                    filesystem=filesystem,
                     work_dir=None,
                     memory=memory,
                 )
@@ -131,10 +140,10 @@ class Skill:
                 f"Skill {self.meta.name!r} has no skill_dir; cannot execute."
             )
 
-        with tempfile.TemporaryDirectory(prefix="cordbeat_skill_") as tmpdir:
+        with self._work_dir_context() as tmpdir:
             sandbox_params = {
-                "network": self.meta.network,
-                "filesystem": self.meta.filesystem,
+                "network": network,
+                "filesystem": filesystem,
                 "work_dir": str(tmpdir),
             }
             python_executable: str | None = None
@@ -151,6 +160,33 @@ class Skill:
                 config=self._sandbox_config,
                 python_executable=python_executable,
             )
+
+    @contextmanager
+    def _work_dir_context(self) -> Iterator[Path]:
+        root = self._sandbox_config.work_dir
+        if root is None:
+            with tempfile.TemporaryDirectory(prefix="cordbeat_skill_") as tmpdir:
+                yield Path(tmpdir)
+            return
+
+        root = root.expanduser().resolve()
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", self.meta.name).strip("._-")
+        if not safe_name:
+            safe_name = "skill"
+        digest_src = str(self._skill_dir or self.meta.name).encode("utf-8")
+        digest = hashlib.sha256(digest_src).hexdigest()[:8]
+        work_dir = root / f"{safe_name}-{digest}"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        with nullcontext(work_dir) as path:
+            yield path
+
+
+def _meta_requires_confirmation(meta: SkillMeta) -> bool:
+    return (
+        meta.safety_level != SafetyLevel.SAFE
+        or bool(meta.network)
+        or bool(meta.filesystem)
+    )
 
 
 class SkillRegistry:
@@ -305,7 +341,7 @@ class SkillRegistry:
         return [
             s.meta
             for s in self._skills.values()
-            if s.meta.enabled and s.meta.safety_level == SafetyLevel.SAFE
+            if s.meta.enabled and not _meta_requires_confirmation(s.meta)
         ]
 
     def get_skill_descriptions_for_prompt(
@@ -325,7 +361,7 @@ class SkillRegistry:
             if context == "shared_voice":
                 if not skill.meta.shared_voice_enabled:
                     continue
-                if skill.meta.safety_level != SafetyLevel.SAFE:
+                if _meta_requires_confirmation(skill.meta):
                     continue
             # user_id is injected by the engine at call time; hide it from the
             # AI so it never tries to guess internal user IDs.
@@ -336,6 +372,9 @@ class SkillRegistry:
             )
             lines.append(
                 f"- {name}: {skill.meta.description} "
-                f"(safety={skill.meta.safety_level.value}, params=[{params_str}])"
+                f"(safety={skill.meta.safety_level.value}, "
+                f"network={str(skill.meta.network).lower()}, "
+                f"filesystem={str(skill.meta.filesystem).lower()}, "
+                f"params=[{params_str}])"
             )
         return "\n".join(lines) if lines else "(no skills available)"

@@ -248,6 +248,7 @@ async def main(
             timeout_seconds=int(config.skills.sandbox.timeout_seconds),
             memory_mb=config.skills.sandbox.memory_limit_mb,
             max_stdout_bytes=config.skills.sandbox.max_output_bytes,
+            work_dir=Path(config.data_dir) / "sandbox",
         ),
         rate_limiter=SkillRateLimiter(
             default_per_minute=config.skills.default_rate_limit_per_minute,

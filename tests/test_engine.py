@@ -3407,6 +3407,146 @@ class TestReActLoop:
         contents = [c[0][1].content for c in calls]
         assert any("The answer is 42" in c for c in contents)
 
+    async def test_react_continuation_retryable_http_error_retries_until_recovered(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Transient provider errors after a skill result are retried."""
+        sleep = AsyncMock()
+        monkeypatch.setattr("cordbeat.core.engine.asyncio.sleep", sleep)
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "[SKILL: web_search | query=CordBeat]"
+
+        chat_attempts = 0
+
+        async def _generate_chat(*args: object, **kwargs: object) -> str:
+            nonlocal chat_attempts
+            chat_attempts += 1
+            if chat_attempts == 1:
+                request = httpx.Request("POST", "https://api.example.test/chat")
+                response = httpx.Response(503, request=request)
+                raise httpx.HTTPStatusError(
+                    "Service Unavailable",
+                    request=request,
+                    response=response,
+                )
+            return "Recovered summary."
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(side_effect=_generate_chat)
+
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        eng._skills._skills["web_search"] = Skill(
+            meta=SkillMeta(
+                name="web_search",
+                description="Search",
+                usage="",
+                safety_level=SafetyLevel.SAFE,
+            ),
+            _test_callable=AsyncMock(
+                return_value={
+                    "query": "CordBeat",
+                    "count": 1,
+                    "results": [{"title": "CordBeat"}],
+                }
+            ),
+        )
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Search CordBeat",
+            )
+        )
+
+        assert chat_attempts == 2
+        sleep.assert_awaited_once()
+        reply = mock_gateway.send_to_adapter.call_args.args[1]
+        assert reply.content == "Recovered summary."
+
+    async def test_react_continuation_failure_returns_tool_result_fallback(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """If final summarization fails, the user still sees skill results."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "Let me check. [SKILL: web_search | query=CordBeat]"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(side_effect=RuntimeError("provider down"))
+
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        eng._skills._skills["web_search"] = Skill(
+            meta=SkillMeta(
+                name="web_search",
+                description="Search",
+                usage="",
+                safety_level=SafetyLevel.SAFE,
+            ),
+            _test_callable=AsyncMock(
+                return_value={
+                    "query": "CordBeat",
+                    "count": 1,
+                    "results": [
+                        {
+                            "title": "CordBeat docs",
+                            "url": "https://example.com/cordbeat",
+                            "snippet": "A local assistant runtime.",
+                        }
+                    ],
+                }
+            ),
+        )
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Search CordBeat",
+            )
+        )
+
+        sent = [c.args[1] for c in mock_gateway.send_to_adapter.call_args_list]
+        final = sent[-1].content
+        assert "Tool summary generation failed" in final
+        assert "CordBeat docs" in final
+        assert "https://example.com/cordbeat" in final
+        assert final != "Let me check."
+
     async def test_skill_tag_inside_thinking_is_not_executed(
         self,
         mock_ai: AsyncMock,

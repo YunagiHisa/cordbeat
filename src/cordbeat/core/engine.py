@@ -429,6 +429,91 @@ def _serialize_skill_result(result: Any) -> tuple[str, bool]:
         return str(result).strip(), is_error
 
 
+def _compact_one_line(value: Any, *, max_len: int = 240) -> str:
+    text = sanitize(str(value or ""), max_len=max_len)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _clip_text(text: str, *, max_len: int) -> str:
+    if len(text) <= max_len:
+        return text
+    if max_len <= 3:
+        return text[:max_len]
+    return text[: max_len - 3].rstrip() + "..."
+
+
+def _parsed_tool_output(output: str) -> Any:
+    try:
+        return json.loads(output)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _format_react_fallback_result(result: ToolCallResult) -> str:
+    params = _format_react_params(result.params)
+    call_display = (
+        f"{result.skill_name}({params})" if params else f"{result.skill_name}()"
+    )
+    status = "Tool failed" if result.is_error else "Tool result"
+    parsed = _parsed_tool_output(result.output)
+
+    if result.skill_name == "web_search" and isinstance(parsed, dict):
+        lines = [f"{status}: {call_display}"]
+        query = _compact_one_line(parsed.get("query"), max_len=180)
+        count = parsed.get("count")
+        if query or count is not None:
+            detail = f"query={query}" if query else ""
+            if count is not None:
+                detail = f"{detail}, count={count}" if detail else f"count={count}"
+            lines.append(detail)
+        items = parsed.get("results")
+        if isinstance(items, list):
+            for index, item in enumerate(items[:3], start=1):
+                if not isinstance(item, dict):
+                    continue
+                title = _compact_one_line(item.get("title"), max_len=160)
+                url = _compact_one_line(item.get("url"), max_len=240)
+                snippet = _compact_one_line(item.get("snippet"), max_len=260)
+                head = f"{index}. {title}" if title else f"{index}. Result"
+                lines.append(f"{head}\n   {url}" if url else head)
+                if snippet:
+                    lines.append(f"   {snippet}")
+        return _clip_text("\n".join(line for line in lines if line), max_len=1200)
+
+    if result.skill_name == "fetch_url" and isinstance(parsed, dict):
+        lines = [f"{status}: {call_display}"]
+        url = _compact_one_line(parsed.get("url"), max_len=240)
+        status_code = parsed.get("status_code")
+        text = _compact_one_line(parsed.get("text"), max_len=900)
+        if url:
+            lines.append(f"Source: {url}")
+        if status_code is not None:
+            lines.append(f"Status: {status_code}")
+        if text:
+            lines.append(f"Text: {text}")
+        return _clip_text("\n".join(lines), max_len=1200)
+
+    preview = _clip_text(
+        sanitize(result.output, max_len=1200).strip(),
+        max_len=1200,
+    )
+    if not preview:
+        preview = "(empty result)"
+    return f"{status}: {call_display}\n{preview}"
+
+
+def _build_react_fallback_response(results: list[ToolCallResult]) -> str:
+    """Return a user-visible result when AI continuation summarization fails."""
+
+    lines = [
+        "Tool summary generation failed after the skill ran. "
+        "Here are the available tool results:"
+    ]
+    for result in results[-3:]:
+        lines.append(_format_react_fallback_result(result))
+    return _clip_text("\n\n".join(lines), max_len=1900)
+
+
 def _extract_http_urls(value: Any) -> set[str]:
     """Extract exact public HTTP(S) URL strings from nested tool data."""
 
@@ -1375,6 +1460,50 @@ class CoreEngine:
             max_len=500,
         ).strip()
 
+    async def _generate_react_continuation(
+        self,
+        messages: list[dict[str, Any]],
+        results: list[ToolCallResult],
+    ) -> str:
+        """Generate the next ReAct response, retrying transient provider errors."""
+
+        result_images = [
+            artifact.image_b64 for result in results for artifact in result.media
+        ]
+        for attempt in range(len(_TRANSIENT_HTTP_RETRY_DELAYS_SECONDS) + 1):
+            try:
+                if self._vision_enabled and result_images:
+                    return await self._ai.generate_chat_with_vision(
+                        messages,
+                        images=result_images,
+                        max_tokens=self._react_config.max_tool_output_chars,
+                    )
+                return await self._ai.generate_chat(
+                    messages,
+                    max_tokens=self._react_config.max_tool_output_chars,
+                )
+            except Exception as exc:
+                status_code = _retryable_http_status_code(exc)
+                timed_out = _is_timeout_exception(exc)
+                if status_code is None and not timed_out:
+                    raise
+                if attempt >= len(_TRANSIENT_HTTP_RETRY_DELAYS_SECONDS):
+                    raise
+
+                delay = _TRANSIENT_HTTP_RETRY_DELAYS_SECONDS[attempt]
+                reason = f"HTTP {status_code}" if status_code is not None else "timeout"
+                logger.warning(
+                    "ReAct continuation generation failed with retryable %s; "
+                    "retrying %d/%d in %.1fs",
+                    reason,
+                    attempt + 1,
+                    len(_TRANSIENT_HTTP_RETRY_DELAYS_SECONDS),
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+        raise RuntimeError("unreachable ReAct continuation retry state")
+
     async def _react_loop(
         self,
         initial_response: str,
@@ -1764,26 +1893,14 @@ class CoreEngine:
             messages.append({"role": "user", "content": continuation})
 
             try:
-                result_images = [
-                    artifact.image_b64
-                    for result in results
-                    for artifact in result.media
-                ]
-                if self._vision_enabled and result_images:
-                    raw = await self._ai.generate_chat_with_vision(
-                        messages,
-                        images=result_images,
-                        max_tokens=self._react_config.max_tool_output_chars,
-                    )
-                else:
-                    raw = await self._ai.generate_chat(
-                        messages,
-                        max_tokens=self._react_config.max_tool_output_chars,
-                    )
+                raw = await self._generate_react_continuation(messages, results)
             except Exception:
                 logger.warning(
-                    "ReAct: continuation generate_chat failed, using last response"
+                    "ReAct: continuation generate_chat failed; returning tool "
+                    "result fallback",
+                    exc_info=True,
                 )
+                response = _build_react_fallback_response(results)
                 break
 
             cleaned = sanitize_reasoning_artifacts(raw)

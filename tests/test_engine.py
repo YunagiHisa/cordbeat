@@ -3867,9 +3867,9 @@ class TestReActLoop:
                 "usage=virtual_trade(action='buy'|'sell'|'status', symbol='BTC'), "
                 "parameters=[{\"name\":\"action\",\"type\":\"string\"},"
                 "{\"name\":\"amount\",\"type\":\"number\"}], "
-                "code=def execute(action='status', symbol='', amount=0):\\n"
+                "code=\"def execute(action='status', symbol='', amount=0):\\n"
                 "    data = {'assets': []}\\n"
-                "    return {'action': action, 'data': data}]"
+                "    return f\\\"{symbol}: {data['assets']}\\\"\"]"
             )
 
         mock_ai.generate = AsyncMock(side_effect=_generate)
@@ -3914,6 +3914,7 @@ class TestReActLoop:
             },
         ]
         assert "data = {'assets': []}" in proposed["code"]
+        assert 'return f"{symbol}: {data[\'assets\']}"' in proposed["code"]
 
     async def test_react_disabled_strips_tags(
         self,

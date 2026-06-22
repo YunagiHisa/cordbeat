@@ -90,12 +90,14 @@ def _find_skill_tag_end(text: str, content_start: int) -> int | None:
 
     for pos in range(content_start, len(text)):
         char = text[pos]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
         if quote is not None:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == quote:
+            if char == quote:
                 quote = None
             continue
 
@@ -151,12 +153,14 @@ def _split_skill_tag_body(body: str) -> tuple[str, str]:
     paren_depth = 0
 
     for pos, char in enumerate(body):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
         if quote is not None:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == quote:
+            if char == quote:
                 quote = None
             continue
 
@@ -260,12 +264,14 @@ def _split_skill_params(raw: str) -> list[str]:
     paren_depth = 0
 
     for pos, char in enumerate(raw):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
         if quote is not None:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == quote:
+            if char == quote:
                 quote = None
             continue
 
@@ -557,8 +563,15 @@ def _append_virtual_chat_tools(skills_desc: str) -> str:
 def _decode_skill_param_text(value: Any) -> str:
     """Decode lightweight escape sequences used inside single-line skill tags."""
 
-    return str(value or "").replace("\\r\\n", "\n").replace("\\n", "\n").replace(
-        "\\t", "\t"
+    text = str(value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        text = text[1:-1]
+    return (
+        text.replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace('\\"', '"')
+        .replace("\\'", "'")
     )
 
 

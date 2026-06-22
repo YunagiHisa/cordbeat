@@ -432,7 +432,11 @@ class ProposalExecutor:
             await self._memory.update_proposal_status(
                 proposal_id, ProposalStatus.EXECUTED
             )
-            summary = str(result.get("result", "done"))[:200]
+            summary_value = result.get("result", result.get("output"))
+            if summary_value is None:
+                summary = json.dumps(result, ensure_ascii=False)[:500]
+            else:
+                summary = str(summary_value)[:500]
             await self._notify_result(
                 proposal,
                 f"✅ Skill '{skill_name}' executed successfully.\n{summary}",

@@ -119,10 +119,9 @@ def _sandbox_overrides_for_skill(
 def _skill_requires_confirmation(skill: Any, params: dict[str, Any]) -> bool:
     meta = skill.meta
     if _sandbox_overrides_for_skill(meta.name, params).get("filesystem") is False:
-        return bool(meta.network)
+        return False
     return (
         meta.safety_level != SafetyLevel.SAFE
-        or bool(meta.network)
         or bool(meta.filesystem)
     )
 

@@ -123,7 +123,7 @@ class TestSkillRegistry:
         safe = registry.get_safe_skills()
         safe_names = [s.name for s in safe]
         assert "safe_one" in safe_names
-        assert "net_safe" not in safe_names
+        assert "net_safe" in safe_names
         assert "risky" not in safe_names
 
     def test_shared_voice_context_is_loaded(self, tmp_path: Path) -> None:
@@ -542,7 +542,7 @@ class TestSkillDescriptions:
         desc = registry.get_skill_descriptions_for_prompt(context="shared_voice")
 
         assert "local_note" in desc
-        assert "web_search" not in desc
+        assert "web_search" in desc
         assert "timer" not in desc
         assert "api_call" not in desc
 
@@ -1295,7 +1295,7 @@ class TestWebSearchSkill:
     """Tests for the web_search built-in skill."""
 
     async def test_web_search_meta(self, tmp_path: Path) -> None:
-        """web_search requires confirmation because it uses network access."""
+        """web_search is a safe network skill."""
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()
         _copy_builtin_skill(skills_dir, "web_search")
@@ -1303,7 +1303,7 @@ class TestWebSearchSkill:
         registry = SkillRegistry(skills_dir)
         registry.load_all()
         meta = registry.available_skills["web_search"]
-        assert meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION
+        assert meta.safety_level == SafetyLevel.SAFE
         assert meta.network is True
         assert meta.sandbox is True
 
@@ -1405,7 +1405,7 @@ class TestWeatherSkill:
     """Tests for the weather built-in skill."""
 
     async def test_weather_meta(self, tmp_path: Path) -> None:
-        """weather requires confirmation because it uses network access."""
+        """weather is a safe network skill."""
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()
         _copy_builtin_skill(skills_dir, "weather")
@@ -1413,7 +1413,7 @@ class TestWeatherSkill:
         registry = SkillRegistry(skills_dir)
         registry.load_all()
         meta = registry.available_skills["weather"]
-        assert meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION
+        assert meta.safety_level == SafetyLevel.SAFE
         assert meta.network is True
         assert meta.sandbox is True
 

@@ -3873,7 +3873,7 @@ class TestReActLoop:
         proposals = await memory.get_certain_records(user_id, record_type="proposal")
         assert len(proposals) == 1
 
-    async def test_network_skill_requests_confirmation_even_when_marked_safe(
+    async def test_safe_network_skill_runs_without_confirmation(
         self,
         mock_ai: AsyncMock,
         soul: Soul,
@@ -3881,7 +3881,7 @@ class TestReActLoop:
         mock_gateway: AsyncMock,
         tmp_path: Path,
     ) -> None:
-        """Network access crosses the sandbox boundary and needs approval."""
+        """Safe built-in network skills such as web_search do not need approval."""
 
         async def _generate(**kw: object) -> str:
             prompt = str(kw.get("prompt", ""))
@@ -3897,7 +3897,14 @@ class TestReActLoop:
             return "[SKILL: web_search | query=CordBeat]"
 
         mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(return_value="Found it.")
         eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        calls: list[str] = []
+
+        async def search(query: str) -> dict[str, object]:
+            calls.append(query)
+            return {"results": [{"title": "CordBeat"}]}
+
         eng._skills._skills["web_search"] = Skill(
             meta=SkillMeta(
                 name="web_search",
@@ -3905,7 +3912,8 @@ class TestReActLoop:
                 usage="",
                 safety_level=SafetyLevel.SAFE,
                 network=True,
-            )
+            ),
+            _test_callable=search,
         )
 
         await eng.handle_message(
@@ -3917,10 +3925,10 @@ class TestReActLoop:
             )
         )
 
-        mock_ai.generate_chat.assert_not_awaited()
+        assert calls == ["CordBeat"]
+        mock_ai.generate_chat.assert_awaited_once()
         sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
-        confirm = next(m for m in sent if m.type == MessageType.SKILL_CONFIRM)
-        assert confirm.metadata["skill_name"] == "web_search"
+        assert all(m.type != MessageType.SKILL_CONFIRM for m in sent)
 
     async def test_external_filesystem_skill_requests_confirmation_even_when_safe(
         self,

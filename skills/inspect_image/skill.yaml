@@ -18,7 +18,7 @@ contexts:
   shared_voice: false
 
 safety:
-  level: requires_confirmation
+  level: safe
   sandbox: true
   network: true
   filesystem: false

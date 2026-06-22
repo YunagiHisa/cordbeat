@@ -184,7 +184,6 @@ class Skill:
 def _meta_requires_confirmation(meta: SkillMeta) -> bool:
     return (
         meta.safety_level != SafetyLevel.SAFE
-        or bool(meta.network)
         or bool(meta.filesystem)
     )
 

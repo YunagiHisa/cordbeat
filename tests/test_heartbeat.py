@@ -1627,6 +1627,51 @@ class TestApprovedProposalExecution:
         meta = json.loads(proposal["metadata"])
         assert meta["status"] == ProposalStatus.EXECUTED
 
+    async def test_approved_skill_structured_result_is_notified(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Structured skill results are visible in approval result notifications."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        skill = Skill(
+            meta=SkillMeta(
+                name="web_search",
+                description="Search",
+                usage="search",
+                safety_level=SafetyLevel.SAFE,
+                network=True,
+            ),
+            _test_callable=lambda **kw: {
+                "query": kw["query"],
+                "results": [{"title": "CordBeat", "url": "https://example.com"}],
+            },
+        )
+        skills._skills["web_search"] = skill
+
+        await memory.add_certain_record(
+            user_id="u1",
+            content="Run web_search",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "web_search",
+                "skill_params": {"query": "CordBeat"},
+                "adapter_id": "discord",
+            },
+        )
+
+        await heartbeat._proposals.execute_approved()
+
+        msg = mock_gateway.send_to_adapter.call_args.args[1]
+        assert "CordBeat" in msg.content
+        assert "https://example.com" in msg.content
+
     async def test_approved_missing_skill_marked_expired(
         self,
         heartbeat: HeartbeatLoop,

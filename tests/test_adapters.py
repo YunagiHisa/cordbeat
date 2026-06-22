@@ -727,7 +727,7 @@ def _discord_ui_mock() -> MagicMock:
 
     class _View:
         def __init__(self, *a: Any, **k: Any) -> None:
-            pass
+            self.timeout = k.get("timeout")
 
         def stop(self) -> None:
             pass
@@ -763,6 +763,7 @@ class TestDiscordSkillConfirm:
             await adapter._dispatch_skill_confirm("u1", data)
             channel.send.assert_awaited_once()
             view = channel.send.call_args.kwargs["view"]
+            assert view.timeout is None
 
             inter = MagicMock()
             inter.response.defer = AsyncMock()

@@ -64,8 +64,9 @@ _CREATE_SKILL_TOOL_DESCRIPTION = (
     "(safety=requires_confirmation, params=[name: string, description: string, "
     "usage: string, parameters: string, code: string]). Use code with escaped "
     "\\n newlines. The code must define a top-level execute(...) function and "
-    "must not include top-level calls or returns. The optional parameters value "
-    "is a JSON list."
+    "must not include top-level calls or returns. Do not use os, open, "
+    "subprocess, eval/exec, or direct filesystem access. The optional "
+    "parameters value is a JSON list."
 )
 _HTTP_URL_RE = re.compile(r"https?://[^\s<>\]\)\"']+", re.IGNORECASE)
 _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}

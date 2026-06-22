@@ -506,7 +506,7 @@ class DiscordAdapter(RetryableConnection):
 
         class SkillConfirmView(discord.ui.View):  # type: ignore[misc]
             def __init__(self) -> None:
-                super().__init__(timeout=300)
+                super().__init__(timeout=None)
 
             async def _maybe_await(self, value: Any) -> None:
                 if inspect.isawaitable(value):

@@ -3839,6 +3839,82 @@ class TestReActLoop:
         assert meta["proposed_skill"]["name"] == "hello_tool"
         assert "\n    return" in meta["proposed_skill"]["code"]
 
+    async def test_create_skill_tag_with_nested_values_requests_confirmation(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """create_skill tags can contain JSON params, pipes, and code brackets."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return (
+                "I'll propose it. "
+                "[SKILL: create_skill, name=virtual_trade, "
+                "description=Simulate paper trading, "
+                "usage=virtual_trade(action='buy'|'sell'|'status', symbol='BTC'), "
+                "parameters=[{\"name\":\"action\",\"type\":\"string\"},"
+                "{\"name\":\"amount\",\"type\":\"number\"}], "
+                "code=def execute(action='status', symbol='', amount=0):\\n"
+                "    data = {'assets': []}\\n"
+                "    return {'action': action, 'data': data}]"
+            )
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Create a virtual trading skill",
+        )
+        await eng.handle_message(msg)
+
+        mock_ai.generate_chat.assert_not_awaited()
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        assert all("[SKILL:" not in m.content for m in sent)
+        assert all("code=def execute" not in m.content for m in sent)
+
+        confirm = next(m for m in sent if m.type == MessageType.SKILL_CONFIRM)
+        assert confirm.metadata["skill_params"]["name"] == "virtual_trade"
+
+        user_id = await memory.resolve_user("test", "user1")
+        assert user_id is not None
+        proposals = await memory.get_certain_records(user_id, record_type="proposal")
+        assert len(proposals) == 1
+        meta = json.loads(proposals[0]["metadata"])
+        proposed = meta["proposed_skill"]
+        assert proposed["name"] == "virtual_trade"
+        assert "'buy'|'sell'|'status'" in proposed["usage"]
+        assert proposed["parameters"] == [
+            {
+                "name": "action",
+                "type": "string",
+                "required": True,
+                "description": "",
+            },
+            {
+                "name": "amount",
+                "type": "number",
+                "required": True,
+                "description": "",
+            },
+        ]
+        assert "data = {'assets': []}" in proposed["code"]
+
     async def test_react_disabled_strips_tags(
         self,
         mock_ai: AsyncMock,

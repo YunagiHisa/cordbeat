@@ -10,6 +10,7 @@ import logging
 import re
 import uuid
 from collections.abc import Callable, Coroutine
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -53,22 +54,268 @@ from .gateway import GatewayServer
 
 logger = logging.getLogger(__name__)
 
-# Pattern for inline skill-invocation tags.
+# Pattern marker for inline skill-invocation tags.
 # Example: [SKILL: web_search | query=latest AI news]
-_SKILL_TAG_RE = re.compile(
-    r"\[SKILL:\s*([^\|\]\n]+?)(?:\s*\|\s*([^\]\n]*))?\]",
-    re.IGNORECASE,
-)
+_SKILL_TAG_PREFIX = "[skill:"
 _CREATE_SKILL_TOOL_NAME = "create_skill"
 _CREATE_SKILL_TOOL_DESCRIPTION = (
     "- create_skill: Propose a new local CordBeat skill for user approval "
     "(safety=requires_confirmation, params=[name: string, description: string, "
     "usage: string, parameters: string, code: string]). Use code with escaped "
-    "\\n newlines. The optional parameters value is a JSON list."
+    "\\n newlines. The code must define a top-level execute(...) function and "
+    "must not include top-level calls or returns. The optional parameters value "
+    "is a JSON list."
 )
 _HTTP_URL_RE = re.compile(r"https?://[^\s<>\]\)\"']+", re.IGNORECASE)
 _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 _TRANSIENT_HTTP_RETRY_DELAY_SECONDS = 1.0
+
+
+@dataclass(frozen=True)
+class _SkillTag:
+    start_index: int
+    end_index: int
+    skill_name: str
+    params_raw: str
+
+
+def _find_skill_tag_end(text: str, content_start: int) -> int | None:
+    """Find a tag's closing bracket while respecting nested value syntax."""
+
+    quote: str | None = None
+    escaped = False
+    square_depth = 0
+    curly_depth = 0
+    paren_depth = 0
+
+    for pos in range(content_start, len(text)):
+        char = text[pos]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char == "[":
+            square_depth += 1
+            continue
+        if char == "]":
+            if square_depth > 0:
+                square_depth -= 1
+                continue
+            if curly_depth == 0 and paren_depth == 0:
+                return pos
+            continue
+        if char == "{":
+            curly_depth += 1
+        elif char == "}" and curly_depth > 0:
+            curly_depth -= 1
+        elif char == "(":
+            paren_depth += 1
+        elif char == ")" and paren_depth > 0:
+            paren_depth -= 1
+
+    return None
+
+
+def _looks_like_param_start(text: str, index: int) -> bool:
+    """Return True if text after a delimiter starts another key=value pair."""
+
+    length = len(text)
+    pos = index
+    while pos < length and text[pos].isspace():
+        pos += 1
+    if pos >= length or not (text[pos].isalpha() or text[pos] == "_"):
+        return False
+    pos += 1
+    while pos < length and (text[pos].isalnum() or text[pos] in {"_", "-"}):
+        pos += 1
+    while pos < length and text[pos].isspace():
+        pos += 1
+    return pos < length and text[pos] == "="
+
+
+def _split_skill_tag_body(body: str) -> tuple[str, str]:
+    """Split a tag body into skill name and raw parameter text."""
+
+    quote: str | None = None
+    escaped = False
+    square_depth = 0
+    curly_depth = 0
+    paren_depth = 0
+
+    for pos, char in enumerate(body):
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char == "[":
+            square_depth += 1
+            continue
+        if char == "]" and square_depth > 0:
+            square_depth -= 1
+            continue
+        if char == "{":
+            curly_depth += 1
+            continue
+        if char == "}" and curly_depth > 0:
+            curly_depth -= 1
+            continue
+        if char == "(":
+            paren_depth += 1
+            continue
+        if char == ")" and paren_depth > 0:
+            paren_depth -= 1
+            continue
+        if (
+            square_depth == 0
+            and curly_depth == 0
+            and paren_depth == 0
+            and char in {"|", ","}
+            and _looks_like_param_start(body, pos + 1)
+        ):
+            return body[:pos].strip(), body[pos + 1 :].strip()
+
+    return body.strip(), ""
+
+
+def _find_skill_tags(text: str) -> list[_SkillTag]:
+    """Return parseable [SKILL: ...] tags without being fooled by value brackets."""
+
+    tags: list[_SkillTag] = []
+    lower = text.lower()
+    search_from = 0
+    while True:
+        start = lower.find(_SKILL_TAG_PREFIX, search_from)
+        if start == -1:
+            return tags
+        content_start = start + len(_SKILL_TAG_PREFIX)
+        end = _find_skill_tag_end(text, content_start)
+        if end is None:
+            search_from = content_start
+            continue
+        skill_name, params_raw = _split_skill_tag_body(
+            text[content_start:end].strip()
+        )
+        if skill_name:
+            tags.append(
+                _SkillTag(
+                    start_index=start,
+                    end_index=end + 1,
+                    skill_name=skill_name,
+                    params_raw=params_raw,
+                )
+            )
+        search_from = end + 1
+
+
+def _strip_skill_tags(text: str) -> str:
+    """Remove parseable skill tags from user-visible text."""
+
+    tags = _find_skill_tags(text)
+    if not tags:
+        return text
+    pieces: list[str] = []
+    cursor = 0
+    for tag in tags:
+        pieces.append(text[cursor : tag.start_index])
+        cursor = tag.end_index
+    pieces.append(text[cursor:])
+    return "".join(pieces)
+
+
+def _skill_param_key(segment: str) -> str | None:
+    key, separator, _value = segment.partition("=")
+    if not separator:
+        return None
+    key = key.strip()
+    if not key:
+        return None
+    return key
+
+
+def _split_skill_params(raw: str) -> list[str]:
+    """Split key=value params on top-level delimiters only."""
+
+    parts: list[str] = []
+    start = 0
+    quote: str | None = None
+    escaped = False
+    square_depth = 0
+    curly_depth = 0
+    paren_depth = 0
+
+    for pos, char in enumerate(raw):
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char == "[":
+            square_depth += 1
+            continue
+        if char == "]" and square_depth > 0:
+            square_depth -= 1
+            continue
+        if char == "{":
+            curly_depth += 1
+            continue
+        if char == "}" and curly_depth > 0:
+            curly_depth -= 1
+            continue
+        if char == "(":
+            paren_depth += 1
+            continue
+        if char == ")" and paren_depth > 0:
+            paren_depth -= 1
+            continue
+
+        if (
+            square_depth != 0
+            or curly_depth != 0
+            or paren_depth != 0
+            or char not in {"|", ","}
+            or not _looks_like_param_start(raw, pos + 1)
+            or _skill_param_key(raw[start:pos]) == "code"
+        ):
+            continue
+        parts.append(raw[start:pos].strip())
+        start = pos + 1
+
+    tail = raw[start:].strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _parse_skill_tag_params(raw: str) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    for part in _split_skill_params(raw):
+        if "=" in part:
+            key, _, value = part.partition("=")
+            params[key.strip()] = value.strip()
+    return params
 
 
 def _is_timeout_exception(exc: BaseException) -> bool:
@@ -1067,7 +1314,7 @@ class CoreEngine:
         max iterations exhausted).
         """
         if not self._react_config.enabled:
-            return _SKILL_TAG_RE.sub("", initial_response).strip(), []
+            return _strip_skill_tags(initial_response).strip(), []
 
         response = initial_response
         messages: list[dict[str, Any]] = [
@@ -1082,12 +1329,12 @@ class CoreEngine:
         shared_voice = bool(message.metadata.get("shared_voice"))
 
         for iteration in range(self._react_config.max_iterations):
-            tags = list(_SKILL_TAG_RE.finditer(response))
+            tags = _find_skill_tags(response)
             if not tags:
                 break  # clean response, no more tools needed
 
             # D13: Extract pre-tag text and flush to user immediately
-            first_tag_start = tags[0].start()
+            first_tag_start = tags[0].start_index
             pre_text = response[:first_tag_start].strip()
             if pre_text and not shared_voice:
                 pre_msg = GatewayMessage(
@@ -1109,14 +1356,9 @@ class CoreEngine:
             stopped_early = False
             status_sent = False
             for m in tags:
-                skill_name = m.group(1).strip()
-                params_raw = (m.group(2) or "").strip()
-                params: dict[str, Any] = {}
-                for part in params_raw.split("|"):
-                    part = part.strip()
-                    if "=" in part:
-                        k, _, v = part.partition("=")
-                        params[k.strip()] = v.strip()
+                skill_name = m.skill_name.strip()
+                params_raw = m.params_raw.strip()
+                params = _parse_skill_tag_params(params_raw)
 
                 if skill_name == _CREATE_SKILL_TOOL_NAME:
                     if shared_voice or message.is_voice:
@@ -1481,7 +1723,7 @@ class CoreEngine:
         # never see raw tags. C-2: If the model ignores the final-iteration
         # instruction and emits only tags, return a useful failure instead
         # of exposing an empty response.
-        cleaned_final = _SKILL_TAG_RE.sub("", response).strip()
+        cleaned_final = _strip_skill_tags(response).strip()
         if not cleaned_final and trace.calls:
             last_call = trace.calls[-1]
             if last_call.is_error:

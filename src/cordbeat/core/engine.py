@@ -15,7 +15,11 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
-from cordbeat.agent.proposals import ProposalExecutor
+from cordbeat.agent.action_budget import ActionBudget
+from cordbeat.agent.proposals import (
+    ProposalExecutor,
+    find_duplicate_pending_proposal,
+)
 from cordbeat.agent.react_types import MediaArtifact, ToolCallResult, ToolTrace
 from cordbeat.agent.soul import Soul
 from cordbeat.ai.backend import AIBackend, voice_context_scope
@@ -50,6 +54,12 @@ from cordbeat.skills.draw_dsl import (
     normalize as normalize_draw_dsl,
 )
 from cordbeat.skills.policy import (
+    read_skill_file,
+    resolve_skill_file_access,
+    skill_file_update_allowed,
+    update_skill_file,
+)
+from cordbeat.skills.policy import (
     sandbox_overrides_for_skill as _sandbox_overrides_for_skill,
 )
 from cordbeat.skills.policy import (
@@ -65,6 +75,9 @@ logger = logging.getLogger(__name__)
 # Example: [SKILL: web_search | query=latest AI news]
 _SKILL_TAG_PREFIX = "[skill:"
 _CREATE_SKILL_TOOL_NAME = "create_skill"
+_READ_SKILL_FILE_TOOL_NAME = "read_skill_file"
+_UPDATE_SKILL_FILE_TOOL_NAME = "update_skill_file"
+_UPDATE_SKILL_SETTINGS_TOOL_NAME = "update_skill_settings"
 _CREATE_SKILL_TOOL_DESCRIPTION = (
     "- create_skill: Propose a new local CordBeat skill for user approval "
     "(safety=requires_confirmation, params=[name: string, description: string, "
@@ -74,6 +87,22 @@ _CREATE_SKILL_TOOL_DESCRIPTION = (
     "read or written with pathlib under context.work_dir; do not use os, open, "
     "subprocess, eval/exec, absolute paths, parent-directory paths, network, "
     "or CLI access. The optional parameters value is a JSON list."
+)
+_SKILL_MAINTENANCE_TOOL_DESCRIPTIONS = "\n".join(
+    [
+        "- read_skill_file: Read a file from an installed skill directory "
+        "(safety=safe, params=[skill_name: string, path: string]). Use this "
+        "to inspect AI-owned or system skill source before changing behavior.",
+        "- update_skill_file: Update a non-settings file in an installed skill "
+        "directory (safety=policy_controlled, params=[skill_name: string, "
+        "path: string, content: string]). AI-owned mutable skills can be "
+        "updated without approval; system/user/locked skills require approval. "
+        "Do not use this for skill.yaml settings.",
+        "- update_skill_settings: Request a settings change for an installed "
+        "skill (safety=requires_confirmation, params=[skill_name: string, "
+        "ownership: string, mutable_by_ai: boolean, "
+        "requires_approval_to_modify: boolean]).",
+    ]
 )
 _HTTP_URL_RE = re.compile(r"https?://[^\s<>\]\)\"']+", re.IGNORECASE)
 _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
@@ -646,12 +675,50 @@ def _format_react_params(params: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
+def _react_action_budget_limit(config: ReActConfig) -> int:
+    return max(1, int(config.max_actions_per_turn or config.max_iterations))
+
+
+def _build_tool_summary(calls: list[ToolCallResult], *, detailed: bool) -> str:
+    if not calls:
+        return ""
+    lines = ["🔧 Tool usage summary:"]
+    for index, call in enumerate(calls[:8], start=1):
+        status = "failed" if call.is_error else "completed"
+        if detailed:
+            params = _format_react_params(call.params)
+            rendered = (
+                f"{call.skill_name}({params})" if params else f"{call.skill_name}()"
+            )
+        else:
+            rendered = call.skill_name
+        lines.append(f"{index}. {rendered}: {status}")
+    if len(calls) > 8:
+        lines.append(f"...and {len(calls) - 8} more.")
+    return "\n".join(lines)
+
+
+def _proposal_resume_context(message: GatewayMessage) -> dict[str, Any]:
+    md = message.metadata or {}
+    return {
+        "adapter_id": message.adapter_id,
+        "platform_user_id": message.platform_user_id,
+        "channel_id": str(md.get("channel_id") or ""),
+        "is_dm": bool(md.get("is_dm", True)),
+        "original_content": sanitize_tool_artifacts(message.content),
+        "interrupted": True,
+    }
+
+
 def _append_virtual_chat_tools(skills_desc: str) -> str:
     """Expose parent-implemented chat tools beside registry-backed skills."""
 
+    virtual_tools = "\n".join(
+        [_CREATE_SKILL_TOOL_DESCRIPTION, _SKILL_MAINTENANCE_TOOL_DESCRIPTIONS]
+    )
     if not skills_desc or skills_desc == "(no skills available)":
-        return _CREATE_SKILL_TOOL_DESCRIPTION
-    return f"{skills_desc}\n{_CREATE_SKILL_TOOL_DESCRIPTION}"
+        return virtual_tools
+    return f"{skills_desc}\n{virtual_tools}"
 
 
 def _decode_skill_param_text(value: Any) -> str:
@@ -1492,6 +1559,10 @@ class CoreEngine:
             {"role": "assistant", "content": response},
         ]
         trace = ToolTrace()
+        budget = ActionBudget(
+            limit=_react_action_budget_limit(self._react_config),
+            scope="react",
+        )
         collected_media: list[MediaArtifact] = []
         allowed_web_urls = _extract_http_urls(message.content)
         user_nested_url_prefixes = _extract_user_nested_url_prefixes(message.content)
@@ -1523,11 +1594,28 @@ class CoreEngine:
             # D9/D15: Execute all tags in order
             results: list[ToolCallResult] = []
             stopped_early = False
-            status_sent = False
             for m in tags:
                 skill_name = m.skill_name.strip()
                 params_raw = m.params_raw.strip()
                 params = _parse_skill_tag_params(params_raw)
+                if not budget.consume(skill_name):
+                    results.append(
+                        ToolCallResult(
+                            skill_name=skill_name,
+                            params=params,
+                            output=(
+                                "Action budget exhausted for this turn. "
+                                "Answer using the tool results already available."
+                            ),
+                            is_error=True,
+                        )
+                    )
+                    logger.info(
+                        "ReAct action budget exhausted after %d/%d actions",
+                        budget.used,
+                        budget.limit,
+                    )
+                    break
 
                 if skill_name == _CREATE_SKILL_TOOL_NAME:
                     if shared_voice or message.is_voice:
@@ -1561,6 +1649,97 @@ class CoreEngine:
                         user_id=user_id,
                         message=message,
                         proposed_skill=proposed,
+                    )
+                    results.append(
+                        ToolCallResult(
+                            skill_name=skill_name,
+                            params=params,
+                            output=f"Approval required: {proposal_id}",
+                            is_error=True,
+                        )
+                    )
+                    stopped_early = True
+                    break
+
+                if skill_name == _READ_SKILL_FILE_TOOL_NAME:
+                    try:
+                        result = read_skill_file(
+                            self._skills.skills_dir,
+                            skill_name=params.get("skill_name"),
+                            path=params.get("path"),
+                        )
+                        output, is_error = _serialize_skill_result(result)
+                    except Exception as exc:
+                        output = f"{type(exc).__name__}: {exc}"
+                        is_error = True
+                    results.append(
+                        ToolCallResult(
+                            skill_name=skill_name,
+                            params=params,
+                            output=output,
+                            is_error=is_error,
+                        )
+                    )
+                    continue
+
+                if skill_name == _UPDATE_SKILL_FILE_TOOL_NAME:
+                    try:
+                        access = resolve_skill_file_access(
+                            self._skills.skills_dir,
+                            params.get("skill_name"),
+                            params.get("path"),
+                        )
+                    except Exception as exc:
+                        results.append(
+                            ToolCallResult(
+                                skill_name=skill_name,
+                                params=params,
+                                output=f"{type(exc).__name__}: {exc}",
+                                is_error=True,
+                            )
+                        )
+                        continue
+                    if not skill_file_update_allowed(access):
+                        proposal_id = await self._request_skill_confirmation(
+                            user_id=user_id,
+                            message=message,
+                            skill_name=skill_name,
+                            skill_params=params,
+                        )
+                        results.append(
+                            ToolCallResult(
+                                skill_name=skill_name,
+                                params=params,
+                                output=f"Approval required: {proposal_id}",
+                                is_error=True,
+                            )
+                        )
+                        stopped_early = True
+                        break
+                    result = update_skill_file(
+                        self._skills.skills_dir,
+                        skill_name=params.get("skill_name"),
+                        path=params.get("path"),
+                        content=params.get("content"),
+                    )
+                    self._skills.load_all()
+                    output, is_error = _serialize_skill_result(result)
+                    results.append(
+                        ToolCallResult(
+                            skill_name=skill_name,
+                            params=params,
+                            output=output,
+                            is_error=is_error,
+                        )
+                    )
+                    continue
+
+                if skill_name == _UPDATE_SKILL_SETTINGS_TOOL_NAME:
+                    proposal_id = await self._request_skill_confirmation(
+                        user_id=user_id,
+                        message=message,
+                        skill_name=skill_name,
+                        skill_params=params,
                     )
                     results.append(
                         ToolCallResult(
@@ -1680,28 +1859,6 @@ class CoreEngine:
                     stopped_early = True
                     break
 
-                if (
-                    pre_text
-                    and not status_sent
-                    and not shared_voice
-                    and not self._react_config.expose_trace_to_user
-                ):
-                    status = GatewayMessage(
-                        type=MessageType.ACK,
-                        adapter_id=message.adapter_id,
-                        platform_user_id=message.platform_user_id,
-                        content="🔧 Running tool…",
-                        metadata=self._reply_metadata(message),
-                    )
-                    try:
-                        await self._gateway.send_to_adapter(message.adapter_id, status)
-                    except Exception:
-                        logger.warning(
-                            "Failed to send tool-running status to %s",
-                            message.adapter_id,
-                        )
-                    status_sent = True
-
                 params_display = _format_react_params(params)
                 call_display = (
                     f"{skill_name}({params_display})"
@@ -1720,30 +1877,6 @@ class CoreEngine:
                     call_display,
                     f" — {description}" if description else "",
                 )
-                if self._react_config.expose_trace_to_user and not shared_voice:
-                    detail = f"\n↳ {description}" if description else ""
-                    trace_status = GatewayMessage(
-                        type=MessageType.ACK,
-                        adapter_id=message.adapter_id,
-                        platform_user_id=message.platform_user_id,
-                        content=(
-                            f"🔧 ReAct {iteration + 1}/"
-                            f"{self._react_config.max_iterations}: {call_display}"
-                            f"{detail}"
-                        ),
-                        metadata=self._reply_metadata(message),
-                    )
-                    try:
-                        await self._gateway.send_to_adapter(
-                            message.adapter_id,
-                            trace_status,
-                        )
-                    except Exception:
-                        logger.warning(
-                            "Failed to send ReAct trace status to %s",
-                            message.adapter_id,
-                        )
-
                 try:
                     result = await skill.execute(
                         params,
@@ -1780,29 +1913,6 @@ class CoreEngine:
                             skill_name,
                             output,
                         )
-                    if self._react_config.expose_trace_to_user and not shared_voice:
-                        result_status = GatewayMessage(
-                            type=MessageType.ACK,
-                            adapter_id=message.adapter_id,
-                            platform_user_id=message.platform_user_id,
-                            content=(
-                                f"{'⚠️' if is_error else '✅'} ReAct "
-                                f"{iteration + 1}: {skill_name} "
-                                f"{'failed' if is_error else 'completed'} "
-                                f"({len(output)} chars)"
-                            ),
-                            metadata=self._reply_metadata(message),
-                        )
-                        try:
-                            await self._gateway.send_to_adapter(
-                                message.adapter_id,
-                                result_status,
-                            )
-                        except Exception:
-                            logger.warning(
-                                "Failed to send ReAct trace result to %s",
-                                message.adapter_id,
-                            )
                 except Exception as exc:
                     logger.warning("ReAct: skill %r failed", skill_name, exc_info=True)
                     error_detail = sanitize(
@@ -1821,32 +1931,12 @@ class CoreEngine:
                             is_error=True,
                         )
                     )
-                    if self._react_config.expose_trace_to_user and not shared_voice:
-                        failure_status = GatewayMessage(
-                            type=MessageType.ACK,
-                            adapter_id=message.adapter_id,
-                            platform_user_id=message.platform_user_id,
-                            content=(
-                                f"⚠️ ReAct {iteration + 1}: "
-                                f"{skill_name} execution failed"
-                            ),
-                            metadata=self._reply_metadata(message),
-                        )
-                        try:
-                            await self._gateway.send_to_adapter(
-                                message.adapter_id,
-                                failure_status,
-                            )
-                        except Exception:
-                            logger.warning(
-                                "Failed to send ReAct trace failure to %s",
-                                message.adapter_id,
-                            )
 
             trace.calls.extend(results)
             trace.iterations = iteration + 1
 
             if stopped_early:
+                await self._send_tool_summary(message, trace, shared_voice=shared_voice)
                 return (
                     "🔧 This action requires approval. "
                     "Use the displayed confirmation or run "
@@ -1861,7 +1951,10 @@ class CoreEngine:
             continuation = build_react_continuation_prompt(
                 results,
                 max_tool_output_chars=self._react_config.max_tool_output_chars,
-                final_iteration=iteration + 1 >= self._react_config.max_iterations,
+                final_iteration=(
+                    iteration + 1 >= self._react_config.max_iterations
+                    or budget.exhausted
+                ),
             )
             messages.append({"role": "user", "content": continuation})
 
@@ -1884,6 +1977,8 @@ class CoreEngine:
                 break
             response = cleaned
             messages.append({"role": "assistant", "content": response})
+            if budget.exhausted:
+                break
 
         logger.debug(
             "ReAct trace: %d iterations, %d tool calls",
@@ -1906,7 +2001,35 @@ class CoreEngine:
                     "The tool completed, but I could not summarize its results. "
                     "Please try a more specific request."
                 )
+        await self._send_tool_summary(message, trace, shared_voice=shared_voice)
         return cleaned_final, collected_media
+
+    async def _send_tool_summary(
+        self,
+        message: GatewayMessage,
+        trace: ToolTrace,
+        *,
+        shared_voice: bool,
+    ) -> None:
+        if shared_voice or not trace.calls:
+            return
+        summary = _build_tool_summary(
+            trace.calls,
+            detailed=self._react_config.expose_trace_to_user,
+        )
+        if not summary:
+            return
+        status = GatewayMessage(
+            type=MessageType.ACK,
+            adapter_id=message.adapter_id,
+            platform_user_id=message.platform_user_id,
+            content=summary,
+            metadata=self._reply_metadata(message),
+        )
+        try:
+            await self._gateway.send_to_adapter(message.adapter_id, status)
+        except Exception:
+            logger.warning("Failed to send tool summary to %s", message.adapter_id)
 
     async def _request_skill_confirmation(
         self,
@@ -1923,11 +2046,26 @@ class CoreEngine:
             "skill_name": skill_name,
             "skill_params": skill_params,
             "adapter_id": message.adapter_id,
+            "resume_context": _proposal_resume_context(message),
         }
         content = (
             f"Skill '{skill_name}' requires confirmation.\n"
             f"Parameters: {json.dumps(skill_params, ensure_ascii=False)}"
         )
+        duplicate = await find_duplicate_pending_proposal(
+            self._memory,
+            user_id=user_id,
+            proposal_type=ProposalType.SKILL_EXECUTION,
+            skill_name=skill_name,
+            skill_params=skill_params,
+        )
+        if duplicate is not None:
+            logger.info(
+                "ReAct: reusing pending skill proposal id=%s skill=%s",
+                duplicate["id"],
+                skill_name,
+            )
+            return str(duplicate["id"])
         proposal_id = await self._memory.add_certain_record(
             user_id=user_id,
             content=content,
@@ -1963,12 +2101,26 @@ class CoreEngine:
             "proposal_type": ProposalType.SKILL_PROPOSAL,
             "proposed_skill": proposed_skill,
             "adapter_id": message.adapter_id,
+            "resume_context": _proposal_resume_context(message),
         }
         content = (
             f"Skill creation requires confirmation.\n"
             f"Skill: {skill_name}\n"
             f"Description: {proposed_skill.get('description', '')}"
         )
+        duplicate = await find_duplicate_pending_proposal(
+            self._memory,
+            user_id=user_id,
+            proposal_type=ProposalType.SKILL_PROPOSAL,
+            proposed_skill=proposed_skill,
+        )
+        if duplicate is not None:
+            logger.info(
+                "ReAct: reusing pending skill creation proposal id=%s skill=%s",
+                duplicate["id"],
+                skill_name,
+            )
+            return str(duplicate["id"])
         proposal_id = await self._memory.add_certain_record(
             user_id=user_id,
             content=content,

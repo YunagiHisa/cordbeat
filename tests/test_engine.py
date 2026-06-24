@@ -3309,6 +3309,46 @@ class TestReActLoop:
             vision_enabled=vision_enabled,
         )
 
+    def _write_skill(
+        self,
+        skills_dir: Path,
+        name: str,
+        *,
+        ownership: str = "ai",
+        mutable_by_ai: bool = True,
+        requires_approval_to_modify: bool = False,
+    ) -> Path:
+        skill_dir = skills_dir / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "skill.yaml").write_text(
+            "\n".join(
+                [
+                    f"name: {name}",
+                    'description: "test"',
+                    'version: "1.0.0"',
+                    'author: "cordbeat-ai"',
+                    f"ownership: {ownership}",
+                    f"mutable_by_ai: {str(mutable_by_ai).lower()}",
+                    "requires_approval_to_modify: "
+                    f"{str(requires_approval_to_modify).lower()}",
+                    "usage: test",
+                    "parameters: []",
+                    "safety:",
+                    "  level: safe",
+                    "  sandbox: true",
+                    "  network: false",
+                    "  filesystem: false",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (skill_dir / "main.py").write_text(
+            "def execute(**kw):\n    return {'version': 1}\n",
+            encoding="utf-8",
+        )
+        return skill_dir
+
     async def test_no_skill_tags_passthrough(
         self,
         mock_ai: AsyncMock,
@@ -4251,6 +4291,259 @@ class TestReActLoop:
         system = mock_ai.generate.await_args.kwargs["system"]
         assert "create_skill" in system
         assert "Propose a new local CordBeat skill" in system
+        assert "read_skill_file" in system
+        assert "update_skill_file" in system
+        assert "update_skill_settings" in system
+
+    async def test_read_skill_file_virtual_tool_reads_installed_skill(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """ReAct can inspect installed skill files without filesystem approval."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "[SKILL: read_skill_file | skill_name=repairable | path=main.py]"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(return_value="I read it.")
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        self._write_skill(eng._skills.skills_dir, "repairable")
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Inspect repairable skill",
+            )
+        )
+
+        continuation = mock_ai.generate_chat.await_args.args[0][-2]["content"]
+        assert "return {'version': 1}" in continuation
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        assert all(m.type != MessageType.SKILL_CONFIRM for m in sent)
+
+    async def test_update_skill_file_virtual_tool_updates_ai_owned_skill(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """AI-owned mutable skill files update immediately in normal chat."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return (
+                "[SKILL: update_skill_file | skill_name=repairable | "
+                "path=main.py | "
+                "content=def execute(**kw):\\n    return {'version': 2}]"
+            )
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(return_value="Fixed it.")
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        skill_dir = self._write_skill(eng._skills.skills_dir, "repairable")
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Repair skill",
+            )
+        )
+
+        assert "version': 2" in (skill_dir / "main.py").read_text(encoding="utf-8")
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        assert all(m.type != MessageType.SKILL_CONFIRM for m in sent)
+
+    async def test_update_locked_skill_file_virtual_tool_requests_confirmation(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Locked skill files request approval before updates."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return (
+                "[SKILL: update_skill_file | skill_name=locked | "
+                "path=main.py | "
+                "content=def execute(**kw):\\n    return {'version': 2}]"
+            )
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        self._write_skill(
+            eng._skills.skills_dir,
+            "locked",
+            ownership="system",
+            mutable_by_ai=False,
+            requires_approval_to_modify=True,
+        )
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Repair locked skill",
+            )
+        )
+
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        confirm = next(m for m in sent if m.type == MessageType.SKILL_CONFIRM)
+        assert confirm.metadata["skill_name"] == "update_skill_file"
+        mock_ai.generate_chat.assert_not_awaited()
+
+    async def test_update_skill_settings_virtual_tool_requests_confirmation(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Skill settings changes are always approval-gated."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return (
+                "[SKILL: update_skill_settings | skill_name=repairable | "
+                "ownership=user | mutable_by_ai=false]"
+            )
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        self._write_skill(eng._skills.skills_dir, "repairable")
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Lock skill",
+            )
+        )
+
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        confirm = next(m for m in sent if m.type == MessageType.SKILL_CONFIRM)
+        assert confirm.metadata["skill_name"] == "update_skill_settings"
+        mock_ai.generate_chat.assert_not_awaited()
+
+    async def test_action_budget_limits_multiple_tool_tags(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """ReAct consumes shared ActionBudget per tool action, not per loop."""
+        calls: list[str] = []
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "[SKILL: first_tool] [SKILL: second_tool]"
+
+        def first_tool(**kwargs: object) -> dict[str, str]:
+            calls.append("first")
+            return {"result": "first"}
+
+        def second_tool(**kwargs: object) -> dict[str, str]:
+            calls.append("second")
+            return {"result": "second"}
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(return_value="Budget noted.")
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        eng._react_config.max_actions_per_turn = 1
+        eng._skills._skills["first_tool"] = Skill(
+            meta=SkillMeta(
+                name="first_tool",
+                description="First",
+                usage="",
+                safety_level=SafetyLevel.SAFE,
+            ),
+            _test_callable=first_tool,
+        )
+        eng._skills._skills["second_tool"] = Skill(
+            meta=SkillMeta(
+                name="second_tool",
+                description="Second",
+                usage="",
+                safety_level=SafetyLevel.SAFE,
+            ),
+            _test_callable=second_tool,
+        )
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Run both",
+            )
+        )
+
+        assert calls == ["first"]
+        continuation = mock_ai.generate_chat.await_args.args[0][-2]["content"]
+        assert "Action budget exhausted" in continuation
 
     async def test_create_skill_virtual_tool_requests_confirmation(
         self,
@@ -4304,6 +4597,48 @@ class TestReActLoop:
         assert meta["proposal_type"] == ProposalType.SKILL_PROPOSAL
         assert meta["proposed_skill"]["name"] == "hello_tool"
         assert "\n    return" in meta["proposed_skill"]["code"]
+
+    async def test_skill_confirmation_reuses_duplicate_pending_proposal(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Equivalent pending skill approvals reuse one proposal and button."""
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        await memory.get_or_create_user("u1", "Alice")
+        user_id = "u1"
+        message = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="Run the risky thing",
+            metadata={"channel_id": "c1", "is_dm": False},
+        )
+
+        first = await eng._request_skill_confirmation(
+            user_id=user_id,
+            message=message,
+            skill_name="risky",
+            skill_params={"target": "x"},
+        )
+        second = await eng._request_skill_confirmation(
+            user_id=user_id,
+            message=message,
+            skill_name="risky",
+            skill_params={"target": "x"},
+        )
+
+        assert second == first
+        proposals = await memory.get_certain_records(user_id, record_type="proposal")
+        assert len(proposals) == 1
+        mock_gateway.send_to_adapter.assert_awaited_once()
+        meta = json.loads(proposals[0]["metadata"])
+        assert meta["resume_context"]["interrupted"] is True
+        assert meta["resume_context"]["original_content"] == "Run the risky thing"
+        assert meta["resume_context"]["channel_id"] == "c1"
 
     async def test_create_skill_quoted_fields_are_normalized(
         self,
@@ -4531,7 +4866,7 @@ class TestReActLoop:
         # "Let me check." should be flushed before the final reply
         assert any("Let me check." in c for c in all_contents)
 
-    async def test_pre_tag_text_followed_by_tool_running_ack(
+    async def test_pre_tag_text_followed_by_final_tool_summary(
         self,
         mock_ai: AsyncMock,
         soul: Soul,
@@ -4539,7 +4874,7 @@ class TestReActLoop:
         mock_gateway: AsyncMock,
         tmp_path: Path,
     ) -> None:
-        """After pre-tool text, send a visible ACK while the tool runs."""
+        """After pre-tool text, send one final tool summary ACK."""
 
         async def _generate(**kw: object) -> str:
             prompt = str(kw.get("prompt", ""))
@@ -4572,9 +4907,10 @@ class TestReActLoop:
         pre_index = next(i for i, m in enumerate(sent) if "Let me check." in m.content)
         ack_index = next(i for i, m in enumerate(sent) if m.type == MessageType.ACK)
         assert pre_index < ack_index
-        assert "Running tool" in sent[ack_index].content
+        assert "Tool usage summary" in sent[ack_index].content
+        assert "test_tool: completed" in sent[ack_index].content
 
-    async def test_expose_trace_shows_safe_tool_progress(
+    async def test_expose_trace_details_final_tool_summary(
         self,
         mock_ai: AsyncMock,
         soul: Soul,
@@ -4582,7 +4918,7 @@ class TestReActLoop:
         mock_gateway: AsyncMock,
         tmp_path: Path,
     ) -> None:
-        """Opt-in ReAct trace shows tool purpose and redacts sensitive values."""
+        """Opt-in ReAct trace includes redacted params in final summary."""
         mock_ai.generate = AsyncMock(
             return_value=(
                 "Checking. [SKILL: test_tool | query=CordBeat | api_key=secret-value]"
@@ -4609,7 +4945,8 @@ class TestReActLoop:
 
         sent = [call.args[1] for call in mock_gateway.send_to_adapter.call_args_list]
         ack_contents = [item.content for item in sent if item.type == MessageType.ACK]
-        assert any("ReAct 1/3" in content for content in ack_contents)
+        assert len(ack_contents) == 1
+        assert "Tool usage summary" in ack_contents[0]
         assert any('query="CordBeat"' in content for content in ack_contents)
         assert any("api_key=<redacted>" in content for content in ack_contents)
         assert any("completed" in content for content in ack_contents)

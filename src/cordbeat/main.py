@@ -22,6 +22,7 @@ from cordbeat.core.engine import CoreEngine
 from cordbeat.core.gateway import GatewayServer, MessageQueue
 from cordbeat.memory import MemoryStore
 from cordbeat.skills import SandboxConfig, SkillRateLimiter, SkillRegistry
+from cordbeat.skills.policy import apply_default_skill_settings
 from cordbeat.tools.metrics import REGISTRY as METRICS_REGISTRY
 from cordbeat.tools.metrics_server import PrometheusServer
 
@@ -103,9 +104,17 @@ def _sync_managed_builtin_skill(src_skill: Path, dst_skill: Path) -> bool:
             return False
         if dst_data.get("author") != "cordbeat":
             return False
+        src_data = apply_default_skill_settings(src_data)
 
         if "enabled" in dst_data:
             src_data["enabled"] = dst_data["enabled"]
+        for key in (
+            "ownership",
+            "mutable_by_ai",
+            "requires_approval_to_modify",
+        ):
+            if key in dst_data:
+                src_data[key] = dst_data[key]
         dst_contexts = dst_data.get("contexts")
         if isinstance(dst_contexts, dict) and "shared_voice" in dst_contexts:
             src_contexts = src_data.setdefault("contexts", {})
@@ -171,6 +180,15 @@ def _sync_builtin_skills(skills_dir: Path) -> None:
             continue
         try:
             shutil.copytree(src_skill, dst_skill)
+            dst_yaml = dst_skill / "skill.yaml"
+            if dst_yaml.is_file():
+                raw = yaml.safe_load(dst_yaml.read_text(encoding="utf-8")) or {}
+                if isinstance(raw, dict):
+                    raw = apply_default_skill_settings(raw)
+                    dst_yaml.write_text(
+                        yaml.safe_dump(raw, sort_keys=False, allow_unicode=True),
+                        encoding="utf-8",
+                    )
             logger.info("Installed built-in skill '%s' → %s", src_skill.name, dst_skill)
         except OSError:
             logger.exception("Failed to install built-in skill '%s'", src_skill.name)

@@ -19,7 +19,12 @@ from cordbeat.models import (
     ProposalType,
     SoulCaller,
 )
-from cordbeat.skills.policy import sandbox_overrides_for_skill
+from cordbeat.skills.policy import (
+    apply_default_skill_settings,
+    sandbox_overrides_for_skill,
+    update_skill_file,
+    update_skill_settings,
+)
 from cordbeat.skills.registry import SkillRegistry
 from cordbeat.skills.validator import SkillValidationError, validate_skill_source
 
@@ -28,6 +33,67 @@ from .soul import Soul
 logger = logging.getLogger(__name__)
 
 _AI_GENERATED_AUTHOR = "cordbeat-ai"
+_UPDATE_SKILL_FILE_TOOL_NAME = "update_skill_file"
+_UPDATE_SKILL_SETTINGS_TOOL_NAME = "update_skill_settings"
+
+
+def _stable_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _metadata_matches_pending(
+    metadata: dict[str, Any],
+    *,
+    proposal_type: str,
+    skill_name: str | None = None,
+    skill_params: dict[str, Any] | None = None,
+    proposed_skill: dict[str, Any] | None = None,
+) -> bool:
+    if metadata.get("proposal_type") != proposal_type:
+        return False
+    if metadata.get("status") != ProposalStatus.PENDING:
+        return False
+    if skill_name is not None and metadata.get("skill_name") != skill_name:
+        return False
+    if skill_params is not None and _stable_json(
+        metadata.get("skill_params") or {}
+    ) != _stable_json(skill_params):
+        return False
+    if proposed_skill is not None and _stable_json(
+        metadata.get("proposed_skill") or {}
+    ) != _stable_json(proposed_skill):
+        return False
+    return True
+
+
+async def find_duplicate_pending_proposal(
+    memory: MemoryStore,
+    *,
+    user_id: str,
+    proposal_type: str,
+    skill_name: str | None = None,
+    skill_params: dict[str, Any] | None = None,
+    proposed_skill: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return an existing equivalent pending proposal, if one exists."""
+    proposals = await memory.get_pending_proposals(
+        user_id=user_id,
+        status=ProposalStatus.PENDING,
+    )
+    for proposal in proposals:
+        try:
+            metadata = json.loads(proposal.get("metadata") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if _metadata_matches_pending(
+            metadata,
+            proposal_type=proposal_type,
+            skill_name=skill_name,
+            skill_params=skill_params,
+            proposed_skill=proposed_skill,
+        ):
+            return proposal
+    return None
 
 
 class ProposalExecutor:
@@ -115,6 +181,21 @@ class ProposalExecutor:
             f"Skill '{skill_name}' requires confirmation.\n"
             f"Parameters: {json.dumps(decision.skill_params)}"
         )
+        duplicate = await find_duplicate_pending_proposal(
+            self._memory,
+            user_id=user_id,
+            proposal_type=ProposalType.SKILL_EXECUTION,
+            skill_name=skill_name,
+            skill_params=decision.skill_params,
+        )
+        if duplicate is not None:
+            proposal_id = str(duplicate["id"])
+            logger.info(
+                "Reusing pending skill proposal id=%s skill=%s",
+                proposal_id,
+                skill_name,
+            )
+            return proposal_id
 
         proposal_id = await self._memory.add_certain_record(
             user_id=user_id,
@@ -242,6 +323,20 @@ class ProposalExecutor:
             f"New skill proposal: {skill_name}\n"
             f"Description: {proposed.get('description', '')}"
         )
+        duplicate = await find_duplicate_pending_proposal(
+            self._memory,
+            user_id=user_id,
+            proposal_type=ProposalType.SKILL_PROPOSAL,
+            proposed_skill=proposed,
+        )
+        if duplicate is not None:
+            proposal_id = str(duplicate["id"])
+            logger.info(
+                "Reusing pending skill creation proposal id=%s skill=%s",
+                proposal_id,
+                skill_name,
+            )
+            return proposal_id
 
         proposal_id = await self._memory.add_certain_record(
             user_id=user_id,
@@ -322,6 +417,9 @@ class ProposalExecutor:
             f'description: "{safe_desc}"',
             'version: "1.0.0"',
             f'author: "{_AI_GENERATED_AUTHOR}"',
+            "ownership: ai",
+            "mutable_by_ai: true",
+            "requires_approval_to_modify: false",
             "",
             f"usage: |\n  {safe_usage}",
             "",
@@ -385,11 +483,14 @@ class ProposalExecutor:
             return False
         if not isinstance(raw, dict):
             return False
+        raw = apply_default_skill_settings(raw)
         safety = raw.get("safety") or {}
         if not isinstance(safety, dict):
             safety = {}
         return (
-            raw.get("author") == _AI_GENERATED_AUTHOR
+            raw.get("ownership") == "ai"
+            and raw.get("mutable_by_ai") is True
+            and raw.get("requires_approval_to_modify") is False
             and safety.get("level", "safe") == "safe"
             and safety.get("sandbox") is True
             and safety.get("network") is not True
@@ -436,6 +537,13 @@ class ProposalExecutor:
         proposal_id = proposal["id"]
         skill_name = meta.get("skill_name", "")
         skill_params = meta.get("skill_params", {})
+        if skill_name == _UPDATE_SKILL_FILE_TOOL_NAME:
+            await self._execute_skill_file_update(proposal, skill_params)
+            return
+        if skill_name == _UPDATE_SKILL_SETTINGS_TOOL_NAME:
+            await self._execute_skill_settings_update(proposal, skill_params)
+            return
+
         skill = self._skills.get(skill_name)
         if skill is None:
             logger.warning(
@@ -485,6 +593,77 @@ class ProposalExecutor:
             await self._notify_result(
                 proposal,
                 f"❌ Skill '{skill_name}' failed — proposal expired.",
+            )
+
+    async def _execute_skill_file_update(
+        self,
+        proposal: dict[str, Any],
+        skill_params: dict[str, Any],
+    ) -> None:
+        proposal_id = proposal["id"]
+        try:
+            result = update_skill_file(
+                self._skills.skills_dir,
+                skill_name=skill_params.get("skill_name"),
+                path=skill_params.get("path"),
+                content=skill_params.get("content"),
+                approved=True,
+            )
+            self._skills.load_all()
+            await self._memory.update_proposal_status(
+                proposal_id, ProposalStatus.EXECUTED
+            )
+            await self._notify_result(
+                proposal,
+                "✅ Skill file updated successfully.\n"
+                f"{result['skill_name']}/{result['path']}",
+            )
+        except Exception:
+            logger.exception("Approved skill file update failed")
+            await self._memory.update_proposal_status(
+                proposal_id, ProposalStatus.EXPIRED
+            )
+            await self._notify_result(
+                proposal,
+                "❌ Skill file update failed — proposal expired.",
+            )
+
+    async def _execute_skill_settings_update(
+        self,
+        proposal: dict[str, Any],
+        skill_params: dict[str, Any],
+    ) -> None:
+        proposal_id = proposal["id"]
+        try:
+            result = update_skill_settings(
+                self._skills.skills_dir,
+                skill_name=skill_params.get("skill_name"),
+                ownership=skill_params.get("ownership"),
+                mutable_by_ai=skill_params.get("mutable_by_ai"),
+                requires_approval_to_modify=skill_params.get(
+                    "requires_approval_to_modify"
+                ),
+            )
+            self._skills.load_all()
+            await self._memory.update_proposal_status(
+                proposal_id, ProposalStatus.EXECUTED
+            )
+            await self._notify_result(
+                proposal,
+                "✅ Skill settings updated successfully.\n"
+                f"{result['skill_name']}: ownership={result['ownership']}, "
+                f"mutable_by_ai={result['mutable_by_ai']}, "
+                "requires_approval_to_modify="
+                f"{result['requires_approval_to_modify']}",
+            )
+        except Exception:
+            logger.exception("Approved skill settings update failed")
+            await self._memory.update_proposal_status(
+                proposal_id, ProposalStatus.EXPIRED
+            )
+            await self._notify_result(
+                proposal,
+                "❌ Skill settings update failed — proposal expired.",
             )
 
     async def _execute_trait_proposal(
@@ -578,6 +757,14 @@ class ProposalExecutor:
         platform_user_id = await self._memory.resolve_platform_user(user_id, adapter_id)
         if not platform_user_id:
             return
+
+        resume = meta.get("resume_context")
+        if isinstance(resume, dict) and resume.get("interrupted"):
+            message = (
+                f"{message}\n\n"
+                "The approval-gated action from the interrupted conversation "
+                "has now completed."
+            )
 
         notification = GatewayMessage(
             type=MessageType.HEARTBEAT_MESSAGE,

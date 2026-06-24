@@ -732,8 +732,24 @@ def _discord_ui_mock() -> MagicMock:
         def stop(self) -> None:
             pass
 
+    class _Embed:
+        def __init__(self, *a: Any, **k: Any) -> None:
+            self.title = k.get("title", "")
+            self.description = k.get("description", "")
+            self.color = k.get("color")
+            self.fields: list[tuple[str, str, bool]] = []
+            self.footer = MagicMock()
+            self.footer.text = ""
+
+        def add_field(self, *, name: str, value: str, inline: bool) -> None:
+            self.fields.append((name, value, inline))
+
+        def set_footer(self, *, text: str) -> None:
+            self.footer.text = text
+
     d.ui.View = _View
     d.ui.button = lambda **kw: lambda fn: fn
+    d.Embed = _Embed
     return d
 
 
@@ -763,9 +779,12 @@ class TestDiscordSkillConfirm:
             await adapter._dispatch_skill_confirm("u1", data)
             channel.send.assert_awaited_once()
             view = channel.send.call_args.kwargs["view"]
+            embed = channel.send.call_args.kwargs["embed"]
             assert view.timeout is None
 
             inter = MagicMock()
+            inter.user.id = 99
+            inter.message.embeds = [embed]
             inter.response.defer = AsyncMock()
             inter.edit_original_response = AsyncMock()
             await view.allow_once(inter, MagicMock())
@@ -776,6 +795,8 @@ class TestDiscordSkillConfirm:
         ]
         assert "/approve p1" in sent
         assert "/reject p1" in sent
+        payloads = [json.loads(c.args[0]) for c in adapter._ws.send.call_args_list]
+        assert {p["platform_user_id"] for p in payloads} == {"99"}
         assert inter.response.defer.await_count == 2
         assert inter.edit_original_response.await_count == 2
 
@@ -803,8 +824,11 @@ class TestDiscordSkillConfirm:
         ):
             await adapter._dispatch_skill_confirm("u1", data)
             view = channel.send.call_args.kwargs["view"]
+            embed = channel.send.call_args.kwargs["embed"]
 
             inter = MagicMock()
+            inter.user.id = 55
+            inter.message.embeds = [embed]
             inter.response.defer = AsyncMock()
             inter.edit_original_response = AsyncMock()
             await view.allow_once(inter, MagicMock())
@@ -813,6 +837,29 @@ class TestDiscordSkillConfirm:
         inter.edit_original_response.assert_awaited_once()
         content = inter.edit_original_response.call_args.kwargs["content"]
         assert "Failed to send approval" in content
+
+    async def test_persistent_view_handles_old_button_from_embed_footer(self) -> None:
+        adapter = self._adapter()
+        adapter._ws = AsyncMock()
+        discord = _discord_ui_mock()
+        view = adapter._make_skill_confirm_view(discord)
+
+        embed = discord.Embed(
+            title="Skill Execution Required",
+            description="**`search`** wants to run",
+        )
+        embed.set_footer(text="Proposal ID: old-prop")
+        inter = MagicMock()
+        inter.user.id = 77
+        inter.message.embeds = [embed]
+        inter.response.defer = AsyncMock()
+        inter.edit_original_response = AsyncMock()
+
+        await view.allow_once(inter, MagicMock())
+
+        payload = json.loads(adapter._ws.send.call_args.args[0])
+        assert payload["content"] == "/approve old-prop"
+        assert payload["platform_user_id"] == "77"
 
     async def test_falls_back_to_text_when_no_channel(self) -> None:
         adapter = self._adapter()

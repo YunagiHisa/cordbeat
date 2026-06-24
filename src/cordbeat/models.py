@@ -179,6 +179,9 @@ class SkillMeta:
     enabled: bool = True
     shared_voice_enabled: bool = False
     rate_limit_per_minute: int | None = None
+    ownership: str = "user"
+    mutable_by_ai: bool = False
+    requires_approval_to_modify: bool = True
 
 
 @dataclass

@@ -9,6 +9,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import yaml
 
 from cordbeat.agent.heartbeat import HeartbeatLoop, _in_quiet_hours, _parse_time
 from cordbeat.agent.soul import Soul
@@ -23,6 +24,7 @@ from cordbeat.models import (
     ProposalType,
     SafetyLevel,
     SkillMeta,
+    SkillParam,
     UserSummary,
 )
 from cordbeat.skills import Skill, SkillRegistry
@@ -651,6 +653,46 @@ class TestBuildGlobalContextElapsed:
 
 
 class TestSkillExecution:
+    def _write_skill(
+        self,
+        skills_dir: Path,
+        name: str,
+        *,
+        ownership: str = "ai",
+        mutable_by_ai: bool = True,
+        requires_approval_to_modify: bool = False,
+    ) -> Path:
+        skill_dir = skills_dir / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "skill.yaml").write_text(
+            "\n".join(
+                [
+                    f"name: {name}",
+                    'description: "test"',
+                    'version: "1.0.0"',
+                    'author: "cordbeat-ai"',
+                    f"ownership: {ownership}",
+                    f"mutable_by_ai: {str(mutable_by_ai).lower()}",
+                    "requires_approval_to_modify: "
+                    f"{str(requires_approval_to_modify).lower()}",
+                    "usage: test",
+                    "parameters: []",
+                    "safety:",
+                    "  level: safe",
+                    "  sandbox: true",
+                    "  network: false",
+                    "  filesystem: false",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (skill_dir / "main.py").write_text(
+            "def execute(**kw):\n    return {'version': 1}\n",
+            encoding="utf-8",
+        )
+        return skill_dir
+
     async def test_safe_skill_executes(
         self,
         heartbeat: HeartbeatLoop,
@@ -731,6 +773,124 @@ class TestSkillExecution:
         assert json.loads(records[0]["content"]) == {
             "error": "RuntimeError: skill error"
         }
+
+    async def test_virtual_read_skill_file_records_result(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """Heartbeat can inspect an installed skill source directly."""
+        await memory.get_or_create_user("u1", "Alice")
+        self._write_skill(heartbeat._skills.skills_dir, "repairable")
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="read_skill_file",
+            skill_params={"skill_name": "repairable", "path": "main.py"},
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_decision(decision)
+
+        records = await memory.get_certain_records(
+            "u1", record_type="heartbeat_skill_result"
+        )
+        assert len(records) == 1
+        payload = json.loads(records[0]["content"])
+        assert payload["skill_name"] == "repairable"
+        assert "return {'version': 1}" in payload["content"]
+
+    async def test_virtual_update_ai_owned_skill_file_runs_without_approval(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """AI-owned mutable skill files can be repaired during heartbeat."""
+        await memory.get_or_create_user("u1", "Alice")
+        skill_dir = self._write_skill(heartbeat._skills.skills_dir, "repairable")
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="update_skill_file",
+            skill_params={
+                "skill_name": "repairable",
+                "path": "main.py",
+                "content": "def execute(**kw):\n    return {'version': 2}\n",
+            },
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_decision(decision)
+
+        assert "version': 2" in (skill_dir / "main.py").read_text(encoding="utf-8")
+        records = await memory.get_certain_records(
+            "u1", record_type="heartbeat_skill_result"
+        )
+        assert len(records) == 1
+        assert json.loads(records[0]["content"])["status"] == "ok"
+        assert not mock_gateway.send_to_adapter.await_args_list
+
+    async def test_virtual_update_locked_skill_file_requests_approval(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """Locked/user/system skill files become approval proposals."""
+        await memory.get_or_create_user("u1", "Alice")
+        self._write_skill(
+            heartbeat._skills.skills_dir,
+            "locked",
+            ownership="system",
+            mutable_by_ai=False,
+            requires_approval_to_modify=True,
+        )
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="update_skill_file",
+            skill_params={
+                "skill_name": "locked",
+                "path": "main.py",
+                "content": "def execute(**kw):\n    return {'version': 2}\n",
+            },
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_decision(decision)
+
+        proposals = await memory.get_certain_records("u1", record_type="proposal")
+        assert len(proposals) == 1
+        meta = json.loads(proposals[0]["metadata"])
+        assert meta["proposal_type"] == ProposalType.SKILL_EXECUTION
+        assert meta["skill_name"] == "update_skill_file"
+
+    async def test_virtual_update_skill_settings_requests_approval(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """Skill settings changes always go through approval."""
+        await memory.get_or_create_user("u1", "Alice")
+        self._write_skill(heartbeat._skills.skills_dir, "repairable")
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="update_skill_settings",
+            skill_params={
+                "skill_name": "repairable",
+                "ownership": "user",
+                "mutable_by_ai": False,
+            },
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_decision(decision)
+
+        proposals = await memory.get_certain_records("u1", record_type="proposal")
+        assert len(proposals) == 1
+        meta = json.loads(proposals[0]["metadata"])
+        assert meta["skill_name"] == "update_skill_settings"
 
 
 # ── Sleep phase error handling ────────────────────────────────────────
@@ -1449,6 +1609,68 @@ class TestTwoLayerIntegration:
         assert len(records) == 1
         assert json.loads(records[0]["content"]) == {"result": "reflected"}
 
+    async def test_action_budget_limits_layer2_actions(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+    ) -> None:
+        """Heartbeat consumes the shared ActionBudget per executed decision."""
+        heartbeat._config.max_actions_per_tick = 1
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.get_or_create_user("u2", "Bob")
+        calls: list[str] = []
+
+        def safe_execute(user_id: str = "", **kw: object) -> dict[str, str]:
+            calls.append(user_id)
+            return {"result": user_id}
+
+        skills._skills["safe_skill"] = Skill(
+            meta=SkillMeta(
+                name="safe_skill",
+                description="Safe",
+                usage="",
+                safety_level=SafetyLevel.SAFE,
+                enabled=True,
+                parameters=[SkillParam(name="user_id", type="string")],
+            ),
+            _test_callable=safe_execute,
+        )
+        heartbeat._layer2_evaluate = AsyncMock(
+            side_effect=[
+                HeartbeatDecision(
+                    action=HeartbeatAction.SKILL,
+                    skill_name="safe_skill",
+                    skill_params={},
+                    target_user_id="u1",
+                    target_adapter_id="discord",
+                    next_heartbeat_minutes=30,
+                ),
+                HeartbeatDecision(
+                    action=HeartbeatAction.SKILL,
+                    skill_name="safe_skill",
+                    skill_params={},
+                    target_user_id="u2",
+                    target_adapter_id="discord",
+                    next_heartbeat_minutes=30,
+                ),
+            ]
+        )
+
+        await heartbeat._run_layer2(
+            [
+                UserSummary(user_id="u1", display_name="Alice"),
+                UserSummary(user_id="u2", display_name="Bob"),
+            ],
+            [
+                {"user_id": "u1", "reason": "check"},
+                {"user_id": "u2", "reason": "check"},
+            ],
+            60,
+        )
+
+        assert calls == ["u1"]
+
 
 # ── Proposal workflow ─────────────────────────────────────────────────
 
@@ -1598,6 +1820,31 @@ class TestSkillProposal:
         assert meta["proposal_type"] == ProposalType.SKILL_EXECUTION
         assert meta["skill_name"] == "deploy"
         assert meta["status"] == ProposalStatus.PENDING
+
+    async def test_duplicate_skill_proposal_reuses_pending_record(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Heartbeat skill proposals are deduplicated while pending."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="deploy",
+            skill_params={"target": "prod"},
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+
+        first = await heartbeat._proposals.store_skill_proposal(decision, "deploy")
+        second = await heartbeat._proposals.store_skill_proposal(decision, "deploy")
+
+        assert second == first
+        records = await memory.get_certain_records("u1", record_type="proposal")
+        assert len(records) == 1
+        mock_gateway.send_to_adapter.assert_awaited_once()
 
     async def test_sandbox_local_file_skill_executes_without_proposal(
         self,
@@ -1761,6 +2008,37 @@ class TestSkillProposal:
 class TestApprovedProposalExecution:
     """Tests for executing approved proposals on heartbeat tick."""
 
+    def _write_skill(self, skills_dir: Path, name: str) -> Path:
+        skill_dir = skills_dir / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "skill.yaml").write_text(
+            "\n".join(
+                [
+                    f"name: {name}",
+                    'description: "test"',
+                    'version: "1.0.0"',
+                    'author: "cordbeat-ai"',
+                    "ownership: ai",
+                    "mutable_by_ai: true",
+                    "requires_approval_to_modify: false",
+                    "usage: test",
+                    "parameters: []",
+                    "safety:",
+                    "  level: safe",
+                    "  sandbox: true",
+                    "  network: false",
+                    "  filesystem: false",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (skill_dir / "main.py").write_text(
+            "def execute(**kw):\n    return {'version': 1}\n",
+            encoding="utf-8",
+        )
+        return skill_dir
+
     async def test_approved_skill_proposal_executed(
         self,
         heartbeat: HeartbeatLoop,
@@ -1848,6 +2126,74 @@ class TestApprovedProposalExecution:
 
         assert calls == [("notes.md", False)]
 
+    async def test_approved_virtual_skill_file_update_executes(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """Approved virtual skill file updates are dispatched by proposal executor."""
+        skill_dir = self._write_skill(heartbeat._skills.skills_dir, "repairable")
+
+        proposal_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Update skill file",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "update_skill_file",
+                "skill_params": {
+                    "skill_name": "repairable",
+                    "path": "main.py",
+                    "content": "def execute(**kw):\n    return {'version': 2}\n",
+                },
+            },
+        )
+
+        await heartbeat._proposals.execute_approved()
+
+        assert "version': 2" in (skill_dir / "main.py").read_text(encoding="utf-8")
+        proposal = await memory.get_proposal(proposal_id)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.EXECUTED
+
+    async def test_approved_virtual_skill_settings_update_executes(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """Approved skill setting changes are dispatched by proposal executor."""
+        skill_dir = self._write_skill(heartbeat._skills.skills_dir, "repairable")
+
+        proposal_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Update skill settings",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "update_skill_settings",
+                "skill_params": {
+                    "skill_name": "repairable",
+                    "ownership": "user",
+                    "mutable_by_ai": "false",
+                    "requires_approval_to_modify": "true",
+                },
+            },
+        )
+
+        await heartbeat._proposals.execute_approved()
+
+        data = yaml.safe_load((skill_dir / "skill.yaml").read_text(encoding="utf-8"))
+        assert data["ownership"] == "user"
+        assert data["mutable_by_ai"] is False
+        assert data["requires_approval_to_modify"] is True
+        proposal = await memory.get_proposal(proposal_id)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.EXECUTED
+
     async def test_approved_skill_structured_result_is_notified(
         self,
         heartbeat: HeartbeatLoop,
@@ -1884,6 +2230,10 @@ class TestApprovedProposalExecution:
                 "skill_name": "web_search",
                 "skill_params": {"query": "CordBeat"},
                 "adapter_id": "discord",
+                "resume_context": {
+                    "interrupted": True,
+                    "original_content": "Please search CordBeat",
+                },
             },
         )
 
@@ -1892,6 +2242,7 @@ class TestApprovedProposalExecution:
         msg = mock_gateway.send_to_adapter.call_args.args[1]
         assert "CordBeat" in msg.content
         assert "https://example.com" in msg.content
+        assert "interrupted conversation" in msg.content
 
     async def test_approved_missing_skill_marked_expired(
         self,
@@ -2546,6 +2897,9 @@ class TestSkillCreationProposal:
         assert skill.meta.sandbox is True
         assert skill.meta.network is False
         assert skill.meta.filesystem is False
+        assert skill.meta.ownership == "ai"
+        assert skill.meta.mutable_by_ai is True
+        assert skill.meta.requires_approval_to_modify is False
 
     async def test_install_rejects_invalid_name(
         self,

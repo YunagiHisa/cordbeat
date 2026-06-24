@@ -29,7 +29,7 @@ from cordbeat.tools.metrics import (
 )
 
 from .env import SkillEnvManager
-from .policy import SANDBOX_SHARED_WORK_DIR
+from .policy import SANDBOX_SHARED_WORK_DIR, apply_default_skill_settings
 from .rate_limit import SkillRateLimiter
 from .sandbox import (
     DEFAULT_CONFIG,
@@ -275,6 +275,7 @@ class SkillRegistry:
 
         with yaml_path.open(encoding="utf-8") as f:
             raw: dict[str, Any] = yaml.safe_load(f) or {}
+        raw = apply_default_skill_settings(raw)
 
         safety_raw = raw.get("safety", {})
         contexts_raw = raw.get("contexts", {})
@@ -311,6 +312,11 @@ class SkillRegistry:
             enabled=raw.get("enabled", True),
             shared_voice_enabled=contexts_raw.get("shared_voice", False) is True,
             rate_limit_per_minute=rate_limit_per_minute,
+            ownership=str(raw.get("ownership") or "user"),
+            mutable_by_ai=raw.get("mutable_by_ai") is True,
+            requires_approval_to_modify=(
+                raw.get("requires_approval_to_modify") is not False
+            ),
         )
 
         if meta.safety_level == SafetyLevel.DANGEROUS and "enabled" not in raw:

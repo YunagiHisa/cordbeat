@@ -8,6 +8,7 @@ import inspect
 import io
 import json
 import logging
+import re
 import unicodedata
 import uuid
 from collections import OrderedDict, deque
@@ -43,6 +44,9 @@ _VC_FOLLOWUP_SECONDS_DEFAULT = 20.0
 _VC_PENDING_TIMEOUT_SECONDS_DEFAULT = 120.0
 _VC_WAKE_WORDS_DEFAULT = ("cordbeat",)
 _VC_ACTIVATION_MODES = frozenset({"always", "hybrid", "wake_phrase"})
+_SKILL_CONFIRM_APPROVE_CUSTOM_ID = "cordbeat:skill_confirm:approve"
+_SKILL_CONFIRM_DENY_CUSTOM_ID = "cordbeat:skill_confirm:deny"
+_PROPOSAL_ID_FOOTER_PREFIX = "Proposal ID:"
 _REQUIRED_VOICE_PERMISSIONS = (
     ("view_channel", "View Channel"),
     ("connect", "Connect"),
@@ -123,6 +127,7 @@ class DiscordAdapter(RetryableConnection):
         self._max_backoff = config.reconnect_max_backoff
         self._user_channels: OrderedDict[str, int] = OrderedDict()
         self._pending_skill_confirms: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._skill_confirm_view_registered = False
         self._filter = AdapterFilter.from_options(config.options)
 
         # Typing indicator tasks: channel_id → asyncio.Task
@@ -339,6 +344,16 @@ class DiscordAdapter(RetryableConnection):
         @self._bot.event
         async def on_ready() -> None:
             logger.info("Discord bot logged in as %s", self._bot.user)
+            if not self._skill_confirm_view_registered:
+                try:
+                    self._bot.add_view(self._make_skill_confirm_view(discord))
+                    self._skill_confirm_view_registered = True
+                    logger.info("Registered persistent Discord skill-confirm view")
+                except Exception:
+                    logger.warning(
+                        "Failed to register persistent skill-confirm view",
+                        exc_info=True,
+                    )
             try:
                 guild_id = self._config.options.get("guild_id")
                 if guild_id:
@@ -369,8 +384,6 @@ class DiscordAdapter(RetryableConnection):
             asyncio.create_task(self._connect_to_core())
 
         # CommandTree is auto-registered with the Client in discord.py 2.x.
-        # No manual on_interaction handler is needed — the tree processes slash
-        # commands internally via Client._handle_interaction.
 
         @self._bot.event
         async def on_message(message: discord.Message) -> None:
@@ -502,6 +515,37 @@ class DiscordAdapter(RetryableConnection):
             embed.add_field(name="Parameters", value=params_text, inline=False)
         embed.set_footer(text=f"Proposal ID: {proposal_id}")
 
+        try:
+            await channel.send(embed=embed, view=self._make_skill_confirm_view(discord))
+        except Exception:
+            logger.warning(
+                "Failed to send skill-confirm embed; falling back to text",
+                exc_info=True,
+            )
+            content = data.get("content", "")
+            await self._dispatch_core_message(platform_user_id, content, [])
+
+    def _proposal_id_from_interaction(self, interaction: Any) -> str:
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) or []
+        for embed in embeds:
+            footer = getattr(embed, "footer", None)
+            text = str(getattr(footer, "text", "") or "")
+            if text.startswith(_PROPOSAL_ID_FOOTER_PREFIX):
+                return text.removeprefix(_PROPOSAL_ID_FOOTER_PREFIX).strip()
+        return ""
+
+    def _skill_name_from_interaction(self, interaction: Any) -> str:
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) or []
+        for embed in embeds:
+            description = str(getattr(embed, "description", "") or "")
+            match = re.search(r"`([^`]+)`", description)
+            if match:
+                return match.group(1)
+        return "skill"
+
+    def _make_skill_confirm_view(self, discord: Any) -> Any:
         adapter = self
 
         class SkillConfirmView(discord.ui.View):  # type: ignore[misc]
@@ -512,7 +556,7 @@ class DiscordAdapter(RetryableConnection):
                 if inspect.isawaitable(value):
                     await value
 
-            async def _acknowledge(self, interaction: discord.Interaction) -> bool:
+            async def _acknowledge(self, interaction: Any) -> bool:
                 """Acknowledge Discord quickly so button clicks do not time out."""
                 try:
                     await self._maybe_await(interaction.response.defer())
@@ -526,7 +570,7 @@ class DiscordAdapter(RetryableConnection):
 
             async def _finish(
                 self,
-                interaction: discord.Interaction,
+                interaction: Any,
                 *,
                 content: str,
                 deferred: bool,
@@ -556,12 +600,23 @@ class DiscordAdapter(RetryableConnection):
 
             async def _send_command(
                 self,
-                interaction: discord.Interaction,
+                interaction: Any,
                 *,
-                command: str,
-                success_content: str,
+                action: str,
             ) -> None:
                 deferred = await self._acknowledge(interaction)
+                proposal_id = adapter._proposal_id_from_interaction(interaction)
+                skill_name = adapter._skill_name_from_interaction(interaction)
+                if not proposal_id:
+                    await self._finish(
+                        interaction,
+                        content=(
+                            "⚠️ This approval button is missing its proposal ID. "
+                            "Use /proposals to see active approvals."
+                        ),
+                        deferred=deferred,
+                    )
+                    return
                 if adapter._ws is None:
                     await self._finish(
                         interaction,
@@ -569,6 +624,8 @@ class DiscordAdapter(RetryableConnection):
                         deferred=deferred,
                     )
                     return
+                command = f"/{action} {proposal_id}"
+                platform_user_id = str(getattr(interaction.user, "id", ""))
                 try:
                     adapter._mark_proposal_action_sent(command)
                     await adapter._ws.send(
@@ -585,46 +642,40 @@ class DiscordAdapter(RetryableConnection):
                         deferred=deferred,
                     )
                     return
+                verb = "Approved once" if action == "approve" else "Denied"
+                icon = "✅" if action == "approve" else "❌"
                 await self._finish(
                     interaction,
-                    content=success_content,
+                    content=f"{icon} {verb}: `{skill_name}`",
                     deferred=deferred,
                 )
                 self.stop()
 
-            @discord.ui.button(label="✅ Allow Once", style=discord.ButtonStyle.success)  # type: ignore[misc]
+            @discord.ui.button(  # type: ignore[misc]
+                label="✅ Allow Once",
+                style=discord.ButtonStyle.success,
+                custom_id=_SKILL_CONFIRM_APPROVE_CUSTOM_ID,
+            )
             async def allow_once(
                 self,
-                interaction: discord.Interaction,
-                button: discord.ui.Button[Any],  # type: ignore[type-arg]
+                interaction: Any,
+                button: Any,
             ) -> None:
-                await self._send_command(
-                    interaction,
-                    command=f"/approve {proposal_id}",
-                    success_content=f"✅ Approved once: `{skill_name}`",
-                )
+                await self._send_command(interaction, action="approve")
 
-            @discord.ui.button(label="❌ Deny", style=discord.ButtonStyle.danger)  # type: ignore[misc]
+            @discord.ui.button(  # type: ignore[misc]
+                label="❌ Deny",
+                style=discord.ButtonStyle.danger,
+                custom_id=_SKILL_CONFIRM_DENY_CUSTOM_ID,
+            )
             async def deny(
                 self,
-                interaction: discord.Interaction,
-                button: discord.ui.Button[Any],  # type: ignore[type-arg]
+                interaction: Any,
+                button: Any,
             ) -> None:
-                await self._send_command(
-                    interaction,
-                    command=f"/reject {proposal_id}",
-                    success_content=f"❌ Denied: `{skill_name}`",
-                )
+                await self._send_command(interaction, action="reject")
 
-        try:
-            await channel.send(embed=embed, view=SkillConfirmView())
-        except Exception:
-            logger.warning(
-                "Failed to send skill-confirm embed; falling back to text",
-                exc_info=True,
-            )
-            content = data.get("content", "")
-            await self._dispatch_core_message(platform_user_id, content, [])
+        return SkillConfirmView()
 
     async def _forward_to_core(self, message: Any) -> None:
         user_id = str(message.author.id)

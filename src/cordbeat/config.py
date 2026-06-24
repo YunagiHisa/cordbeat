@@ -60,6 +60,7 @@ class HeartbeatConfig:
     proactive_user_cooldown_minutes: int = 1440
     proactive_destination_cooldown_minutes: int = 360
     max_proactive_messages_per_tick: int = 1
+    max_actions_per_tick: int = 3
     quiet_hours_start: str = "01:00"
     quiet_hours_end: str = "07:00"
     timezone: str = "UTC"
@@ -274,6 +275,7 @@ class ReActConfig:
 
     enabled: bool = True
     max_iterations: int = 3
+    max_actions_per_turn: int | None = None
     max_tool_output_chars: int = 4000
     expose_trace_to_user: bool = False
 

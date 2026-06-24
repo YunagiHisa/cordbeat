@@ -132,6 +132,7 @@ heartbeat:
   default_interval_minutes: 60
   min_interval_minutes: 5
   max_interval_minutes: 1440
+  max_actions_per_tick: 3  # shared ActionBudget cap for heartbeat actions
   quiet_hours_start: "01:00"
   quiet_hours_end: "07:00"
   timezone: "UTC"  # IANA timezone (e.g. "Asia/Tokyo")
@@ -188,8 +189,9 @@ data_dir: "data"
 react:
   enabled: true             # set false to disable ReAct loop (strips skill tags instead)
   max_iterations: 3         # maximum tool-call/re-prompt cycles per message
+  max_actions_per_turn: 3   # shared ActionBudget cap for tool actions per message
   max_tool_output_chars: 4000  # per-result output truncation limit fed back to AI
-  expose_trace_to_user: false  # show safe ReAct tool name/params/status messages
+  expose_trace_to_user: false  # include redacted params in the final tool summary
 
 skills:
   default_rate_limit_per_minute: 0  # 0 = unlimited; per-skill rate limit (calls/min)

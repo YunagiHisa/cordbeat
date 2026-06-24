@@ -67,6 +67,35 @@ class TestSkillRegistry:
         assert "greet" in registry.available_skills
         assert "search" in registry.available_skills
 
+    def test_skill_ownership_defaults_from_author(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "ai_skill")
+        _create_skill(skills_dir, "system_skill")
+        (skills_dir / "ai_skill" / "skill.yaml").write_text(
+            (skills_dir / "ai_skill" / "skill.yaml").read_text(encoding="utf-8")
+            + 'author: "cordbeat-ai"\n',
+            encoding="utf-8",
+        )
+        (skills_dir / "system_skill" / "skill.yaml").write_text(
+            (skills_dir / "system_skill" / "skill.yaml").read_text(
+                encoding="utf-8"
+            )
+            + 'author: "cordbeat"\n',
+            encoding="utf-8",
+        )
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+
+        ai_meta = registry.available_skills["ai_skill"]
+        assert ai_meta.ownership == "ai"
+        assert ai_meta.mutable_by_ai is True
+        assert ai_meta.requires_approval_to_modify is False
+        system_meta = registry.available_skills["system_skill"]
+        assert system_meta.ownership == "system"
+        assert system_meta.mutable_by_ai is False
+        assert system_meta.requires_approval_to_modify is True
+
     def test_empty_dir(self, tmp_path: Path) -> None:
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()

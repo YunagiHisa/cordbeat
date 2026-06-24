@@ -55,6 +55,9 @@ You are executing HEARTBEAT Layer 1 — a quick triage scan.
 Review the user summaries below and decide which users need attention right now.
 Consider: how long since you last talked, their emotional tone, attention score.
 If nobody needs attention, return an empty list.
+Choose next_heartbeat_minutes yourself based on urgency: shorter when something
+may need timely follow-up, longer when things are quiet. The system will clamp
+the value to configured min/max safety bounds.
 
 You MUST respond in valid JSON:
 {{
@@ -81,6 +84,9 @@ Available skills:
 You are executing HEARTBEAT Layer 2 — a detailed evaluation for one user.
 Based on the user's context, conversation history, and memories below,
 decide what action to take for this specific user.
+Choose next_heartbeat_minutes yourself based on urgency: shorter when there is
+a reason to check back soon, longer when no near-term follow-up is useful. The
+system will clamp the value to configured min/max safety bounds.
 
 Relevance rule:
 Treat conversation history and memories as background, not as a request to

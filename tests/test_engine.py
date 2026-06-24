@@ -4141,7 +4141,7 @@ class TestReActLoop:
                     '{"topic": "t", "emotional_tone": "n",'
                     ' "facts": [], "episode_summary": ""}'
                 )
-            return "[SKILL: file_read | path=notes.md]"
+            return '[SKILL: file_read | path="notes.md"]'
 
         calls: list[tuple[str, bool]] = []
 
@@ -4177,6 +4177,57 @@ class TestReActLoop:
         mock_ai.generate_chat.assert_awaited_once()
         sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
         assert all(m.type != MessageType.SKILL_CONFIRM for m in sent)
+
+    async def test_skill_failure_detail_is_passed_to_continuation(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Tool failures should give the AI enough detail to repair the call."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "[SKILL: broken_tool | bet=100]"
+
+        def broken_tool(**kwargs: object) -> dict[str, object]:
+            raise ValueError("bad bet")
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(return_value="I saw the error.")
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        eng._skills._skills["broken_tool"] = Skill(
+            meta=SkillMeta(
+                name="broken_tool",
+                description="Broken",
+                usage="",
+                safety_level=SafetyLevel.SAFE,
+            ),
+            _test_callable=broken_tool,
+        )
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Run broken tool",
+            )
+        )
+
+        continuation = mock_ai.generate_chat.await_args.args[0][-2]["content"]
+        assert "Tool execution failed: ValueError: bad bet" in continuation
 
     async def test_create_skill_virtual_tool_is_advertised(
         self,
@@ -4253,6 +4304,67 @@ class TestReActLoop:
         assert meta["proposal_type"] == ProposalType.SKILL_PROPOSAL
         assert meta["proposed_skill"]["name"] == "hello_tool"
         assert "\n    return" in meta["proposed_skill"]["code"]
+
+    async def test_create_skill_quoted_fields_are_normalized(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Quoted model output should not poison skill names or parameters."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return (
+                '[SKILL: create_skill | name="stock_casino" | '
+                'description="Casino" | usage="stock_casino(bet=100)" | '
+                "parameters=[bet] | "
+                "code=\"def execute(bet=0):\\n    return {'bet': bet}\"]"
+            )
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Create stock casino",
+            )
+        )
+
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        confirm = next(m for m in sent if m.type == MessageType.SKILL_CONFIRM)
+        params = confirm.metadata["skill_params"]
+        assert params["name"] == "stock_casino"
+        assert params["description"] == "Casino"
+        user_id = await memory.resolve_user("test", "user1")
+        assert user_id is not None
+        proposals = await memory.get_certain_records(user_id, record_type="proposal")
+        assert len(proposals) == 1
+        meta = json.loads(proposals[0]["metadata"])
+        proposed = meta["proposed_skill"]
+        assert proposed["parameters"] == [
+            {
+                "name": "bet",
+                "type": "string",
+                "required": True,
+                "description": "",
+            }
+        ]
+        await eng.drain()
 
     async def test_create_skill_tag_with_nested_values_requests_confirmation(
         self,

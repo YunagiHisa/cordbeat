@@ -607,6 +607,18 @@ class TestSkillExecution:
         result = await skill.execute({})
         assert result == {"result": "text"}
 
+    async def test_sandboxed_params_dict_signature(self, tmp_path: Path) -> None:
+        """AI-generated execute(params) skills receive the params dict."""
+        code = "def execute(params):\n    return {'bet': params.get('bet')}\n"
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "sb_params", sandbox=True, main_code=code)
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("sb_params")
+        assert skill is not None
+        result = await skill.execute({"bet": "100"})
+        assert result == {"bet": "100"}
+
     def test_enabled_skill_names(self, tmp_path: Path) -> None:
         skills_dir = tmp_path / "skills"
         _create_skill(skills_dir, "active", enabled=True)

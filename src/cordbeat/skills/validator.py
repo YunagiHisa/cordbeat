@@ -18,8 +18,9 @@ High-level rules
 * A fixed set of dangerous names (``exec``, ``eval``, ``__import__``,
   ``subprocess``, ``ctypes``, dynamic ``getattr``/``setattr``/``delattr``,
   etc.) is rejected wherever it appears.
-* The module must define a top-level ``execute`` function (sync or async)
-  that accepts ``**kwargs``.
+* The module must define a top-level ``execute`` function (sync or async).
+  Runtime execution accepts either keyword parameters or a single params-dict
+  argument named ``params``, ``kwargs``, or ``data``.
 """
 
 from __future__ import annotations
@@ -418,7 +419,7 @@ def validate_skill_source(
     ------
     SkillValidationError
         If the source contains any construct outside the whitelist, or if
-        it fails to define an ``execute(**kwargs)`` function.
+        it fails to define a top-level ``execute`` function.
     """
     if not source.strip():
         raise SkillValidationError("Skill code is empty.")

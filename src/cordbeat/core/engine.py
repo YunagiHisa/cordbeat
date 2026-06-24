@@ -375,7 +375,7 @@ def _parse_skill_tag_params(raw: str) -> dict[str, Any]:
     for part in _split_skill_params(raw):
         if "=" in part:
             key, _, value = part.partition("=")
-            params[key.strip()] = value.strip()
+            params[key.strip()] = _decode_skill_param_text(value)
     return params
 
 
@@ -718,28 +718,37 @@ def _decode_skill_param_text(value: Any) -> str:
 def _parse_skill_parameters_param(value: Any) -> list[dict[str, Any]]:
     """Parse create_skill's optional JSON parameter-list string."""
 
-    text = str(value or "").strip()
+    text = _decode_skill_param_text(value).strip()
     if not text:
         return []
     try:
         raw = json.loads(text)
     except json.JSONDecodeError:
-        return []
+        raw = None
     if not isinstance(raw, list):
-        return []
+        simple = text
+        if simple.startswith("[") and simple.endswith("]"):
+            simple = simple[1:-1]
+        raw = [
+            {"name": item.strip().strip("'\"")}
+            for item in re.split(r"[,|]", simple)
+            if item.strip().strip("'\"")
+        ]
     params: list[dict[str, Any]] = []
     for item in raw:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("name") or "").strip()
+        name = _decode_skill_param_text(item.get("name")).strip()
         if not name:
             continue
         params.append(
             {
                 "name": name,
-                "type": str(item.get("type") or "string"),
+                "type": _decode_skill_param_text(item.get("type") or "string"),
                 "required": item.get("required", True) is not False,
-                "description": str(item.get("description") or ""),
+                "description": _decode_skill_param_text(
+                    item.get("description") or ""
+                ),
             }
         )
     return params
@@ -750,13 +759,15 @@ def _build_proposed_skill_from_react_params(
 ) -> dict[str, Any] | None:
     """Convert a create_skill tag into ProposalExecutor's proposed_skill shape."""
 
-    name = str(params.get("name") or "").strip()
+    name = _decode_skill_param_text(params.get("name")).strip()
     code = _decode_skill_param_text(params.get("code"))
     if not name or not code.strip():
         return None
     return {
         "name": name,
-        "description": str(params.get("description") or "AI-generated skill"),
+        "description": _decode_skill_param_text(
+            params.get("description") or "AI-generated skill"
+        ),
         "usage": _decode_skill_param_text(params.get("usage")),
         "parameters": _parse_skill_parameters_param(params.get("parameters")),
         "code": code,
@@ -1838,13 +1849,21 @@ class CoreEngine:
                                 "Failed to send ReAct trace result to %s",
                                 message.adapter_id,
                             )
-                except Exception:
+                except Exception as exc:
                     logger.warning("ReAct: skill %r failed", skill_name, exc_info=True)
+                    error_detail = sanitize(
+                        f"{type(exc).__name__}: {exc}",
+                        max_len=500,
+                    ).strip()
                     results.append(
                         ToolCallResult(
                             skill_name=skill_name,
                             params=params,
-                            output="Tool execution failed",
+                            output=(
+                                f"Tool execution failed: {error_detail}"
+                                if error_detail
+                                else "Tool execution failed"
+                            ),
                             is_error=True,
                         )
                     )

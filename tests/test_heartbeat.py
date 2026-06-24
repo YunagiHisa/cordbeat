@@ -2339,25 +2339,68 @@ class TestSkillCreationProposal:
         with pytest.raises(ValueError, match="Invalid skill name"):
             await heartbeat._proposals.install_proposed_skill(proposed)
 
-    async def test_install_rejects_existing_skill(
+    async def test_install_updates_existing_ai_generated_skill(
         self,
         heartbeat: HeartbeatLoop,
-        tmp_path: Path,
     ) -> None:
-        """Cannot overwrite an existing skill."""
+        """AI-generated sandbox-local skills can be repaired by overwriting."""
         skills_dir = heartbeat._skills.skills_dir
         skills_dir.mkdir(parents=True, exist_ok=True)
 
-        # Install first
+        proposed = {
+            "name": "myskill",
+            "description": "test",
+            "parameters": [],
+            "code": "def execute(**kw):\n    return {'version': 1}\n",
+        }
+        await heartbeat._proposals.install_proposed_skill(proposed)
+
+        proposed["code"] = "def execute(**kw):\n    return {'version': 2}\n"
+        await heartbeat._proposals.install_proposed_skill(proposed)
+
+        skill = heartbeat._skills.get("myskill")
+        assert skill is not None
+        assert await skill.execute({}) == {"version": 2}
+
+    async def test_install_rejects_existing_non_ai_skill(
+        self,
+        heartbeat: HeartbeatLoop,
+    ) -> None:
+        """Hand-written or external skills are not overwritten by proposals."""
+        skills_dir = heartbeat._skills.skills_dir
+        skill_dir = skills_dir / "myskill"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "skill.yaml").write_text(
+            "\n".join(
+                [
+                    "name: myskill",
+                    'description: "manual"',
+                    'version: "1.0.0"',
+                    'author: "human"',
+                    "usage: manual",
+                    "parameters: []",
+                    "safety:",
+                    "  level: safe",
+                    "  sandbox: true",
+                    "  network: false",
+                    "  filesystem: false",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (skill_dir / "main.py").write_text(
+            "def execute(**kw):\n    return {'manual': True}\n",
+            encoding="utf-8",
+        )
+        heartbeat._skills.load_all()
+
         proposed = {
             "name": "myskill",
             "description": "test",
             "parameters": [],
             "code": "def execute(**kw):\n    return {}\n",
         }
-        await heartbeat._proposals.install_proposed_skill(proposed)
-
-        # Try again
         with pytest.raises(ValueError, match="already exists"):
             await heartbeat._proposals.install_proposed_skill(proposed)
 

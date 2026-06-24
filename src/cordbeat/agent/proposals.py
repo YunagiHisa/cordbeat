@@ -7,6 +7,8 @@ import logging
 import re
 from typing import Any
 
+import yaml
+
 from cordbeat.core.gateway import GatewayServer
 from cordbeat.memory.core import MemoryStore
 from cordbeat.models import (
@@ -23,6 +25,8 @@ from cordbeat.skills.validator import SkillValidationError, validate_skill_sourc
 from .soul import Soul
 
 logger = logging.getLogger(__name__)
+
+_AI_GENERATED_AUTHOR = "cordbeat-ai"
 
 
 class ProposalExecutor:
@@ -287,7 +291,8 @@ class ProposalExecutor:
                 "Must be lowercase alphanumeric with underscores."
             )
 
-        if self._skills.get(name) is not None:
+        skill_dir = self._skills.skills_dir / name
+        if skill_dir.exists() and not self._can_update_skill(name):
             raise ValueError(f"Skill '{name}' already exists.")
 
         code = proposed.get("code", "")
@@ -315,7 +320,7 @@ class ProposalExecutor:
             f"name: {name}",
             f'description: "{safe_desc}"',
             'version: "1.0.0"',
-            'author: "cordbeat-ai"',
+            f'author: "{_AI_GENERATED_AUTHOR}"',
             "",
             f"usage: |\n  {safe_usage}",
             "",
@@ -359,13 +364,36 @@ class ProposalExecutor:
         else:
             full_code = code + "\n"
 
-        skill_dir = self._skills.skills_dir / name
         skill_dir.mkdir(parents=True, exist_ok=True)
         (skill_dir / "skill.yaml").write_text(yaml_content, encoding="utf-8")
         (skill_dir / "main.py").write_text(full_code, encoding="utf-8")
 
         self._skills.load_all()
         logger.info("Installed proposed skill: %s", name)
+
+    def _can_update_skill(self, name: str) -> bool:
+        """Only AI-generated skills may be overwritten by later proposals."""
+
+        yaml_path = self._skills.skills_dir / name / "skill.yaml"
+        if not yaml_path.exists():
+            return False
+        try:
+            raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            logger.warning("Could not inspect existing skill metadata: %s", name)
+            return False
+        if not isinstance(raw, dict):
+            return False
+        safety = raw.get("safety") or {}
+        if not isinstance(safety, dict):
+            safety = {}
+        return (
+            raw.get("author") == _AI_GENERATED_AUTHOR
+            and safety.get("level", "safe") == "safe"
+            and safety.get("sandbox") is True
+            and safety.get("network") is not True
+            and safety.get("filesystem") is not True
+        )
 
     async def execute_approved(self, proposal_id: str | None = None) -> None:
         """Check for approved proposals and execute them."""

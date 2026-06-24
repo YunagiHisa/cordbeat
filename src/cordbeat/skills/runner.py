@@ -2,8 +2,9 @@
 
 This module is invoked as ``python -m cordbeat.skill_runner`` by the
 parent cordbeat process. It sets up a best-effort sandbox, loads the
-target skill's ``main.py`` fresh, and executes its ``execute(**params)``
-function. All communication with the parent happens over stdin/stdout
+target skill's ``main.py`` fresh, and executes its ``execute`` function
+with keyword params or a single params-dict argument. All communication
+with the parent happens over stdin/stdout
 using newline-delimited JSON ("ndjson"):
 
 * First line on stdin: ``{"type": "init", "skill_dir": ..., ...}``
@@ -542,6 +543,7 @@ def _run_skill(
         raise SkillExecutionError(f"Skill {skill_name!r} has no execute() function")
 
     sig = inspect.signature(fn)
+    context = None
     if "context" in sig.parameters:
         from types import SimpleNamespace
 
@@ -552,9 +554,36 @@ def _run_skill(
             work_dir=work_dir,
             memory=_MemoryProxy() if allow_memory else None,
         )
-        params = {**params, "context": context}
 
-    result = fn(**params)
+    call_kwargs = dict(params)
+    if context is not None:
+        call_kwargs["context"] = context
+
+    accepts_kwargs = any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in sig.parameters.values()
+    )
+    data_params = [
+        param
+        for param in sig.parameters.values()
+        if param.name != "context"
+        and param.kind
+        in {
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }
+    ]
+    if (
+        not accepts_kwargs
+        and len(data_params) == 1
+        and data_params[0].name in {"params", "kwargs", "data"}
+    ):
+        call_kwargs = {data_params[0].name: params}
+        if context is not None:
+            call_kwargs["context"] = context
+
+    result = fn(**call_kwargs)
     if inspect.isawaitable(result):
         result = loop.run_until_complete(_await(result))
     return result

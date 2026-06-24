@@ -55,6 +55,9 @@ You are executing HEARTBEAT Layer 1 — a quick triage scan.
 Review the user summaries below and decide which users need attention right now.
 Consider: how long since you last talked, their emotional tone, attention score.
 If nobody needs attention, return an empty list.
+Selecting a user does not have to mean sending a message. You may select a user
+for private maintenance: running a safe skill, checking facts, creating a skill
+proposal, or proposing a Soul/personality adjustment.
 Choose next_heartbeat_minutes yourself based on urgency: shorter when something
 may need timely follow-up, longer when things are quiet. The system will clamp
 the value to configured min/max safety bounds.
@@ -84,6 +87,13 @@ Available skills:
 You are executing HEARTBEAT Layer 2 — a detailed evaluation for one user.
 Based on the user's context, conversation history, and memories below,
 decide what action to take for this specific user.
+HEARTBEAT is not only proactive messaging. Valid private actions include:
+- action=skill: run a safe skill for research, bookkeeping, inspection, or
+  sandbox-local work. Results are recorded for later reflection.
+- action=propose_trait_change: propose a Soul/personality trait adjustment when
+  repeated evidence suggests {name} should change how they behave.
+- action=propose_improvement: propose a system or workflow improvement.
+- action=propose_skill: propose a new sandbox-local skill.
 Choose next_heartbeat_minutes yourself based on urgency: shorter when there is
 a reason to check back soon, longer when no near-term follow-up is useful. The
 system will clamp the value to configured min/max safety bounds.
@@ -94,6 +104,8 @@ continue an old task. Do not revive a completed topic, ask for feedback about
 an old result, or claim that you just performed an action. Choose action=message
 only when the message is clearly relevant and useful now. If uncertain, choose
 action=none.
+Message cooldowns apply only to action=message; they do not forbid private
+skill execution, improvement proposals, or Soul/personality review.
 
 Important skill rule:
 If you choose action=skill, parameters must be directly executable by that
@@ -134,6 +146,8 @@ _PARENTHETICAL_ONLY_RE = re.compile(
 )
 _HEARTBEAT_USER_SENT_RECORD = "heartbeat_user_sent"
 _HEARTBEAT_DESTINATION_SENT_RECORD = "heartbeat_destination_sent"
+_HEARTBEAT_SKILL_RESULT_RECORD = "heartbeat_skill_result"
+_HEARTBEAT_SKILL_ERROR_RECORD = "heartbeat_skill_error"
 
 
 def _parse_time(s: str) -> time:
@@ -326,30 +340,11 @@ class HeartbeatLoop:
         user_map = {u.user_id: u for u in users}
         min_interval = triage_interval
         for entry in selected_ids:
-            if (
-                self._proactive_messages_sent_this_tick
-                >= self._config.max_proactive_messages_per_tick
-            ):
-                logger.info(
-                    "Layer 2 stopped: proactive message limit reached for this tick"
-                )
-                break
-
             uid = entry.get("user_id", "")
             reason = entry.get("reason", "")
             user = user_map.get(uid)
             if user is None:
                 logger.warning("Layer 1 selected unknown user_id: %s", uid)
-                continue
-            if await self._heartbeat_cooldown_active(
-                uid,
-                _HEARTBEAT_USER_SENT_RECORD,
-                self._config.proactive_user_cooldown_minutes,
-            ):
-                logger.info(
-                    "Layer 2 skipped user %s: proactive user cooldown active",
-                    uid,
-                )
                 continue
 
             logger.info("Layer 2: evaluating user %s (reason: %s)", uid, reason)
@@ -845,5 +840,47 @@ class HeartbeatLoop:
         try:
             result = await skill.execute(params, memory=self._memory)
             logger.info("Skill '%s' result: %s", decision.skill_name, result)
-        except Exception:
+            await self._record_skill_outcome(
+                decision,
+                record_type=_HEARTBEAT_SKILL_RESULT_RECORD,
+                payload=result,
+            )
+        except Exception as exc:
             logger.exception("Skill '%s' failed", decision.skill_name)
+            await self._record_skill_outcome(
+                decision,
+                record_type=_HEARTBEAT_SKILL_ERROR_RECORD,
+                payload={"error": f"{type(exc).__name__}: {exc}"},
+            )
+
+    async def _record_skill_outcome(
+        self,
+        decision: HeartbeatDecision,
+        *,
+        record_type: str,
+        payload: Any,
+    ) -> None:
+        user_id = decision.target_user_id or "__system__"
+        try:
+            rendered = json.dumps(payload, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            rendered = str(payload)
+        content = sanitize(rendered, max_len=self._memory_config.max_user_input_len)
+        metadata = {
+            "skill_name": decision.skill_name or "",
+            "skill_params": decision.skill_params,
+            "target_adapter_id": decision.target_adapter_id or "",
+        }
+        try:
+            await self._memory.add_certain_record(
+                user_id,
+                content,
+                record_type,
+                metadata,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record HEARTBEAT skill outcome skill=%s type=%s",
+                decision.skill_name,
+                record_type,
+            )

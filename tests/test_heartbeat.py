@@ -654,11 +654,13 @@ class TestSkillExecution:
     async def test_safe_skill_executes(
         self,
         heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
         skills: SkillRegistry,
     ) -> None:
         """Safe enabled skill runs successfully."""
         from types import SimpleNamespace
 
+        await memory.get_or_create_user("u1", "Alice")
         module = SimpleNamespace(execute=lambda **kw: {"result": "done"})
         meta = SkillMeta(
             name="safe_skill",
@@ -673,17 +675,31 @@ class TestSkillExecution:
             action=HeartbeatAction.SKILL,
             skill_name="safe_skill",
             skill_params={},
+            target_user_id="u1",
+            target_adapter_id="discord",
         )
         # Should not raise
         await heartbeat._execute_decision(decision)
 
+        records = await memory.get_certain_records(
+            "u1", record_type="heartbeat_skill_result"
+        )
+        assert len(records) == 1
+        assert json.loads(records[0]["content"]) == {"result": "done"}
+        metadata = json.loads(records[0]["metadata"])
+        assert metadata["skill_name"] == "safe_skill"
+        assert metadata["target_adapter_id"] == "discord"
+
     async def test_skill_execution_failure_handled(
         self,
         heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
         skills: SkillRegistry,
     ) -> None:
         """Skill that raises is caught and logged."""
         from types import SimpleNamespace
+
+        await memory.get_or_create_user("u1", "Alice")
 
         def bad_execute(**kw: object) -> None:
             msg = "skill error"
@@ -703,9 +719,18 @@ class TestSkillExecution:
             action=HeartbeatAction.SKILL,
             skill_name="bad_skill",
             skill_params={},
+            target_user_id="u1",
         )
         # Should not raise
         await heartbeat._execute_decision(decision)
+
+        records = await memory.get_certain_records(
+            "u1", record_type="heartbeat_skill_error"
+        )
+        assert len(records) == 1
+        assert json.loads(records[0]["content"]) == {
+            "error": "RuntimeError: skill error"
+        }
 
 
 # ── Sleep phase error handling ────────────────────────────────────────
@@ -1314,6 +1339,115 @@ class TestTwoLayerIntegration:
         # Only triage call, no Layer 2
         assert mock_ai.generate_json.call_count == 1
         assert result == 60
+
+    async def test_private_skill_runs_during_message_cooldown(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Message cooldowns should not block private heartbeat work."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.add_certain_record(
+            "u1",
+            "recent proactive message",
+            "heartbeat_user_sent",
+            {},
+        )
+        calls: list[dict[str, object]] = []
+
+        def safe_execute(**kw: object) -> dict[str, str]:
+            calls.append(kw)
+            return {"result": "checked"}
+
+        meta = SkillMeta(
+            name="safe_skill",
+            description="Safe maintenance skill",
+            usage="",
+            safety_level=SafetyLevel.SAFE,
+            enabled=True,
+        )
+        skills._skills["safe_skill"] = Skill(meta=meta, _test_callable=safe_execute)
+        heartbeat._layer2_evaluate = AsyncMock(
+            return_value=HeartbeatDecision(
+                action=HeartbeatAction.SKILL,
+                skill_name="safe_skill",
+                skill_params={},
+                target_user_id="u1",
+                target_adapter_id="discord",
+                next_heartbeat_minutes=30,
+            )
+        )
+
+        result = await heartbeat._run_layer2(
+            [UserSummary(user_id="u1", display_name="Alice")],
+            [{"user_id": "u1", "reason": "private maintenance"}],
+            60,
+        )
+
+        assert result == 30
+        assert len(calls) == 1
+        mock_gateway.send_to_adapter.assert_not_called()
+        records = await memory.get_certain_records(
+            "u1", record_type="heartbeat_skill_result"
+        )
+        assert len(records) == 1
+        assert json.loads(records[0]["content"]) == {"result": "checked"}
+
+    async def test_private_skill_runs_when_message_tick_limit_reached(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """The per-tick message limit should only limit outgoing messages."""
+        await memory.get_or_create_user("u1", "Alice")
+        heartbeat._proactive_messages_sent_this_tick = (
+            heartbeat._config.max_proactive_messages_per_tick
+        )
+        calls: list[dict[str, object]] = []
+
+        def safe_execute(**kw: object) -> dict[str, str]:
+            calls.append(kw)
+            return {"result": "reflected"}
+
+        meta = SkillMeta(
+            name="reflection_skill",
+            description="Safe reflection skill",
+            usage="",
+            safety_level=SafetyLevel.SAFE,
+            enabled=True,
+        )
+        skills._skills["reflection_skill"] = Skill(
+            meta=meta, _test_callable=safe_execute
+        )
+        heartbeat._layer2_evaluate = AsyncMock(
+            return_value=HeartbeatDecision(
+                action=HeartbeatAction.SKILL,
+                skill_name="reflection_skill",
+                skill_params={},
+                target_user_id="u1",
+                target_adapter_id="discord",
+                next_heartbeat_minutes=25,
+            )
+        )
+
+        result = await heartbeat._run_layer2(
+            [UserSummary(user_id="u1", display_name="Alice")],
+            [{"user_id": "u1", "reason": "self review"}],
+            60,
+        )
+
+        assert result == 25
+        assert len(calls) == 1
+        mock_gateway.send_to_adapter.assert_not_called()
+        records = await memory.get_certain_records(
+            "u1", record_type="heartbeat_skill_result"
+        )
+        assert len(records) == 1
+        assert json.loads(records[0]["content"]) == {"result": "reflected"}
 
 
 # ── Proposal workflow ─────────────────────────────────────────────────

@@ -20,6 +20,7 @@ from cordbeat.main import (
 )
 from cordbeat.models import SafetyLevel
 from cordbeat.skills import SandboxConfig, SkillPermissionError, SkillRegistry
+from cordbeat.skills.policy import sandbox_overrides_for_skill
 
 
 def _create_skill(
@@ -812,6 +813,42 @@ class TestSandboxEnforcement:
         assert second["count"] == 2
         state_path = Path(second["path"]).resolve()
         assert sandbox_root.resolve() in state_path.parents
+
+    async def test_sandbox_local_file_tools_share_configured_workdir(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Relative file tool paths should use one shared CordBeat sandbox."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "file_read")
+        _copy_builtin_skill(skills_dir, "file_write")
+        sandbox_root = tmp_path / "sandbox"
+
+        registry = SkillRegistry(
+            skills_dir,
+            sandbox_config=SandboxConfig(work_dir=sandbox_root),
+        )
+        registry.load_all()
+        writer = registry.get("file_write")
+        reader = registry.get("file_read")
+        assert writer is not None
+        assert reader is not None
+
+        path = "notes/one.txt"
+        await writer.execute(
+            {"path": path, "content": "hello sandbox"},
+            sandbox_overrides=sandbox_overrides_for_skill("file_write", {"path": path}),
+        )
+        result = await reader.execute(
+            {"path": path},
+            sandbox_overrides=sandbox_overrides_for_skill("file_read", {"path": path}),
+        )
+
+        assert result["content"] == "hello sandbox"
+        assert (sandbox_root / "notes" / "one.txt").read_text(
+            encoding="utf-8"
+        ) == "hello sandbox"
 
     async def test_filesystem_allowed_when_flag_true(self, tmp_path: Path) -> None:
         """Sandboxed skill with filesystem=True can write anywhere."""

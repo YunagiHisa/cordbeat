@@ -19,6 +19,7 @@ from cordbeat.models import (
     ProposalType,
     SoulCaller,
 )
+from cordbeat.skills.policy import sandbox_overrides_for_skill
 from cordbeat.skills.registry import SkillRegistry
 from cordbeat.skills.validator import SkillValidationError, validate_skill_source
 
@@ -451,7 +452,14 @@ class ProposalExecutor:
             return
 
         try:
-            result = await skill.execute(skill_params, memory=self._memory)
+            result = await skill.execute(
+                skill_params,
+                memory=self._memory,
+                sandbox_overrides=sandbox_overrides_for_skill(
+                    skill_name,
+                    skill_params,
+                ),
+            )
             logger.info(
                 "Approved skill '%s' executed: %s",
                 skill_name,

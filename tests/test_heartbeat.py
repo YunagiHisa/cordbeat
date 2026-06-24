@@ -1599,6 +1599,52 @@ class TestSkillProposal:
         assert meta["skill_name"] == "deploy"
         assert meta["status"] == ProposalStatus.PENDING
 
+    async def test_sandbox_local_file_skill_executes_without_proposal(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Sandbox-relative file operations should be free during heartbeat."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+        calls: list[tuple[str, bool]] = []
+
+        async def search_files(root: str, context: object) -> dict[str, object]:
+            calls.append((root, bool(getattr(context, "filesystem"))))
+            return {"root": root, "returned": 0}
+
+        skill = Skill(
+            meta=SkillMeta(
+                name="file_search",
+                description="Search files",
+                usage="search",
+                safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
+                filesystem=True,
+            ),
+            _test_callable=search_files,
+        )
+        skills._skills["file_search"] = skill
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="file_search",
+            skill_params={"root": "."},
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_skill(decision)
+
+        assert calls == [(".", False)]
+        mock_gateway.send_to_adapter.assert_not_called()
+        proposals = await memory.get_certain_records("u1", record_type="proposal")
+        assert proposals == []
+        records = await memory.get_certain_records(
+            "u1", record_type="heartbeat_skill_result"
+        )
+        assert len(records) == 1
+
     async def test_skill_proposal_notifies_user(
         self,
         heartbeat: HeartbeatLoop,
@@ -1760,6 +1806,47 @@ class TestApprovedProposalExecution:
         assert proposal is not None
         meta = json.loads(proposal["metadata"])
         assert meta["status"] == ProposalStatus.EXECUTED
+
+    async def test_approved_sandbox_local_file_skill_uses_sandbox_override(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+    ) -> None:
+        """Approved relative file tool calls should still use sandbox guards."""
+        calls: list[tuple[str, bool]] = []
+
+        async def read_file(path: str, context: object) -> dict[str, str]:
+            calls.append((path, bool(getattr(context, "filesystem"))))
+            return {"content": "sandbox note"}
+
+        skill = Skill(
+            meta=SkillMeta(
+                name="file_read",
+                description="Read files",
+                usage="read",
+                safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
+                filesystem=True,
+            ),
+            _test_callable=read_file,
+        )
+        skills._skills["file_read"] = skill
+
+        await memory.add_certain_record(
+            user_id="u1",
+            content="Run file_read",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "file_read",
+                "skill_params": {"path": "notes.md"},
+            },
+        )
+
+        await heartbeat._proposals.execute_approved()
+
+        assert calls == [("notes.md", False)]
 
     async def test_approved_skill_structured_result_is_notified(
         self,

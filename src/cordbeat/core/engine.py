@@ -12,7 +12,6 @@ import uuid
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -50,6 +49,12 @@ from cordbeat.skills.draw_dsl import (
 from cordbeat.skills.draw_dsl import (
     normalize as normalize_draw_dsl,
 )
+from cordbeat.skills.policy import (
+    sandbox_overrides_for_skill as _sandbox_overrides_for_skill,
+)
+from cordbeat.skills.policy import (
+    skill_requires_confirmation as _skill_requires_confirmation,
+)
 from cordbeat.skills.registry import SkillRegistry
 
 from .gateway import GatewayServer
@@ -73,57 +78,6 @@ _CREATE_SKILL_TOOL_DESCRIPTION = (
 _HTTP_URL_RE = re.compile(r"https?://[^\s<>\]\)\"']+", re.IGNORECASE)
 _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 _TRANSIENT_HTTP_RETRY_DELAYS_SECONDS = (1.0, 2.0)
-
-
-_SANDBOX_LOCAL_FILE_PARAMS: dict[str, str] = {
-    "file_read": "path",
-    "file_write": "path",
-    "file_search": "root",
-}
-
-
-def _is_sandbox_relative_path(value: Any) -> bool:
-    text = str(value or "").strip()
-    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
-        text = text[1:-1].strip()
-    if not text:
-        return False
-    windows = PureWindowsPath(text)
-    posix = PurePosixPath(text)
-    if (
-        windows.is_absolute()
-        or posix.is_absolute()
-        or windows.drive
-        or windows.root
-        or posix.root
-    ):
-        return False
-    parts = tuple(windows.parts) + tuple(posix.parts)
-    if any(part == ".." or part.startswith("~") for part in parts):
-        return False
-    return True
-
-
-def _sandbox_overrides_for_skill(
-    skill_name: str,
-    params: dict[str, Any],
-) -> dict[str, Any]:
-    path_param = _SANDBOX_LOCAL_FILE_PARAMS.get(skill_name)
-    if path_param is None:
-        return {}
-    if _is_sandbox_relative_path(params.get(path_param)):
-        return {"filesystem": False}
-    return {}
-
-
-def _skill_requires_confirmation(skill: Any, params: dict[str, Any]) -> bool:
-    meta = skill.meta
-    if _sandbox_overrides_for_skill(meta.name, params).get("filesystem") is False:
-        return False
-    return (
-        meta.safety_level != SafetyLevel.SAFE
-        or bool(meta.filesystem)
-    )
 
 
 @dataclass(frozen=True)

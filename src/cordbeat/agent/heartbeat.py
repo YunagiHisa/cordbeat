@@ -29,6 +29,10 @@ from cordbeat.models import (
     SafetyLevel,
     UserSummary,
 )
+from cordbeat.skills.policy import (
+    sandbox_overrides_for_skill,
+    skill_requires_confirmation,
+)
 from cordbeat.skills.registry import SkillRegistry
 from cordbeat.tools.metrics import (
     HEARTBEAT_TICK_LATENCY,
@@ -826,10 +830,6 @@ class HeartbeatLoop:
             )
             return
 
-        if skill.meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION:
-            await self._proposals.store_skill_proposal(decision, skill.meta.name)
-            return
-
         params = dict(decision.skill_params)
         if decision.target_user_id and any(
             p.name == "user_id" for p in skill.meta.parameters
@@ -837,8 +837,32 @@ class HeartbeatLoop:
             # Never trust an AI-provided user_id: inject the code-level target.
             params["user_id"] = decision.target_user_id
 
+        sandbox_overrides = sandbox_overrides_for_skill(skill.meta.name, params)
+        if skill_requires_confirmation(skill, params):
+            proposal_decision = HeartbeatDecision(
+                action=decision.action,
+                content=decision.content,
+                target_user_id=decision.target_user_id,
+                target_adapter_id=decision.target_adapter_id,
+                skill_name=decision.skill_name,
+                skill_params=params,
+                proposed_skill=decision.proposed_skill,
+                trait_add=decision.trait_add,
+                trait_remove=decision.trait_remove,
+                next_heartbeat_minutes=decision.next_heartbeat_minutes,
+            )
+            await self._proposals.store_skill_proposal(
+                proposal_decision,
+                skill.meta.name,
+            )
+            return
+
         try:
-            result = await skill.execute(params, memory=self._memory)
+            result = await skill.execute(
+                params,
+                memory=self._memory,
+                sandbox_overrides=sandbox_overrides,
+            )
             logger.info("Skill '%s' result: %s", decision.skill_name, result)
             await self._record_skill_outcome(
                 decision,

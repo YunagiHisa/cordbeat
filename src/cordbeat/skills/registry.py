@@ -29,6 +29,7 @@ from cordbeat.tools.metrics import (
 )
 
 from .env import SkillEnvManager
+from .policy import SANDBOX_SHARED_WORK_DIR
 from .rate_limit import SkillRateLimiter
 from .sandbox import (
     DEFAULT_CONFIG,
@@ -125,7 +126,12 @@ class Skill:
                     sandbox=self.meta.sandbox,
                     network=network,
                     filesystem=filesystem,
-                    work_dir=None,
+                    work_dir=self._resolve_work_dir(
+                        shared=(
+                            sandbox_overrides.get("work_dir")
+                            == SANDBOX_SHARED_WORK_DIR
+                        ),
+                    ),
                     memory=memory,
                 )
             result = self._test_callable(**call_kwargs)
@@ -140,7 +146,9 @@ class Skill:
                 f"Skill {self.meta.name!r} has no skill_dir; cannot execute."
             )
 
-        with self._work_dir_context() as tmpdir:
+        with self._work_dir_context(
+            shared=sandbox_overrides.get("work_dir") == SANDBOX_SHARED_WORK_DIR
+        ) as tmpdir:
             sandbox_params = {
                 "network": network,
                 "filesystem": filesystem,
@@ -161,15 +169,16 @@ class Skill:
                 python_executable=python_executable,
             )
 
-    @contextmanager
-    def _work_dir_context(self) -> Iterator[Path]:
+    def _resolve_work_dir(self, *, shared: bool = False) -> Path | None:
         root = self._sandbox_config.work_dir
         if root is None:
-            with tempfile.TemporaryDirectory(prefix="cordbeat_skill_") as tmpdir:
-                yield Path(tmpdir)
-            return
+            return None
 
         root = root.expanduser().resolve()
+        if shared:
+            root.mkdir(parents=True, exist_ok=True)
+            return root
+
         safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", self.meta.name).strip("._-")
         if not safe_name:
             safe_name = "skill"
@@ -177,6 +186,15 @@ class Skill:
         digest = hashlib.sha256(digest_src).hexdigest()[:8]
         work_dir = root / f"{safe_name}-{digest}"
         work_dir.mkdir(parents=True, exist_ok=True)
+        return work_dir
+
+    @contextmanager
+    def _work_dir_context(self, *, shared: bool = False) -> Iterator[Path]:
+        work_dir = self._resolve_work_dir(shared=shared)
+        if work_dir is None:
+            with tempfile.TemporaryDirectory(prefix="cordbeat_skill_") as tmpdir:
+                yield Path(tmpdir)
+            return
         with nullcontext(work_dir) as path:
             yield path
 

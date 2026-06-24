@@ -375,14 +375,13 @@ class TestPathResolution:
         assert "cordbeat.log" in config.log.file
 
     def test_default_paths_resolved_to_config_dir(self, tmp_path: Path) -> None:
-        """Even default values like 'data/cordbeat.db' get resolved."""
+        """Even default values like 'cordbeat.db' get resolved."""
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text("", encoding="utf-8")
         config = load_config(cfg_file)
-        assert config.memory.sqlite_path == str(
-            (tmp_path / "data/cordbeat.db").resolve()
-        )
-        assert config.data_dir == str((tmp_path / "data").resolve())
+        assert config.memory.sqlite_path == str((tmp_path / "cordbeat.db").resolve())
+        assert config.data_dir == str(tmp_path.resolve())
+        assert config.skills_dir == str((tmp_path / "sandbox" / "skills").resolve())
 
 
 class TestLogRotationConfig:

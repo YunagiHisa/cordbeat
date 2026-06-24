@@ -26,7 +26,7 @@ class TestRunDoctor:
     def _setup_healthy(self, home: Path) -> None:
         """Create a minimal healthy installation at *home*."""
         home.mkdir(parents=True, exist_ok=True)
-        (home / "skills").mkdir()
+        (home / "sandbox" / "skills").mkdir(parents=True)
         soul_dir = home / "soul"
         soul_dir.mkdir()
         (soul_dir / "soul_core.yaml").write_text("immutable_rules: []\n")
@@ -41,7 +41,7 @@ class TestRunDoctor:
                 "sqlite_path": str(home / "cordbeat.db"),
             },
             "soul": {"soul_dir": str(soul_dir)},
-            "skills_dir": str(home / "skills"),
+            "skills_dir": str(home / "sandbox" / "skills"),
             "gateway": {"auth_token": "test-token-1234567890"},
         }
         (home / "config.yaml").write_text(
@@ -102,7 +102,7 @@ class TestRunDoctor:
         self._setup_healthy(home)
         import shutil
 
-        shutil.rmtree(home / "skills")
+        shutil.rmtree(home / "sandbox" / "skills")
         with patch("cordbeat.tools.doctor._probe", return_value=True):
             assert run_doctor(home) == 1
 
@@ -133,11 +133,11 @@ class TestDoctorExtraBranches:
         soul_dir.mkdir()
         (soul_dir / "soul_core.yaml").write_text("immutable_rules: []\n")
         (soul_dir / "soul.yaml").write_text("identity:\n  name: T\n")
-        (home / "skills").mkdir()
+        (home / "sandbox" / "skills").mkdir(parents=True)
         cfg = {
             "ai_backend": {"provider": "openai", "base_url": "https://api.example.com"},
             "soul": {"soul_dir": str(soul_dir)},
-            "skills_dir": str(home / "skills"),
+            "skills_dir": str(home / "sandbox" / "skills"),
             "gateway": {"auth_token": "x" * 20},
         }
         (home / "config.yaml").write_text(yaml.dump(cfg), encoding="utf-8")

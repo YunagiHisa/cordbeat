@@ -436,7 +436,7 @@ def _build_config(
             "sqlite_path": str(home / "cordbeat.db"),
         },
         "soul": {"soul_dir": str(home / "soul")},
-        "skills_dir": str(home / "skills"),
+        "skills_dir": str(home / "sandbox" / "skills"),
         "data_dir": str(home),
         "adapters": {"cli": {"enabled": True}},
     }
@@ -511,19 +511,19 @@ def _render_config_yaml(
 
     # Anchor data paths to ~/.cordbeat/ so different installs don't collide.
     _replace_value(
-        r'^(\s*sqlite_path:\s*")data/cordbeat.db(".*)$',
+        r'^(\s*sqlite_path:\s*")cordbeat.db(".*)$',
         (home / "cordbeat.db").as_posix(),
     )
     _replace_value(
-        r'^(\s*soul_dir:\s*")data/soul(".*)$',
+        r'^(\s*soul_dir:\s*")soul(".*)$',
         (home / "soul").as_posix(),
     )
     _replace_value(
-        r'^(\s*skills_dir:\s*")skills(".*)$',
-        (home / "skills").as_posix(),
+        r'^(\s*skills_dir:\s*")sandbox/skills(".*)$',
+        (home / "sandbox" / "skills").as_posix(),
     )
     _replace_value(
-        r'^(\s*data_dir:\s*")data(".*)$',
+        r'^(\s*data_dir:\s*")\.(".*)$',
         home.as_posix(),
     )
 
@@ -692,7 +692,7 @@ def run_wizard(home: Path | None = None) -> tuple[Path, bool]:
     # ── Create directory structure ────────────────────────────────
     print("\n  Creating ~/.cordbeat/ ...")
     home.mkdir(parents=True, exist_ok=True)
-    (home / "skills").mkdir(parents=True, exist_ok=True)
+    (home / "sandbox" / "skills").mkdir(parents=True, exist_ok=True)
 
     # ── Write soul files ──────────────────────────────────────────
     _write_soul_files(home / "soul", name, language)

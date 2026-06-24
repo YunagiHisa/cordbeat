@@ -148,6 +148,7 @@ class TestBuildConfig:
         )
         assert cfg["memory"]["sqlite_path"] == str(tmp_path / "cordbeat.db")
         assert cfg["soul"]["soul_dir"] == str(tmp_path / "soul")
+        assert cfg["skills_dir"] == str(tmp_path / "sandbox" / "skills")
         assert cfg["data_dir"] == str(tmp_path)
 
     def test_api_key_included(self, tmp_path: Path) -> None:
@@ -246,7 +247,7 @@ class TestRunWizard:
         assert cfg["ai_backend"]["provider"] == "ollama"
         assert cfg["ai_backend"]["model"] == "llama3:latest"
         assert (tmp_path / "soul" / "soul.yaml").is_file()
-        assert (tmp_path / "skills").is_dir()
+        assert (tmp_path / "sandbox" / "skills").is_dir()
 
     def test_ollama_not_found_fallback(self, tmp_path: Path) -> None:
         """When Ollama is not detected, wizard asks provider details."""
@@ -338,7 +339,7 @@ class TestRunWizard:
         ):
             run_wizard(tmp_path)
 
-        assert (tmp_path / "skills").is_dir()
+        assert (tmp_path / "sandbox" / "skills").is_dir()
         assert (tmp_path / "soul").is_dir()
         assert (tmp_path / "soul" / "soul_core.yaml").is_file()
 

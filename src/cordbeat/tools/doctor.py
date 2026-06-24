@@ -114,7 +114,7 @@ def run_doctor(home: Path | None = None) -> int:
         ok &= _check("sqlite-vec extension loadable", False, str(e))
 
     # ── Skills directory ──────────────────────────────────────────
-    skills_dir = Path(cfg.get("skills_dir", str(home / "skills")))
+    skills_dir = Path(cfg.get("skills_dir", str(home / "sandbox" / "skills")))
     ok &= _check("Skills directory exists", skills_dir.is_dir(), str(skills_dir))
 
     # ── Summary ───────────────────────────────────────────────────

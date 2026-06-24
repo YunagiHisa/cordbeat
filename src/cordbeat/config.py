@@ -68,7 +68,7 @@ class HeartbeatConfig:
 
 @dataclass
 class MemoryConfig:
-    sqlite_path: str = "data/cordbeat.db"
+    sqlite_path: str = "cordbeat.db"
     decay_rate: float = 0.1
     archive_threshold: float = 0.05
     conversation_history_limit: int = 20
@@ -124,7 +124,7 @@ class MemoryConfig:
 
 @dataclass
 class SoulConfig:
-    soul_dir: str = "data/soul"
+    soul_dir: str = "soul"
     emotion_decay_rate: float = 0.05
     emotion_baseline_intensity: float = 0.3
     emotion_secondary_clear_threshold: float = 0.1
@@ -301,8 +301,8 @@ class Config:
     tts: TTSConfig = field(default_factory=TTSConfig)
     rvc: RVCConfig = field(default_factory=RVCConfig)
     react: ReActConfig = field(default_factory=ReActConfig)
-    skills_dir: str = "skills"
-    data_dir: str = "data"
+    skills_dir: str = "sandbox/skills"
+    data_dir: str = "."
 
     @property
     def soul_dir(self) -> str:
@@ -556,7 +556,7 @@ def _resolve_relative_paths(config: Config, config_dir: Path) -> None:
     """Resolve relative paths in config relative to the config file directory.
 
     When the config lives outside CWD (e.g. ``~/.cordbeat/config.yaml``),
-    paths like ``data/cordbeat.db`` must be anchored to the config
+    paths like ``cordbeat.db`` must be anchored to the config
     directory so that data files are found regardless of the working
     directory the process was started from.
     """
@@ -706,8 +706,8 @@ def load_config(path: str | Path) -> Config:
         tts=tts,
         rvc=rvc,
         react=react,
-        skills_dir=raw.get("skills_dir", "skills"),
-        data_dir=raw.get("data_dir", "data"),
+        skills_dir=raw.get("skills_dir", "sandbox/skills"),
+        data_dir=raw.get("data_dir", "."),
     )
 
     _resolve_relative_paths(cfg, path.resolve().parent)

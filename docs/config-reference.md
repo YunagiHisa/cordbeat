@@ -36,15 +36,15 @@ heartbeat:
   quiet_hours_end: "07:00"
 
 memory:
-  sqlite_path: "data/cordbeat.db"
+  sqlite_path: "cordbeat.db"
   decay_rate: 0.1
   archive_threshold: 0.05
   conversation_history_limit: 20
   memory_search_results: 3
 
-soul_dir: "data/soul"
-skills_dir: "skills"
-data_dir: "data"
+soul_dir: "soul"
+skills_dir: "sandbox/skills"
+data_dir: "."
 
 adapters:
   discord:
@@ -130,7 +130,7 @@ Common options for `openai_compat`:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `sqlite_path` | string | `"data/cordbeat.db"` | Path to SQLite database |
+| `sqlite_path` | string | `"cordbeat.db"` | Path to SQLite database |
 | `decay_rate` | float | `0.1` | Ebbinghaus forgetting curve decay rate |
 | `archive_threshold` | float | `0.05` | Memory strength threshold for archival |
 | `conversation_history_limit` | int | `20` | Max messages included in prompt context |
@@ -157,6 +157,6 @@ Adapter-specific options:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `soul_dir` | string | `"data/soul"` | Directory for SOUL YAML files |
-| `skills_dir` | string | `"skills"` | Directory for skill plugins |
-| `data_dir` | string | `"data"` | Base data directory |
+| `soul_dir` | string | `"soul"` | Directory for SOUL YAML files |
+| `skills_dir` | string | `"sandbox/skills"` | Directory for skill plugins |
+| `data_dir` | string | `"."` | Base data directory |

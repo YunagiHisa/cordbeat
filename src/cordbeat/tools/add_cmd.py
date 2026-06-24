@@ -222,7 +222,7 @@ def _add_skill(config_path: Path) -> None:
         if not skills_dir.is_absolute():
             skills_dir = config_path.parent / skills_dir
     else:
-        skills_dir = config_path.parent / "skills"
+        skills_dir = config_path.parent / "sandbox" / "skills"
 
     # Collect skills from bundled dir + skills_dir (deduplicated by name)
     bundled = _find_bundled_skills_dir()

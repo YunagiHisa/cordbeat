@@ -228,9 +228,10 @@ def _split_skill_tag_body(body: str) -> tuple[str, str]:
             and curly_depth == 0
             and paren_depth == 0
             and char in {"|", ","}
-            and _looks_like_param_start(body, pos + 1)
         ):
-            return body[:pos].strip(), body[pos + 1 :].strip()
+            tail = body[pos + 1 :].strip()
+            if not tail or _looks_like_param_start(body, pos + 1):
+                return body[:pos].strip(), tail
 
     return body.strip(), ""
 

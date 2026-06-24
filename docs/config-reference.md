@@ -160,3 +160,7 @@ Adapter-specific options:
 | `soul_dir` | string | `"soul"` | Directory for SOUL YAML files |
 | `skills_dir` | string | `"sandbox/skills"` | Directory for skill plugins |
 | `data_dir` | string | `"."` | Base data directory |
+
+Formal Soul files are intentionally outside the sandbox. Use sandbox-local
+files for drafts, reflections, and experiments; approved system flows apply
+changes to `soul_dir`.

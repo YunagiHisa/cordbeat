@@ -11,7 +11,7 @@ import pytest
 
 from cordbeat.agent.soul import Soul
 from cordbeat.config import MemoryConfig, ReActConfig
-from cordbeat.core.engine import CoreEngine
+from cordbeat.core.engine import CoreEngine, _find_skill_tags
 from cordbeat.memory import MemoryStore
 from cordbeat.models import (
     Emotion,
@@ -26,6 +26,14 @@ from cordbeat.models import (
     SoulCaller,
 )
 from cordbeat.skills import Skill, SkillRegistry
+
+
+def test_skill_tag_with_empty_param_delimiter_keeps_skill_name() -> None:
+    tags = _find_skill_tags("[SKILL: stock_casino | ]")
+
+    assert len(tags) == 1
+    assert tags[0].skill_name == "stock_casino"
+    assert tags[0].params_raw == ""
 
 
 @pytest.fixture

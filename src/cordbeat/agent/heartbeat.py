@@ -128,6 +128,9 @@ HEARTBEAT is not only proactive messaging. Valid private actions include:
   repeated evidence suggests {name} should change how they behave.
 - action=propose_improvement: propose a system or workflow improvement.
 - action=propose_skill: propose a new sandbox-local skill.
+Formal Soul files are not sandbox-local scratch files. For self-review, use
+sandbox-local files for drafts or choose action=propose_trait_change; approved
+proposals are applied by the system.
 Choose next_heartbeat_minutes yourself based on urgency: shorter when there is
 a reason to check back soon, longer when no near-term follow-up is useful. The
 system will clamp the value to configured min/max safety bounds.

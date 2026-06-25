@@ -1,0 +1,33 @@
+name: file_mkdir
+description: "Create a sandbox-local directory"
+description_en: "Create a sandbox-local directory"
+version: "1.0.0"
+author: "cordbeat"
+
+usage: |
+  Use this skill to create an empty directory or nested directory tree inside
+  the sandbox. Relative paths run without approval and are confined to the
+  shared sandbox.
+
+parameters:
+  - name: path
+    type: string
+    required: true
+    description: "Directory path inside the sandbox"
+  - name: parents
+    type: boolean
+    required: false
+    description: "Create missing parent directories"
+  - name: exist_ok
+    type: boolean
+    required: false
+    description: "Treat an existing directory as success"
+
+contexts:
+  shared_voice: false
+
+safety:
+  level: requires_confirmation
+  sandbox: true
+  network: false
+  filesystem: true

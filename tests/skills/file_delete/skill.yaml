@@ -1,0 +1,28 @@
+name: file_delete
+description: "Delete a sandbox-local file or directory"
+description_en: "Delete a sandbox-local file or directory"
+version: "1.0.0"
+author: "cordbeat"
+
+usage: |
+  Use this skill to delete files or directories inside the sandbox.
+  Relative paths run without approval and are confined to the shared sandbox.
+
+parameters:
+  - name: path
+    type: string
+    required: true
+    description: "File or directory path inside the sandbox"
+  - name: recursive
+    type: boolean
+    required: false
+    description: "Delete a directory and all children"
+
+contexts:
+  shared_voice: false
+
+safety:
+  level: requires_confirmation
+  sandbox: true
+  network: false
+  filesystem: true

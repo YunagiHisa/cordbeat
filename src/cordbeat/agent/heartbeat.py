@@ -30,9 +30,13 @@ from cordbeat.models import (
     UserSummary,
 )
 from cordbeat.skills.policy import (
+    delete_skill,
+    delete_skill_file,
     read_skill_file,
     resolve_skill_file_access,
     sandbox_overrides_for_skill,
+    skill_delete_allowed,
+    skill_file_delete_allowed,
     skill_file_update_allowed,
     skill_requires_confirmation,
     update_skill_file,
@@ -54,6 +58,8 @@ logger = logging.getLogger(__name__)
 
 _READ_SKILL_FILE_TOOL_NAME = "read_skill_file"
 _UPDATE_SKILL_FILE_TOOL_NAME = "update_skill_file"
+_DELETE_SKILL_FILE_TOOL_NAME = "delete_skill_file"
+_DELETE_SKILL_TOOL_NAME = "delete_skill"
 _UPDATE_SKILL_SETTINGS_TOOL_NAME = "update_skill_settings"
 _HEARTBEAT_SKILL_MAINTENANCE_DESCRIPTIONS = "\n".join(
     [
@@ -64,6 +70,13 @@ _HEARTBEAT_SKILL_MAINTENANCE_DESCRIPTIONS = "\n".join(
         "skill (params=[skill_name: string, path: string, content: string]). "
         "AI-owned mutable skills may be updated immediately; locked, user, "
         "or system skills require confirmation.",
+        "- delete_skill_file: Delete a non-settings file or directory in an "
+        "installed skill (params=[skill_name: string, path: string, "
+        "recursive: boolean]). AI-owned mutable skills may be cleaned up "
+        "immediately; locked, user, or system skills require confirmation.",
+        "- delete_skill: Delete an installed AI-owned mutable skill directory "
+        "(params=[skill_name: string]). Locked, user, or system skills require "
+        "confirmation.",
         "- update_skill_settings: Request a skill ownership/mutability setting "
         "change (params=[skill_name: string, ownership: string, "
         "mutable_by_ai: boolean, requires_approval_to_modify: boolean]). "
@@ -864,6 +877,12 @@ class HeartbeatLoop:
         if decision.skill_name == _UPDATE_SKILL_FILE_TOOL_NAME:
             await self._execute_update_skill_file(decision)
             return
+        if decision.skill_name == _DELETE_SKILL_FILE_TOOL_NAME:
+            await self._execute_delete_skill_file(decision)
+            return
+        if decision.skill_name == _DELETE_SKILL_TOOL_NAME:
+            await self._execute_delete_skill(decision)
+            return
         if decision.skill_name == _UPDATE_SKILL_SETTINGS_TOOL_NAME:
             await self._store_virtual_skill_proposal(decision)
             return
@@ -1007,6 +1026,104 @@ class HeartbeatLoop:
                 skill_name=params.get("skill_name"),
                 path=params.get("path"),
                 content=params.get("content"),
+            )
+            self._skills.load_all()
+            logger.info(
+                "HEARTBEAT virtual skill executed skill=%s target_user=%s "
+                "params=%s result=%s",
+                decision.skill_name,
+                decision.target_user_id or "__system__",
+                params,
+                result,
+            )
+            await self._record_skill_outcome(
+                decision,
+                record_type=_HEARTBEAT_SKILL_RESULT_RECORD,
+                payload=result,
+            )
+        except Exception as exc:
+            logger.exception(
+                "HEARTBEAT virtual skill failed skill=%s target_user=%s params=%s",
+                decision.skill_name,
+                decision.target_user_id or "__system__",
+                params,
+            )
+            await self._record_skill_outcome(
+                decision,
+                record_type=_HEARTBEAT_SKILL_ERROR_RECORD,
+                payload={"error": f"{type(exc).__name__}: {exc}"},
+            )
+
+    async def _execute_delete_skill_file(self, decision: HeartbeatDecision) -> None:
+        params = dict(decision.skill_params)
+        try:
+            access = resolve_skill_file_access(
+                self._skills.skills_dir,
+                params.get("skill_name"),
+                params.get("path"),
+            )
+            if access.is_settings_file:
+                await self._record_skill_outcome(
+                    decision,
+                    record_type=_HEARTBEAT_SKILL_ERROR_RECORD,
+                    payload={
+                        "error": (
+                            "Cannot delete skill.yaml with delete_skill_file; "
+                            "use delete_skill instead."
+                        )
+                    },
+                )
+                return
+            if not skill_file_delete_allowed(access):
+                await self._store_virtual_skill_proposal(decision)
+                return
+            result = delete_skill_file(
+                self._skills.skills_dir,
+                skill_name=params.get("skill_name"),
+                path=params.get("path"),
+                recursive=params.get("recursive", False),
+            )
+            self._skills.load_all()
+            logger.info(
+                "HEARTBEAT virtual skill executed skill=%s target_user=%s "
+                "params=%s result=%s",
+                decision.skill_name,
+                decision.target_user_id or "__system__",
+                params,
+                result,
+            )
+            await self._record_skill_outcome(
+                decision,
+                record_type=_HEARTBEAT_SKILL_RESULT_RECORD,
+                payload=result,
+            )
+        except Exception as exc:
+            logger.exception(
+                "HEARTBEAT virtual skill failed skill=%s target_user=%s params=%s",
+                decision.skill_name,
+                decision.target_user_id or "__system__",
+                params,
+            )
+            await self._record_skill_outcome(
+                decision,
+                record_type=_HEARTBEAT_SKILL_ERROR_RECORD,
+                payload={"error": f"{type(exc).__name__}: {exc}"},
+            )
+
+    async def _execute_delete_skill(self, decision: HeartbeatDecision) -> None:
+        params = dict(decision.skill_params)
+        try:
+            access = resolve_skill_file_access(
+                self._skills.skills_dir,
+                params.get("skill_name"),
+                "skill.yaml",
+            )
+            if not skill_delete_allowed(access):
+                await self._store_virtual_skill_proposal(decision)
+                return
+            result = delete_skill(
+                self._skills.skills_dir,
+                skill_name=params.get("skill_name"),
             )
             self._skills.load_all()
             logger.info(

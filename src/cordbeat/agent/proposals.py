@@ -21,6 +21,8 @@ from cordbeat.models import (
 )
 from cordbeat.skills.policy import (
     apply_default_skill_settings,
+    delete_skill,
+    delete_skill_file,
     sandbox_overrides_for_skill,
     update_skill_file,
     update_skill_settings,
@@ -34,6 +36,8 @@ logger = logging.getLogger(__name__)
 
 _AI_GENERATED_AUTHOR = "cordbeat-ai"
 _UPDATE_SKILL_FILE_TOOL_NAME = "update_skill_file"
+_DELETE_SKILL_FILE_TOOL_NAME = "delete_skill_file"
+_DELETE_SKILL_TOOL_NAME = "delete_skill"
 _UPDATE_SKILL_SETTINGS_TOOL_NAME = "update_skill_settings"
 
 
@@ -540,6 +544,12 @@ class ProposalExecutor:
         if skill_name == _UPDATE_SKILL_FILE_TOOL_NAME:
             await self._execute_skill_file_update(proposal, skill_params)
             return
+        if skill_name == _DELETE_SKILL_FILE_TOOL_NAME:
+            await self._execute_skill_file_delete(proposal, skill_params)
+            return
+        if skill_name == _DELETE_SKILL_TOOL_NAME:
+            await self._execute_skill_delete(proposal, skill_params)
+            return
         if skill_name == _UPDATE_SKILL_SETTINGS_TOOL_NAME:
             await self._execute_skill_settings_update(proposal, skill_params)
             return
@@ -664,6 +674,69 @@ class ProposalExecutor:
             await self._notify_result(
                 proposal,
                 "❌ Skill settings update failed — proposal expired.",
+            )
+
+    async def _execute_skill_file_delete(
+        self,
+        proposal: dict[str, Any],
+        skill_params: dict[str, Any],
+    ) -> None:
+        proposal_id = proposal["id"]
+        try:
+            result = delete_skill_file(
+                self._skills.skills_dir,
+                skill_name=skill_params.get("skill_name"),
+                path=skill_params.get("path"),
+                recursive=skill_params.get("recursive", False),
+                approved=True,
+            )
+            self._skills.load_all()
+            await self._memory.update_proposal_status(
+                proposal_id, ProposalStatus.EXECUTED
+            )
+            await self._notify_result(
+                proposal,
+                "✅ Skill file deleted successfully.\n"
+                f"{result['skill_name']}/{result['path']}",
+            )
+        except Exception:
+            logger.exception("Approved skill file delete failed")
+            await self._memory.update_proposal_status(
+                proposal_id, ProposalStatus.EXPIRED
+            )
+            await self._notify_result(
+                proposal,
+                "❌ Skill file delete failed — proposal expired.",
+            )
+
+    async def _execute_skill_delete(
+        self,
+        proposal: dict[str, Any],
+        skill_params: dict[str, Any],
+    ) -> None:
+        proposal_id = proposal["id"]
+        try:
+            result = delete_skill(
+                self._skills.skills_dir,
+                skill_name=skill_params.get("skill_name"),
+                approved=True,
+            )
+            self._skills.load_all()
+            await self._memory.update_proposal_status(
+                proposal_id, ProposalStatus.EXECUTED
+            )
+            await self._notify_result(
+                proposal,
+                f"✅ Skill '{result['skill_name']}' deleted successfully.",
+            )
+        except Exception:
+            logger.exception("Approved skill delete failed")
+            await self._memory.update_proposal_status(
+                proposal_id, ProposalStatus.EXPIRED
+            )
+            await self._notify_result(
+                proposal,
+                "❌ Skill delete failed — proposal expired.",
             )
 
     async def _execute_trait_proposal(

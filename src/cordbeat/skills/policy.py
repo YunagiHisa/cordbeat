@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
@@ -22,6 +23,8 @@ SYSTEM_SKILL_AUTHOR = "cordbeat"
 _SANDBOX_LOCAL_FILE_PARAMS: dict[str, str] = {
     "file_read": "path",
     "file_write": "path",
+    "file_mkdir": "path",
+    "file_delete": "path",
     "file_search": "root",
 }
 
@@ -175,6 +178,28 @@ def skill_file_update_allowed(access: SkillAccess, *, approved: bool = False) ->
     )
 
 
+def skill_delete_allowed(access: SkillAccess, *, approved: bool = False) -> bool:
+    """Return whether AI may delete this skill without another approval."""
+    if approved:
+        return True
+    return (
+        access.ownership == "ai"
+        and access.mutable_by_ai
+        and not access.requires_approval_to_modify
+    )
+
+
+def skill_file_delete_allowed(
+    access: SkillAccess,
+    *,
+    approved: bool = False,
+) -> bool:
+    """Return whether AI may delete this skill file without another approval."""
+    if access.is_settings_file:
+        return False
+    return skill_delete_allowed(access, approved=approved)
+
+
 def read_skill_file(
     skills_dir: Path,
     *,
@@ -238,6 +263,81 @@ def update_skill_file(
         "skill_name": access.skill_name,
         "path": access.relative_path,
         "bytes_written": len(text.encode("utf-8")),
+        "status": "ok",
+        "approved": approved,
+    }
+
+
+def delete_skill_file(
+    skills_dir: Path,
+    *,
+    skill_name: Any,
+    path: Any,
+    recursive: Any = False,
+    approved: bool = False,
+) -> dict[str, Any]:
+    """Delete a non-settings file or directory within a skill."""
+    access = resolve_skill_file_access(skills_dir, skill_name, path)
+    if access.target_path == access.skill_dir:
+        return {
+            "error": "use_delete_skill",
+            "skill_name": access.skill_name,
+            "path": access.relative_path,
+        }
+    if not skill_file_delete_allowed(access, approved=approved):
+        return {
+            "error": "approval_required",
+            "skill_name": access.skill_name,
+            "path": access.relative_path,
+            "ownership": access.ownership,
+            "mutable_by_ai": access.mutable_by_ai,
+            "requires_approval_to_modify": access.requires_approval_to_modify,
+        }
+    if not access.target_path.exists():
+        return {
+            "error": f"File not found: {access.skill_name}/{access.relative_path}",
+            "skill_name": access.skill_name,
+            "path": access.relative_path,
+        }
+    recursive_bool = _coerce_optional_bool(recursive, field="recursive") is True
+    if access.target_path.is_dir():
+        if recursive_bool:
+            shutil.rmtree(access.target_path)
+            kind = "directory"
+        else:
+            access.target_path.rmdir()
+            kind = "directory"
+    else:
+        access.target_path.unlink()
+        kind = "file"
+    return {
+        "skill_name": access.skill_name,
+        "path": access.relative_path,
+        "kind": kind,
+        "status": "ok",
+        "approved": approved,
+    }
+
+
+def delete_skill(
+    skills_dir: Path,
+    *,
+    skill_name: Any,
+    approved: bool = False,
+) -> dict[str, Any]:
+    """Delete an installed skill directory when ownership policy allows it."""
+    access = resolve_skill_file_access(skills_dir, skill_name, "skill.yaml")
+    if not skill_delete_allowed(access, approved=approved):
+        return {
+            "error": "approval_required",
+            "skill_name": access.skill_name,
+            "ownership": access.ownership,
+            "mutable_by_ai": access.mutable_by_ai,
+            "requires_approval_to_modify": access.requires_approval_to_modify,
+        }
+    shutil.rmtree(access.skill_dir)
+    return {
+        "skill_name": access.skill_name,
         "status": "ok",
         "approved": approved,
     }

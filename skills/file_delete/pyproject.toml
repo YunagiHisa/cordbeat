@@ -1,0 +1,6 @@
+[project]
+name = "cordbeat-skill-file-delete"
+version = "0.1.0"
+description = "CordBeat builtin skill: delete a sandbox-local file"
+requires-python = ">=3.11"
+dependencies = []

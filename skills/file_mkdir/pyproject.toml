@@ -1,0 +1,6 @@
+[project]
+name = "cordbeat-skill-file-mkdir"
+version = "0.1.0"
+description = "CordBeat builtin skill: create a sandbox-local directory"
+requires-python = ">=3.11"
+dependencies = []

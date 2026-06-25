@@ -4301,6 +4301,8 @@ class TestReActLoop:
         assert "Propose a new local CordBeat skill" in system
         assert "read_skill_file" in system
         assert "update_skill_file" in system
+        assert "delete_skill_file" in system
+        assert "delete_skill" in system
         assert "update_skill_settings" in system
 
     async def test_read_skill_file_virtual_tool_reads_installed_skill(
@@ -4439,6 +4441,193 @@ class TestReActLoop:
         sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
         confirm = next(m for m in sent if m.type == MessageType.SKILL_CONFIRM)
         assert confirm.metadata["skill_name"] == "update_skill_file"
+        mock_ai.generate_chat.assert_not_awaited()
+
+    async def test_delete_skill_file_virtual_tool_deletes_ai_owned_file(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """AI-owned mutable skill files can be removed in normal chat."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return (
+                "[SKILL: delete_skill_file | skill_name=repairable | "
+                "path=scratch.txt]"
+            )
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(return_value="Cleaned up.")
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        skill_dir = self._write_skill(eng._skills.skills_dir, "repairable")
+        (skill_dir / "scratch.txt").write_text("obsolete", encoding="utf-8")
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Remove obsolete skill scratch file",
+            )
+        )
+
+        assert not (skill_dir / "scratch.txt").exists()
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        assert all(m.type != MessageType.SKILL_CONFIRM for m in sent)
+
+    async def test_delete_locked_skill_file_virtual_tool_requests_confirmation(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Locked skill file deletion requests approval before running."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return (
+                "[SKILL: delete_skill_file | skill_name=locked | "
+                "path=scratch.txt]"
+            )
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        skill_dir = self._write_skill(
+            eng._skills.skills_dir,
+            "locked",
+            ownership="system",
+            mutable_by_ai=False,
+            requires_approval_to_modify=True,
+        )
+        (skill_dir / "scratch.txt").write_text("keep for approval", encoding="utf-8")
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Remove locked skill scratch file",
+            )
+        )
+
+        assert (skill_dir / "scratch.txt").exists()
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        confirm = next(m for m in sent if m.type == MessageType.SKILL_CONFIRM)
+        assert confirm.metadata["skill_name"] == "delete_skill_file"
+        mock_ai.generate_chat.assert_not_awaited()
+
+    async def test_delete_skill_virtual_tool_deletes_ai_owned_skill(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """AI-owned mutable skills can be deleted in normal chat."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "[SKILL: delete_skill | skill_name=repairable]"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(return_value="Deleted it.")
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        skill_dir = self._write_skill(eng._skills.skills_dir, "repairable")
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Remove repairable skill",
+            )
+        )
+
+        assert not skill_dir.exists()
+        assert "repairable" not in eng._skills.available_skills
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        assert all(m.type != MessageType.SKILL_CONFIRM for m in sent)
+
+    async def test_delete_locked_skill_virtual_tool_requests_confirmation(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Locked skill deletion requests approval before removing the skill."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "[SKILL: delete_skill | skill_name=locked]"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        skill_dir = self._write_skill(
+            eng._skills.skills_dir,
+            "locked",
+            ownership="system",
+            mutable_by_ai=False,
+            requires_approval_to_modify=True,
+        )
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Remove locked skill",
+            )
+        )
+
+        assert skill_dir.exists()
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        confirm = next(m for m in sent if m.type == MessageType.SKILL_CONFIRM)
+        assert confirm.metadata["skill_name"] == "delete_skill"
         mock_ai.generate_chat.assert_not_awaited()
 
     async def test_update_skill_settings_virtual_tool_requests_confirmation(

@@ -54,8 +54,12 @@ from cordbeat.skills.draw_dsl import (
     normalize as normalize_draw_dsl,
 )
 from cordbeat.skills.policy import (
+    delete_skill,
+    delete_skill_file,
     read_skill_file,
     resolve_skill_file_access,
+    skill_delete_allowed,
+    skill_file_delete_allowed,
     skill_file_update_allowed,
     update_skill_file,
 )
@@ -77,6 +81,8 @@ _SKILL_TAG_PREFIX = "[skill:"
 _CREATE_SKILL_TOOL_NAME = "create_skill"
 _READ_SKILL_FILE_TOOL_NAME = "read_skill_file"
 _UPDATE_SKILL_FILE_TOOL_NAME = "update_skill_file"
+_DELETE_SKILL_FILE_TOOL_NAME = "delete_skill_file"
+_DELETE_SKILL_TOOL_NAME = "delete_skill"
 _UPDATE_SKILL_SETTINGS_TOOL_NAME = "update_skill_settings"
 _CREATE_SKILL_TOOL_DESCRIPTION = (
     "- create_skill: Propose a new local CordBeat skill for user approval "
@@ -98,6 +104,14 @@ _SKILL_MAINTENANCE_TOOL_DESCRIPTIONS = "\n".join(
         "path: string, content: string]). AI-owned mutable skills can be "
         "updated without approval; system/user/locked skills require approval. "
         "Do not use this for skill.yaml settings.",
+        "- delete_skill_file: Delete a non-settings file or directory in an "
+        "installed skill directory (safety=policy_controlled, "
+        "params=[skill_name: string, path: string, recursive: boolean]). "
+        "AI-owned mutable skills can be cleaned up without approval; "
+        "system/user/locked skills require approval.",
+        "- delete_skill: Delete an installed AI-owned mutable skill directory "
+        "(safety=policy_controlled, params=[skill_name: string]). "
+        "System/user/locked skills require approval.",
         "- update_skill_settings: Request a settings change for an installed "
         "skill (safety=requires_confirmation, params=[skill_name: string, "
         "ownership: string, mutable_by_ai: boolean, "
@@ -1722,6 +1736,121 @@ class CoreEngine:
                         skill_name=params.get("skill_name"),
                         path=params.get("path"),
                         content=params.get("content"),
+                    )
+                    self._skills.load_all()
+                    output, is_error = _serialize_skill_result(result)
+                    results.append(
+                        ToolCallResult(
+                            skill_name=skill_name,
+                            params=params,
+                            output=output,
+                            is_error=is_error,
+                        )
+                    )
+                    continue
+
+                if skill_name == _DELETE_SKILL_FILE_TOOL_NAME:
+                    try:
+                        access = resolve_skill_file_access(
+                            self._skills.skills_dir,
+                            params.get("skill_name"),
+                            params.get("path"),
+                        )
+                    except Exception as exc:
+                        results.append(
+                            ToolCallResult(
+                                skill_name=skill_name,
+                                params=params,
+                                output=f"{type(exc).__name__}: {exc}",
+                                is_error=True,
+                            )
+                        )
+                        continue
+                    if access.is_settings_file:
+                        results.append(
+                            ToolCallResult(
+                                skill_name=skill_name,
+                                params=params,
+                                output=(
+                                    "Cannot delete skill.yaml with "
+                                    "delete_skill_file; use delete_skill instead."
+                                ),
+                                is_error=True,
+                            )
+                        )
+                        continue
+                    if not skill_file_delete_allowed(access):
+                        proposal_id = await self._request_skill_confirmation(
+                            user_id=user_id,
+                            message=message,
+                            skill_name=skill_name,
+                            skill_params=params,
+                        )
+                        results.append(
+                            ToolCallResult(
+                                skill_name=skill_name,
+                                params=params,
+                                output=f"Approval required: {proposal_id}",
+                                is_error=True,
+                            )
+                        )
+                        stopped_early = True
+                        break
+                    result = delete_skill_file(
+                        self._skills.skills_dir,
+                        skill_name=params.get("skill_name"),
+                        path=params.get("path"),
+                        recursive=params.get("recursive", False),
+                    )
+                    self._skills.load_all()
+                    output, is_error = _serialize_skill_result(result)
+                    results.append(
+                        ToolCallResult(
+                            skill_name=skill_name,
+                            params=params,
+                            output=output,
+                            is_error=is_error,
+                        )
+                    )
+                    continue
+
+                if skill_name == _DELETE_SKILL_TOOL_NAME:
+                    try:
+                        access = resolve_skill_file_access(
+                            self._skills.skills_dir,
+                            params.get("skill_name"),
+                            "skill.yaml",
+                        )
+                    except Exception as exc:
+                        results.append(
+                            ToolCallResult(
+                                skill_name=skill_name,
+                                params=params,
+                                output=f"{type(exc).__name__}: {exc}",
+                                is_error=True,
+                            )
+                        )
+                        continue
+                    if not skill_delete_allowed(access):
+                        proposal_id = await self._request_skill_confirmation(
+                            user_id=user_id,
+                            message=message,
+                            skill_name=skill_name,
+                            skill_params=params,
+                        )
+                        results.append(
+                            ToolCallResult(
+                                skill_name=skill_name,
+                                params=params,
+                                output=f"Approval required: {proposal_id}",
+                                is_error=True,
+                            )
+                        )
+                        stopped_early = True
+                        break
+                    result = delete_skill(
+                        self._skills.skills_dir,
+                        skill_name=params.get("skill_name"),
                     )
                     self._skills.load_all()
                     output, is_error = _serialize_skill_result(result)

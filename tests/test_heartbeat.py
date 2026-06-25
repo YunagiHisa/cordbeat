@@ -865,6 +865,125 @@ class TestSkillExecution:
         assert meta["proposal_type"] == ProposalType.SKILL_EXECUTION
         assert meta["skill_name"] == "update_skill_file"
 
+    async def test_virtual_delete_ai_owned_skill_file_runs_without_approval(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """AI-owned mutable skill files can be cleaned up during heartbeat."""
+        await memory.get_or_create_user("u1", "Alice")
+        skill_dir = self._write_skill(heartbeat._skills.skills_dir, "repairable")
+        (skill_dir / "scratch.txt").write_text("obsolete", encoding="utf-8")
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="delete_skill_file",
+            skill_params={"skill_name": "repairable", "path": "scratch.txt"},
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_decision(decision)
+
+        assert not (skill_dir / "scratch.txt").exists()
+        records = await memory.get_certain_records(
+            "u1", record_type="heartbeat_skill_result"
+        )
+        assert len(records) == 1
+        assert json.loads(records[0]["content"])["status"] == "ok"
+        assert not mock_gateway.send_to_adapter.await_args_list
+
+    async def test_virtual_delete_locked_skill_file_requests_approval(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """Locked skill file deletion becomes an approval proposal."""
+        await memory.get_or_create_user("u1", "Alice")
+        skill_dir = self._write_skill(
+            heartbeat._skills.skills_dir,
+            "locked",
+            ownership="system",
+            mutable_by_ai=False,
+            requires_approval_to_modify=True,
+        )
+        (skill_dir / "scratch.txt").write_text("keep", encoding="utf-8")
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="delete_skill_file",
+            skill_params={"skill_name": "locked", "path": "scratch.txt"},
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_decision(decision)
+
+        assert (skill_dir / "scratch.txt").exists()
+        proposals = await memory.get_certain_records("u1", record_type="proposal")
+        assert len(proposals) == 1
+        meta = json.loads(proposals[0]["metadata"])
+        assert meta["proposal_type"] == ProposalType.SKILL_EXECUTION
+        assert meta["skill_name"] == "delete_skill_file"
+
+    async def test_virtual_delete_ai_owned_skill_runs_without_approval(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """AI-owned mutable skills can be removed during heartbeat."""
+        await memory.get_or_create_user("u1", "Alice")
+        skill_dir = self._write_skill(heartbeat._skills.skills_dir, "repairable")
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="delete_skill",
+            skill_params={"skill_name": "repairable"},
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_decision(decision)
+
+        assert not skill_dir.exists()
+        assert "repairable" not in heartbeat._skills.available_skills
+        records = await memory.get_certain_records(
+            "u1", record_type="heartbeat_skill_result"
+        )
+        assert len(records) == 1
+        assert json.loads(records[0]["content"])["status"] == "ok"
+        assert not mock_gateway.send_to_adapter.await_args_list
+
+    async def test_virtual_delete_locked_skill_requests_approval(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """Locked skill deletion becomes an approval proposal."""
+        await memory.get_or_create_user("u1", "Alice")
+        skill_dir = self._write_skill(
+            heartbeat._skills.skills_dir,
+            "locked",
+            ownership="system",
+            mutable_by_ai=False,
+            requires_approval_to_modify=True,
+        )
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="delete_skill",
+            skill_params={"skill_name": "locked"},
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_decision(decision)
+
+        assert skill_dir.exists()
+        proposals = await memory.get_certain_records("u1", record_type="proposal")
+        assert len(proposals) == 1
+        meta = json.loads(proposals[0]["metadata"])
+        assert meta["proposal_type"] == ProposalType.SKILL_EXECUTION
+        assert meta["skill_name"] == "delete_skill"
+
     async def test_virtual_update_skill_settings_requests_approval(
         self,
         heartbeat: HeartbeatLoop,
@@ -2153,6 +2272,67 @@ class TestApprovedProposalExecution:
         await heartbeat._proposals.execute_approved()
 
         assert "version': 2" in (skill_dir / "main.py").read_text(encoding="utf-8")
+        proposal = await memory.get_proposal(proposal_id)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.EXECUTED
+
+    async def test_approved_virtual_skill_file_delete_executes(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """Approved virtual skill file deletion is dispatched by proposals."""
+        skill_dir = self._write_skill(heartbeat._skills.skills_dir, "repairable")
+        (skill_dir / "scratch.txt").write_text("obsolete", encoding="utf-8")
+
+        proposal_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Delete skill file",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "delete_skill_file",
+                "skill_params": {
+                    "skill_name": "repairable",
+                    "path": "scratch.txt",
+                },
+            },
+        )
+
+        await heartbeat._proposals.execute_approved()
+
+        assert not (skill_dir / "scratch.txt").exists()
+        proposal = await memory.get_proposal(proposal_id)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.EXECUTED
+
+    async def test_approved_virtual_skill_delete_executes(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """Approved virtual skill deletion is dispatched by proposals."""
+        skill_dir = self._write_skill(heartbeat._skills.skills_dir, "repairable")
+
+        proposal_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Delete skill",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "delete_skill",
+                "skill_params": {"skill_name": "repairable"},
+            },
+        )
+
+        await heartbeat._proposals.execute_approved()
+
+        assert not skill_dir.exists()
+        assert "repairable" not in heartbeat._skills.available_skills
         proposal = await memory.get_proposal(proposal_id)
         assert proposal is not None
         meta = json.loads(proposal["metadata"])

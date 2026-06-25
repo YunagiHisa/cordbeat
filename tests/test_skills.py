@@ -852,6 +852,8 @@ class TestSandboxEnforcement:
         skills_dir.mkdir()
         _copy_builtin_skill(skills_dir, "file_read")
         _copy_builtin_skill(skills_dir, "file_write")
+        _copy_builtin_skill(skills_dir, "file_mkdir")
+        _copy_builtin_skill(skills_dir, "file_delete")
         sandbox_root = tmp_path / "sandbox"
 
         registry = SkillRegistry(
@@ -861,10 +863,23 @@ class TestSandboxEnforcement:
         registry.load_all()
         writer = registry.get("file_write")
         reader = registry.get("file_read")
+        maker = registry.get("file_mkdir")
+        deleter = registry.get("file_delete")
         assert writer is not None
         assert reader is not None
+        assert maker is not None
+        assert deleter is not None
 
         path = "notes/one.txt"
+        mkdir_result = await maker.execute(
+            {"path": "empty/logs"},
+            sandbox_overrides=sandbox_overrides_for_skill(
+                "file_mkdir",
+                {"path": "empty/logs"},
+            ),
+        )
+        assert mkdir_result["status"] == "ok"
+        assert (sandbox_root / "empty" / "logs").is_dir()
         await writer.execute(
             {"path": path, "content": "hello sandbox"},
             sandbox_overrides=sandbox_overrides_for_skill("file_write", {"path": path}),
@@ -878,6 +893,14 @@ class TestSandboxEnforcement:
         assert (sandbox_root / "notes" / "one.txt").read_text(
             encoding="utf-8"
         ) == "hello sandbox"
+        await deleter.execute(
+            {"path": path},
+            sandbox_overrides=sandbox_overrides_for_skill(
+                "file_delete",
+                {"path": path},
+            ),
+        )
+        assert not (sandbox_root / "notes" / "one.txt").exists()
 
     async def test_filesystem_allowed_when_flag_true(self, tmp_path: Path) -> None:
         """Sandboxed skill with filesystem=True can write anywhere."""
@@ -1641,6 +1664,163 @@ class TestFileWriteSkill:
         assert out.read_text(encoding="utf-8") == "nested"
 
 
+class TestFileDeleteSkill:
+    """Tests for the file_delete built-in skill."""
+
+    async def test_file_delete_meta(self, tmp_path: Path) -> None:
+        """file_delete requires confirmation but can be sandbox-overridden."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "file_delete")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        meta = registry.available_skills["file_delete"]
+        assert meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION
+        assert meta.sandbox is True
+        assert meta.filesystem is True
+
+    async def test_file_delete_removes_relative_file(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """file_delete removes a relative sandbox-local file."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_delete",
+            str(_BUILTIN_SKILLS_DIR / "file_delete" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        monkeypatch.chdir(tmp_path)
+        out = tmp_path / "notes" / "old.txt"
+        out.parent.mkdir()
+        out.write_text("old", encoding="utf-8")
+
+        result = mod.execute(path="notes/old.txt")
+
+        assert result["status"] == "ok"
+        assert result["kind"] == "file"
+        assert not out.exists()
+
+    async def test_file_delete_recursive_directory(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """file_delete can remove a directory recursively when requested."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_delete_recursive",
+            str(_BUILTIN_SKILLS_DIR / "file_delete" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        monkeypatch.chdir(tmp_path)
+        out = tmp_path / "drafts" / "nested" / "old.txt"
+        out.parent.mkdir(parents=True)
+        out.write_text("old", encoding="utf-8")
+
+        result = mod.execute(path="drafts", recursive=True)
+
+        assert result["status"] == "ok"
+        assert result["kind"] == "directory"
+        assert not (tmp_path / "drafts").exists()
+
+    async def test_file_delete_rejects_absolute_and_parent_paths(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """file_delete accepts only sandbox-relative paths."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_delete_reject",
+            str(_BUILTIN_SKILLS_DIR / "file_delete" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        monkeypatch.chdir(tmp_path)
+        outside = tmp_path / "outside.txt"
+        outside.write_text("keep", encoding="utf-8")
+
+        assert "error" in mod.execute(path=str(outside))
+        assert "error" in mod.execute(path="../outside.txt")
+        assert outside.exists()
+
+
+class TestFileMkdirSkill:
+    """Tests for the file_mkdir built-in skill."""
+
+    async def test_file_mkdir_meta(self, tmp_path: Path) -> None:
+        """file_mkdir requires confirmation but can be sandbox-overridden."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "file_mkdir")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        meta = registry.available_skills["file_mkdir"]
+        assert meta.safety_level == SafetyLevel.REQUIRES_CONFIRMATION
+        assert meta.sandbox is True
+        assert meta.filesystem is True
+
+    async def test_file_mkdir_creates_relative_directory(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """file_mkdir creates a relative sandbox-local directory."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_mkdir",
+            str(_BUILTIN_SKILLS_DIR / "file_mkdir" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        monkeypatch.chdir(tmp_path)
+        result = mod.execute(path="notes/empty")
+
+        assert result["status"] == "ok"
+        assert (tmp_path / "notes" / "empty").is_dir()
+
+    async def test_file_mkdir_rejects_absolute_and_parent_paths(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """file_mkdir accepts only sandbox-relative paths."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_mkdir_reject",
+            str(_BUILTIN_SKILLS_DIR / "file_mkdir" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        monkeypatch.chdir(tmp_path)
+        outside = tmp_path / "outside"
+
+        assert "error" in mod.execute(path=str(outside))
+        assert "error" in mod.execute(path="../outside")
+        assert not outside.exists()
+
+
 class TestApiCallSkill:
     """Tests for the api_call built-in skill."""
 
@@ -1737,6 +1917,8 @@ class TestBuiltinSkillRegistry:
             "web_search",
             "weather",
             "file_write",
+            "file_mkdir",
+            "file_delete",
             "api_call",
             "draw",
             "fetch_url",
@@ -1746,7 +1928,7 @@ class TestBuiltinSkillRegistry:
 
         registry = SkillRegistry(skills_dir)
         registry.load_all()
-        assert len(registry.available_skills) == 12
+        assert len(registry.available_skills) == 14
 
     def test_enabled_builtins(self, tmp_path: Path) -> None:
         """Only safe skills and requires_confirmation skills are enabled."""
@@ -1761,6 +1943,8 @@ class TestBuiltinSkillRegistry:
             "web_search",
             "weather",
             "file_write",
+            "file_mkdir",
+            "file_delete",
             "api_call",
             "draw",
             "fetch_url",
@@ -1782,6 +1966,8 @@ class TestBuiltinSkillRegistry:
         assert "inspect_image" in enabled
         # Requires_confirmation skills
         assert "file_write" in enabled
+        assert "file_mkdir" in enabled
+        assert "file_delete" in enabled
         assert "api_call" in enabled
         assert "draw" in enabled
         # Dangerous — disabled
@@ -1800,6 +1986,8 @@ class TestBuiltinSkillRegistry:
             "web_search",
             "weather",
             "file_write",
+            "file_mkdir",
+            "file_delete",
             "api_call",
             "draw",
             "fetch_url",
@@ -1817,6 +2005,8 @@ class TestBuiltinSkillRegistry:
         assert "web_search" in desc
         assert "weather" in desc
         assert "file_write" in desc
+        assert "file_mkdir" in desc
+        assert "file_delete" in desc
         assert "api_call" in desc
         assert "draw" in desc
         assert "fetch_url" in desc

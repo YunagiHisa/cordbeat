@@ -267,7 +267,7 @@ class TestFlashbulbMemory:
         assert float(results[0]["metadata"]["emotion_weight"]) == 1.0
 
     async def test_flashbulb_resists_decay(self, memory: MemoryStore) -> None:
-        """Flashbulb survives lazy decay; weak entries get eager-deleted."""
+        """Flashbulb survives lazy decay; weak entries are archived."""
         await memory.get_or_create_user("u1", "Test")
         # Add a normal episodic memory with very low strength — it falls
         # below archive_threshold immediately so the next search will
@@ -286,16 +286,67 @@ class TestFlashbulbMemory:
         await memory.add_flashbulb_memory("u1", "Emotionally significant moment")
 
         # First search triggers lazy decay: weak entry is filtered out and
-        # physically deleted; flashbulb is preserved.
+        # archived; flashbulb is preserved.
         results = await memory.search_episodic("u1", "moment", n_results=5)
         contents = [r["content"] for r in results]
         assert "Ordinary conversation" not in contents
         assert any("significant moment" in c for c in contents)
 
+        cur = await memory._conn.execute(
+            "SELECT archived_at, archive_reason FROM episodic_memory WHERE id = ?",
+            ("normal-1",),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        assert row is not None
+        assert row["archived_at"] is not None
+        assert "archive_threshold" in row["archive_reason"]
+
         # Subsequent search confirms flashbulb still survives.
         results2 = await memory.search_episodic("u1", "significant moment")
         assert len(results2) >= 1
         assert results2[0]["metadata"]["flashbulb"] is True
+        assert float(results2[0]["metadata"]["strength"]) == 1.0
+
+    async def test_archived_duplicate_is_reactivated(
+        self, memory: MemoryStore
+    ) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        old = MemoryEntry(
+            id="old-ordinary",
+            user_id="u1",
+            layer=MemoryLayer.SEMANTIC,
+            content="User likes tiny blue notebooks",
+            strength=0.001,
+            emotion_weight=0.0,
+        )
+        await memory.add_semantic_memory(old)
+
+        assert await memory.search_semantic("u1", "tiny blue notebooks") == []
+        cur = await memory._conn.execute(
+            "SELECT archived_at FROM semantic_memory WHERE id = ?",
+            ("old-ordinary",),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        assert row is not None
+        assert row["archived_at"] is not None
+
+        revived = MemoryEntry(
+            id="revived-duplicate",
+            user_id="u1",
+            layer=MemoryLayer.SEMANTIC,
+            content="User likes tiny blue notebooks",
+            strength=0.8,
+            emotion_weight=0.0,
+        )
+        revived_id = await memory.add_semantic_memory(revived)
+
+        assert revived_id == "old-ordinary"
+        results = await memory.search_semantic("u1", "tiny blue notebooks")
+        assert len(results) >= 1
+        assert results[0]["id"] == "old-ordinary"
+        assert results[0]["metadata"]["archived_at"] is None
 
     async def test_flashbulb_with_custom_metadata(self, memory: MemoryStore) -> None:
         await memory.get_or_create_user("u1", "Test")

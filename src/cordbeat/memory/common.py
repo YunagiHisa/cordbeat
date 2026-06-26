@@ -115,10 +115,14 @@ CREATE TABLE IF NOT EXISTS semantic_memory (
     emotion_weight REAL NOT NULL,
     created_at     TEXT NOT NULL,
     last_accessed_at TEXT NOT NULL,
-    metadata_json  TEXT NOT NULL DEFAULT '{}'
+    metadata_json  TEXT NOT NULL DEFAULT '{}',
+    archived_at    TEXT,
+    archive_reason TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_semantic_user ON semantic_memory(user_id);
+CREATE INDEX IF NOT EXISTS idx_semantic_user_archive
+    ON semantic_memory(user_id, archived_at);
 
 CREATE TABLE IF NOT EXISTS episodic_memory (
     id             TEXT PRIMARY KEY,
@@ -130,10 +134,14 @@ CREATE TABLE IF NOT EXISTS episodic_memory (
     emotion_weight REAL NOT NULL,
     created_at     TEXT NOT NULL,
     last_accessed_at TEXT NOT NULL,
-    metadata_json  TEXT NOT NULL DEFAULT '{}'
+    metadata_json  TEXT NOT NULL DEFAULT '{}',
+    archived_at    TEXT,
+    archive_reason TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_episodic_user ON episodic_memory(user_id);
+CREATE INDEX IF NOT EXISTS idx_episodic_user_archive
+    ON episodic_memory(user_id, archived_at);
 """
 
 

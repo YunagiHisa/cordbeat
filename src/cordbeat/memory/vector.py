@@ -88,6 +88,8 @@ def _row_to_result(row: aiosqlite.Row, distance: float | None) -> dict[str, Any]
         "emotion_weight": row["emotion_weight"],
         "created_at": row["created_at"],
         "last_accessed_at": row["last_accessed_at"],
+        "archived_at": row["archived_at"],
+        "archive_reason": row["archive_reason"],
     }
     extra = json.loads(row["metadata_json"] or "{}")
     metadata.update(extra)
@@ -234,7 +236,8 @@ class VectorMemory:
     ) -> dict[str, Any] | None:
         """Return the nearest existing memory if within dedup threshold."""
         sql = f"""
-            SELECT m.id, m.strength, m.emotion_weight, v.distance
+            SELECT m.id, m.strength, m.emotion_weight, m.created_at,
+                   m.metadata_json, m.archived_at, v.distance
               FROM {vec_table} AS v
               JOIN {meta_table} AS m ON m.vec_rowid = v.rowid
              WHERE v.user_id = ?
@@ -248,11 +251,22 @@ class VectorMemory:
             return None
         if float(row["distance"]) > self._config.dedup_distance_threshold:
             return None
+        extras = json.loads(row["metadata_json"] or "{}")
+        if extras.get("flashbulb", False):
+            strength = float(row["strength"])
+        else:
+            strength = self._compute_strength(
+                base_strength=float(row["strength"]),
+                created_at=ensure_aware(datetime.fromisoformat(row["created_at"])),
+                emotion_weight=float(row["emotion_weight"]),
+                now=datetime.now(tz=UTC),
+            )
         return {
             "id": row["id"],
-            "strength": float(row["strength"]),
+            "strength": strength,
             "emotion_weight": float(row["emotion_weight"]),
             "distance": float(row["distance"]),
+            "archived": row["archived_at"] is not None,
         }
 
     async def _merge_duplicate(
@@ -273,7 +287,9 @@ class VectorMemory:
             f"""UPDATE {meta_table}
                    SET strength = ?,
                        emotion_weight = ?,
-                       last_accessed_at = ?
+                       last_accessed_at = ?,
+                       archived_at = NULL,
+                       archive_reason = ''
                  WHERE id = ?""",  # noqa: S608
             (
                 new_strength,
@@ -300,10 +316,11 @@ class VectorMemory:
 
         Strength is computed on read from ``base_strength`` + ``created_at``
         + ``emotion_weight`` (Ebbinghaus). Non-flashbulb entries that fall
-        below ``archive_threshold`` are physically deleted (eager delete on
-        read, per design questionnaire Q4-1=A). Results are ranked by a
-        composite score ``strength / (1 + distance)`` so that strong
-        memories outrank weakly-relevant ones at the margin.
+        below ``archive_threshold`` are archived on read and excluded from
+        ordinary recall, but the rows remain in SQLite for future deep recall
+        or explicit deletion. Results are ranked by a composite score
+        ``strength / (1 + distance)`` so strong memories outrank
+        weakly-relevant ones at the margin.
         """
         vec_table = f"{layer}_vectors"
         meta_table = f"{layer}_memory"
@@ -311,16 +328,18 @@ class VectorMemory:
         threshold = self._config.archive_threshold
         now = datetime.now(tz=UTC)
 
-        # Oversample so eager-deleted rows don't starve the result set.
+        # Oversample so newly archived rows don't starve the result set.
         fetch_k = max(n_results * 3, n_results + 5)
 
         sql = f"""
             SELECT m.id, m.vec_rowid, m.user_id, m.content, m.trust_level,
                    m.strength, m.emotion_weight, m.created_at,
-                   m.last_accessed_at, m.metadata_json, v.distance
+                   m.last_accessed_at, m.metadata_json, m.archived_at,
+                   m.archive_reason, v.distance
               FROM {vec_table} AS v
               JOIN {meta_table} AS m ON m.vec_rowid = v.rowid
              WHERE v.user_id = ?
+               AND m.archived_at IS NULL
                AND v.embedding MATCH ?
                AND k = ?
              ORDER BY v.distance
@@ -329,21 +348,24 @@ class VectorMemory:
             rows = await cur.fetchall()
 
         enriched: list[tuple[float, dict[str, Any]]] = []
-        to_delete: list[tuple[str, int, str]] = []
+        to_archive: list[tuple[str, float]] = []
 
         for row in rows:
             extras = json.loads(row["metadata_json"] or "{}")
             is_flashbulb = bool(extras.get("flashbulb", False))
             created_at = ensure_aware(datetime.fromisoformat(row["created_at"]))
-            current_strength = self._compute_strength(
-                base_strength=float(row["strength"]),
-                created_at=created_at,
-                emotion_weight=float(row["emotion_weight"]),
-                now=now,
-            )
+            if is_flashbulb:
+                current_strength = float(row["strength"])
+            else:
+                current_strength = self._compute_strength(
+                    base_strength=float(row["strength"]),
+                    created_at=created_at,
+                    emotion_weight=float(row["emotion_weight"]),
+                    now=now,
+                )
 
             if not is_flashbulb and current_strength < threshold:
-                to_delete.append((row["id"], row["vec_rowid"], row["user_id"]))
+                to_archive.append((row["id"], current_strength))
                 continue
 
             result = _row_to_result(row, row["distance"])
@@ -352,16 +374,24 @@ class VectorMemory:
             score = current_strength / (1.0 + distance)
             enriched.append((score, result))
 
-        for entry_id, vec_rowid, uid in to_delete:
+        archived_at = now.isoformat()
+        for entry_id, current_strength in to_archive:
             await self._conn.execute(
-                f"DELETE FROM {vec_table} WHERE user_id = ? AND rowid = ?",
-                (uid, vec_rowid),
+                f"""UPDATE {meta_table}
+                       SET archived_at = ?,
+                           archive_reason = ?,
+                           last_accessed_at = ?
+                     WHERE id = ?
+                       AND archived_at IS NULL""",  # noqa: S608
+                (
+                    archived_at,
+                    f"decayed below archive_threshold={threshold} "
+                    f"(strength={current_strength:.6f})",
+                    archived_at,
+                    entry_id,
+                ),
             )
-            await self._conn.execute(
-                f"DELETE FROM {meta_table} WHERE id = ?",
-                (entry_id,),
-            )
-        if to_delete:
+        if to_archive:
             await self._conn.commit()
 
         enriched.sort(key=lambda item: item[0], reverse=True)

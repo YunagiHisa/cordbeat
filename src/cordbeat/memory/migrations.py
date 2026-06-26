@@ -107,6 +107,13 @@ MIGRATIONS: list[Migration] = [
             ON conversation_media_observations (message_id);
         """,
     ),
+    Migration(
+        version=7,
+        description="archive decayed vector memories instead of physically "
+        "deleting them; archived rows stay in SQLite but are excluded from "
+        "normal recall",
+        callable=lambda conn: _migrate_v7_vector_archives(conn),
+    ),
 ]
 
 
@@ -186,6 +193,30 @@ async def _migrate_v5_total_messages(conn: aiosqlite.Connection) -> None:
         "  WHERE cm.user_id = users.user_id"
         ") WHERE total_messages = 0"
     )
+
+
+async def _migrate_v7_vector_archives(conn: aiosqlite.Connection) -> None:
+    """Add archive metadata columns to semantic/episodic memory tables."""
+    for table, index in (
+        ("semantic_memory", "idx_semantic_user_archive"),
+        ("episodic_memory", "idx_episodic_user_archive"),
+    ):
+        if not await _table_exists(conn, table):
+            continue
+        cur = await conn.execute(f"PRAGMA table_info({table})")  # noqa: S608
+        columns = {r[1] for r in await cur.fetchall()}
+        await cur.close()
+        if "archived_at" not in columns:
+            await conn.execute(f"ALTER TABLE {table} ADD COLUMN archived_at TEXT")  # noqa: S608
+        if "archive_reason" not in columns:
+            await conn.execute(
+                f"ALTER TABLE {table} "  # noqa: S608
+                "ADD COLUMN archive_reason TEXT NOT NULL DEFAULT ''"
+            )
+        await conn.execute(
+            f"CREATE INDEX IF NOT EXISTS {index} "  # noqa: S608
+            f"ON {table}(user_id, archived_at)"
+        )
 
 
 async def _ensure_version_table(conn: aiosqlite.Connection) -> None:

@@ -55,6 +55,15 @@ async def test_apply_migrations_on_empty_db_creates_full_schema(tmp_path):
         row = await cur.fetchone()
         await cur.close()
         assert row[0] == latest_version()
+
+        cur = await conn.execute("PRAGMA table_info(semantic_memory)")
+        semantic_columns = {r["name"] for r in await cur.fetchall()}
+        await cur.close()
+        cur = await conn.execute("PRAGMA table_info(episodic_memory)")
+        episodic_columns = {r["name"] for r in await cur.fetchall()}
+        await cur.close()
+        assert {"archived_at", "archive_reason"} <= semantic_columns
+        assert {"archived_at", "archive_reason"} <= episodic_columns
     finally:
         await conn.close()
 

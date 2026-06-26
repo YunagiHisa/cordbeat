@@ -3037,6 +3037,42 @@ class TestSkillCreationProposal:
         assert "translate" in msg.content
         assert "proposal ID:" in msg.content
 
+    async def test_invalid_skill_creation_is_rejected_before_notification(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Invalid proposed skill code is not sent to the user for approval."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.PROPOSE_SKILL,
+            content="Create reader skill",
+            proposed_skill={
+                "name": "file_reader_pro",
+                "description": "Read files",
+                "parameters": [],
+                "code": (
+                    "def execute(path):\n"
+                    "    with open(path, 'r', encoding='utf-8') as f:\n"
+                    "        return f.read()\n"
+                ),
+            },
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+
+        proposal_id = await heartbeat._proposals.store_skill_creation_proposal(
+            decision
+        )
+
+        assert proposal_id == ""
+        records = await memory.get_certain_records("u1", record_type="proposal")
+        assert records == []
+        mock_gateway.send_to_adapter.assert_not_called()
+
     async def test_install_proposed_skill(
         self,
         heartbeat: HeartbeatLoop,
@@ -3333,6 +3369,8 @@ class TestSkillCreationProposal:
         mock_gateway.send_to_adapter.assert_called_once()
         msg = mock_gateway.send_to_adapter.call_args[0][1]
         assert "❌" in msg.content
+        assert "Invalid skill name" in msg.content
+        assert "proposal expired" not in msg.content
 
     async def test_forced_sandbox_local_safety_level(
         self,

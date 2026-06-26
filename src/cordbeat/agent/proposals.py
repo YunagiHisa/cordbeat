@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -39,6 +40,61 @@ _UPDATE_SKILL_FILE_TOOL_NAME = "update_skill_file"
 _DELETE_SKILL_FILE_TOOL_NAME = "delete_skill_file"
 _DELETE_SKILL_TOOL_NAME = "delete_skill"
 _UPDATE_SKILL_SETTINGS_TOOL_NAME = "update_skill_settings"
+
+
+def _can_update_ai_skill(skills_dir: Path, name: str) -> bool:
+    """Only AI-generated sandbox-local skills may be overwritten."""
+
+    yaml_path = skills_dir / name / "skill.yaml"
+    if not yaml_path.exists():
+        return False
+    try:
+        raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        logger.warning("Could not inspect existing skill metadata: %s", name)
+        return False
+    if not isinstance(raw, dict):
+        return False
+    raw = apply_default_skill_settings(raw)
+    safety = raw.get("safety") or {}
+    if not isinstance(safety, dict):
+        safety = {}
+    return (
+        raw.get("ownership") == "ai"
+        and raw.get("mutable_by_ai") is True
+        and raw.get("requires_approval_to_modify") is False
+        and safety.get("level", "safe") == "safe"
+        and safety.get("sandbox") is True
+        and safety.get("network") is not True
+        and safety.get("filesystem") is not True
+    )
+
+
+def validate_proposed_skill(
+    proposed: dict[str, Any],
+    skills: SkillRegistry,
+) -> None:
+    """Preflight an AI-generated skill before asking the user to approve it."""
+
+    name = proposed.get("name", "")
+    if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,49}", name):
+        raise ValueError(
+            f"Invalid skill name: {name!r}. "
+            "Must be lowercase alphanumeric with underscores."
+        )
+
+    skill_dir = skills.skills_dir / name
+    if skill_dir.exists() and not _can_update_ai_skill(skills.skills_dir, name):
+        raise ValueError(f"Skill '{name}' already exists.")
+
+    code = proposed.get("code", "")
+    if not isinstance(code, str) or not code.strip():
+        raise ValueError("Skill code is empty.")
+
+    try:
+        validate_skill_source(code, name)
+    except SkillValidationError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def _stable_json(value: Any) -> str:
@@ -311,6 +367,15 @@ class ProposalExecutor:
         """Store a skill creation proposal for user approval."""
         proposed = decision.proposed_skill
         skill_name = proposed.get("name", "unnamed_skill")
+        try:
+            validate_proposed_skill(proposed, self._skills)
+        except ValueError as exc:
+            logger.warning(
+                "Rejected proposed skill %r before approval: %s",
+                skill_name,
+                exc,
+            )
+            return ""
 
         metadata: dict[str, Any] = {
             "status": ProposalStatus.PENDING,
@@ -384,30 +449,11 @@ class ProposalExecutor:
         proposed: dict[str, Any],
     ) -> None:
         """Validate and write a proposed skill to the skills directory."""
+        validate_proposed_skill(proposed, self._skills)
+
         name = proposed.get("name", "")
-        if not re.fullmatch(r"[a-z][a-z0-9_]{0,49}", name):
-            raise ValueError(
-                f"Invalid skill name: {name!r}. "
-                "Must be lowercase alphanumeric with underscores."
-            )
-
         skill_dir = self._skills.skills_dir / name
-        if skill_dir.exists() and not self._can_update_skill(name):
-            raise ValueError(f"Skill '{name}' already exists.")
-
         code = proposed.get("code", "")
-        if not code.strip():
-            raise ValueError("Skill code is empty.")
-
-        # Static validation: AST-based whitelist. Rejects dynamic imports,
-        # dangerous builtins, top-level side effects, and ensures an
-        # ``execute(**kwargs)`` function is defined. This replaces the prior
-        # regex pattern list which was trivially bypassable via string
-        # concatenation, getattr tricks, whitespace padding, etc.
-        try:
-            validate_skill_source(code, name)
-        except SkillValidationError as exc:
-            raise ValueError(str(exc)) from exc
 
         description = proposed.get("description", "AI-generated skill")
         usage = proposed.get("usage", "")
@@ -476,30 +522,7 @@ class ProposalExecutor:
 
     def _can_update_skill(self, name: str) -> bool:
         """Only AI-generated skills may be overwritten by later proposals."""
-
-        yaml_path = self._skills.skills_dir / name / "skill.yaml"
-        if not yaml_path.exists():
-            return False
-        try:
-            raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            logger.warning("Could not inspect existing skill metadata: %s", name)
-            return False
-        if not isinstance(raw, dict):
-            return False
-        raw = apply_default_skill_settings(raw)
-        safety = raw.get("safety") or {}
-        if not isinstance(safety, dict):
-            safety = {}
-        return (
-            raw.get("ownership") == "ai"
-            and raw.get("mutable_by_ai") is True
-            and raw.get("requires_approval_to_modify") is False
-            and safety.get("level", "safe") == "safe"
-            and safety.get("sandbox") is True
-            and safety.get("network") is not True
-            and safety.get("filesystem") is not True
-        )
+        return _can_update_ai_skill(self._skills.skills_dir, name)
 
     async def execute_approved(self, proposal_id: str | None = None) -> None:
         """Check for approved proposals and execute them."""
@@ -801,7 +824,7 @@ class ProposalExecutor:
                 proposal,
                 f"✅ New skill '{skill_name}' installed successfully.",
             )
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Proposed skill '%s' installation failed",
                 skill_name,
@@ -809,9 +832,13 @@ class ProposalExecutor:
             await self._memory.update_proposal_status(
                 proposal_id, ProposalStatus.EXPIRED
             )
+            detail = str(exc).strip()
+            if len(detail) > 500:
+                detail = detail[:497] + "..."
+            detail_text = f" — {detail}" if detail else ""
             await self._notify_result(
                 proposal,
-                f"❌ Skill '{skill_name}' installation failed — proposal expired.",
+                f"❌ Skill '{skill_name}' installation failed{detail_text}.",
             )
 
     async def _notify_result(

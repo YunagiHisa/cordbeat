@@ -19,6 +19,7 @@ from cordbeat.agent.action_budget import ActionBudget
 from cordbeat.agent.proposals import (
     ProposalExecutor,
     find_duplicate_pending_proposal,
+    validate_proposed_skill,
 )
 from cordbeat.agent.react_types import MediaArtifact, ToolCallResult, ToolTrace
 from cordbeat.agent.soul import Soul
@@ -1652,6 +1653,30 @@ class CoreEngine:
                                 output=(
                                     "Missing required create_skill parameters: "
                                     "name and code"
+                                ),
+                                is_error=True,
+                            )
+                        )
+                        continue
+                    try:
+                        validate_proposed_skill(proposed, self._skills)
+                    except ValueError as exc:
+                        error_detail = sanitize(str(exc), max_len=1000).strip()
+                        logger.info(
+                            "ReAct: create_skill preflight failed before "
+                            "approval: %s",
+                            error_detail,
+                        )
+                        results.append(
+                            ToolCallResult(
+                                skill_name=skill_name,
+                                params=params,
+                                output=(
+                                    "create_skill validation failed before "
+                                    f"approval: {error_detail}. Fix the "
+                                    "proposed skill code and call create_skill "
+                                    "again. Do not ask the user to approve it "
+                                    "until validation passes."
                                 ),
                                 is_error=True,
                             )

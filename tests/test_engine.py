@@ -4795,6 +4795,72 @@ class TestReActLoop:
         assert meta["proposed_skill"]["name"] == "hello_tool"
         assert "\n    return" in meta["proposed_skill"]["code"]
 
+    async def test_create_skill_validation_failure_prompts_revision_before_approval(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Invalid create_skill code is returned to ReAct before approval."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return (
+                "[SKILL: create_skill | name=file_reader_pro | "
+                "description=Read files | usage=Read a path | "
+                "code=def execute(path):\\n"
+                "    with open(path, 'r', encoding='utf-8') as f:\\n"
+                "        return f.read()]"
+            )
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(
+            return_value=(
+                "[SKILL: create_skill | name=safe_reader_note | "
+                "description=Echo safe note | usage=Return a static note | "
+                "code=def execute(**kwargs):\\n"
+                "    return {'note': 'use existing file_read for files'}]"
+            )
+        )
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Create a file reader",
+            )
+        )
+
+        mock_ai.generate_chat.assert_awaited_once()
+        continuation = mock_ai.generate_chat.await_args.args[0][-2]["content"]
+        assert "create_skill validation failed before approval" in continuation
+        assert "open" in continuation
+
+        sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
+        confirms = [m for m in sent if m.type == MessageType.SKILL_CONFIRM]
+        assert len(confirms) == 1
+        assert confirms[0].metadata["skill_params"]["name"] == "safe_reader_note"
+
+        user_id = await memory.resolve_user("test", "user1")
+        assert user_id is not None
+        proposals = await memory.get_certain_records(user_id, record_type="proposal")
+        assert len(proposals) == 1
+        meta = json.loads(proposals[0]["metadata"])
+        assert meta["proposed_skill"]["name"] == "safe_reader_note"
+
     async def test_skill_confirmation_reuses_duplicate_pending_proposal(
         self,
         mock_ai: AsyncMock,

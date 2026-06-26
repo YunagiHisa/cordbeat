@@ -182,6 +182,27 @@ class TestImportRestrictions:
         with pytest.raises(SkillValidationError, match="[Rr]elative"):
             validate_skill_source(src, "x")
 
+    def test_host_package_import_rejected(self) -> None:
+        src = (
+            "from cordbeat.skills import SkillRegistry\n"
+            "def execute(**kw): return {}\n"
+        )
+        with pytest.raises(SkillValidationError, match="cordbeat"):
+            validate_skill_source(src, "x")
+
+    def test_sibling_skill_import_rejected(self) -> None:
+        src = (
+            "from skills.fetch_url.main import execute as fetch\n"
+            "def execute(**kw): return {}\n"
+        )
+        with pytest.raises(SkillValidationError, match="skills"):
+            validate_skill_source(src, "x")
+
+    def test_direct_skill_name_import_rejected(self) -> None:
+        src = "import fetch_url\ndef execute(**kw): return {}\n"
+        with pytest.raises(SkillValidationError, match="fetch_url"):
+            validate_skill_source(src, "x")
+
     def test_submodule_allowed_if_parent_allowed(self) -> None:
         src = (
             "from urllib.parse import urlparse\n"

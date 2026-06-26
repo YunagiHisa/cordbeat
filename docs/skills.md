@@ -27,6 +27,19 @@ not install code immediately; it stores a skill-creation proposal for user
 approval, then the approved proposal is validated and installed by the proposal
 executor.
 
+## Independence Contract
+
+Skills are hot-pluggable and self-contained. A skill must not import or call
+another skill directly, and it must not import CordBeat internals. Cross-skill
+workflows belong in the orchestration layer: for example, ReAct may use one
+skill result as input to another enabled skill, but neither skill may depend on
+the other's source code or installation.
+
+Static validation rejects relative imports, imports from the host `cordbeat`
+package, and imports from sibling skill packages. Runtime isolation also limits
+`sys.path` to the standard library and the current skill directory, so dropping
+in, removing, or replacing one skill does not require changing another skill.
+
 ---
 
 ## skill.yaml Format

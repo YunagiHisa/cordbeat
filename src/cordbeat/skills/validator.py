@@ -15,6 +15,9 @@ High-level rules
   skill cannot execute arbitrary code.
 * Imports are restricted to an allow-list of modules. Star imports are
   rejected.
+* Skills must remain hot-pluggable and self-contained: relative imports,
+  imports from the host ``cordbeat`` package, and imports from sibling skills
+  are rejected.
 * A fixed set of dangerous names (``exec``, ``eval``, ``__import__``,
   ``subprocess``, ``ctypes``, dynamic ``getattr``/``setattr``/``delattr``,
   etc.) is rejected wherever it appears.

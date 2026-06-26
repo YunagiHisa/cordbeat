@@ -12,8 +12,8 @@ usage: |
 parameters:
   - name: root
     type: string
-    required: true
-    description: "Directory to scan"
+    required: false
+    description: "Directory to scan, relative to the shared sandbox when omitted (default: .)"
   - name: query
     type: string
     required: false

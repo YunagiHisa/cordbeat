@@ -54,7 +54,7 @@ def _content_matches(path: Path, query: str, max_file_bytes: int) -> bool:
 
 def execute(
     *,
-    root: str,
+    root: str = ".",
     query: str = "",
     name_glob: str = "*",
     max_results: int = 50,

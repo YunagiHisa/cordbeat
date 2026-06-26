@@ -20,7 +20,10 @@ from cordbeat.main import (
 )
 from cordbeat.models import SafetyLevel
 from cordbeat.skills import SandboxConfig, SkillPermissionError, SkillRegistry
-from cordbeat.skills.policy import sandbox_overrides_for_skill
+from cordbeat.skills.policy import (
+    sandbox_overrides_for_skill,
+    skill_requires_confirmation,
+)
 
 
 def _create_skill(
@@ -528,6 +531,18 @@ class TestSkillDescriptions:
         desc = registry.get_skill_descriptions_for_prompt()
         assert "greet" in desc
         assert "safe" in desc
+
+    def test_prompt_marks_optional_parameters(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "file_search")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        desc = registry.get_skill_descriptions_for_prompt()
+
+        assert "root: string optional" in desc
+        assert "query: string optional" in desc
 
     def test_no_skills_available(self, tmp_path: Path) -> None:
         skills_dir = tmp_path / "skills"
@@ -1336,6 +1351,38 @@ class TestFileSearchSkill:
         assert "notes.txt" in paths
         assert "image.bin" not in paths
         assert result["returned"] == 1
+
+    async def test_file_search_omitted_root_uses_shared_sandbox(
+        self, tmp_path: Path
+    ) -> None:
+        """Omitted root should stay sandbox-local and avoid approval."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "file_search")
+        sandbox_root = tmp_path / "sandbox"
+        sandbox_root.mkdir()
+        (sandbox_root / "notes.txt").write_text(
+            "needle lives here\n",
+            encoding="utf-8",
+        )
+
+        registry = SkillRegistry(
+            skills_dir,
+            sandbox_config=SandboxConfig(work_dir=sandbox_root),
+        )
+        registry.load_all()
+        skill = registry.get("file_search")
+        assert skill is not None
+        params = {"query": "needle"}
+
+        assert not skill_requires_confirmation(skill, params)
+        result = await skill.execute(
+            params,
+            sandbox_overrides=sandbox_overrides_for_skill("file_search", params),
+        )
+
+        assert result["root"] == "."
+        assert [item["relative_path"] for item in result["matches"]] == ["notes.txt"]
 
     async def test_file_search_meta(self, tmp_path: Path) -> None:
         """file_search requires confirmation and exposes filesystem access."""

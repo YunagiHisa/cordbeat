@@ -389,7 +389,7 @@ class SkillRegistry:
             # user_id is injected by the engine at call time; hide it from the
             # AI so it never tries to guess internal user IDs.
             params_str = ", ".join(
-                f"{p.name}: {p.type}"
+                f"{p.name}: {p.type}{' required' if p.required else ' optional'}"
                 for p in skill.meta.parameters
                 if p.name != "user_id"
             )

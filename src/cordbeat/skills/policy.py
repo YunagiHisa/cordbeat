@@ -395,7 +395,10 @@ def sandbox_overrides_for_skill(
     path_param = _SANDBOX_LOCAL_FILE_PARAMS.get(skill_name)
     if path_param is None:
         return {}
-    if is_sandbox_relative_path(params.get(path_param)):
+    path_value = params.get(path_param)
+    if skill_name == "file_search" and not str(path_value or "").strip():
+        path_value = "."
+    if is_sandbox_relative_path(path_value):
         return {
             "filesystem": False,
             "work_dir": SANDBOX_SHARED_WORK_DIR,

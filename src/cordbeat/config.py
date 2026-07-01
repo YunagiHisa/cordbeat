@@ -61,6 +61,7 @@ class HeartbeatConfig:
     proactive_destination_cooldown_minutes: int = 360
     max_proactive_messages_per_tick: int = 1
     max_actions_per_tick: int = 3
+    self_review_interval_ticks: int = 6
     quiet_hours_start: str = "01:00"
     quiet_hours_end: str = "07:00"
     timezone: str = "UTC"
@@ -546,6 +547,8 @@ def validate_config(cfg: Config) -> None:
         errors.append("heartbeat.proactive_destination_cooldown_minutes must be >= 0")
     if cfg.heartbeat.max_proactive_messages_per_tick < 1:
         errors.append("heartbeat.max_proactive_messages_per_tick must be >= 1")
+    if cfg.heartbeat.self_review_interval_ticks < 1:
+        errors.append("heartbeat.self_review_interval_ticks must be >= 1")
 
     if errors:
         msg = "Invalid config.yaml:\n  - " + "\n  - ".join(errors)

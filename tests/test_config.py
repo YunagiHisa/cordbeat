@@ -69,7 +69,8 @@ class TestLoadConfig:
             "  min_interval_minutes: 10\n"
             "  proactive_user_cooldown_minutes: 720\n"
             "  proactive_destination_cooldown_minutes: 180\n"
-            "  max_proactive_messages_per_tick: 2\n",
+            "  max_proactive_messages_per_tick: 2\n"
+            "  self_review_interval_ticks: 4\n",
             encoding="utf-8",
         )
         config = load_config(cfg_file)
@@ -78,6 +79,7 @@ class TestLoadConfig:
         assert config.heartbeat.proactive_user_cooldown_minutes == 720
         assert config.heartbeat.proactive_destination_cooldown_minutes == 180
         assert config.heartbeat.max_proactive_messages_per_tick == 2
+        assert config.heartbeat.self_review_interval_ticks == 4
 
     def test_memory_config(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.yaml"
@@ -424,12 +426,14 @@ class TestValidateConfig:
         cfg.heartbeat.proactive_user_cooldown_minutes = -1
         cfg.heartbeat.proactive_destination_cooldown_minutes = -1
         cfg.heartbeat.max_proactive_messages_per_tick = 0
+        cfg.heartbeat.self_review_interval_ticks = 0
         with pytest.raises(ConfigValidationError) as excinfo:
             validate_config(cfg)
         message = str(excinfo.value)
         assert "proactive_user_cooldown_minutes" in message
         assert "proactive_destination_cooldown_minutes" in message
         assert "max_proactive_messages_per_tick" in message
+        assert "self_review_interval_ticks" in message
 
     def test_rejects_string_options_in_ai_backend(self) -> None:
         cfg = Config()

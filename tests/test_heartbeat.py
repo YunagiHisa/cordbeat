@@ -1531,6 +1531,43 @@ class TestLayer2Evaluate:
         assert decision.target_user_id == "u1"
         assert decision.target_adapter_id == "telegram"
 
+    async def test_evaluate_includes_private_continuity_context(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Layer 2 receives recent private notes for interest decay."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.add_certain_record(
+            "u1",
+            "Already checked the Smash topic twice without new evidence.",
+            "heartbeat_reflection",
+        )
+        await memory.add_certain_record(
+            "u1",
+            "Do not over-contact about stale game rumors.",
+            "heartbeat_concern",
+        )
+        mock_ai.generate_json = AsyncMock(
+            return_value={
+                "action": "none",
+                "content": "",
+                "reflection": "The old topic is stale, so I will wait.",
+                "next_heartbeat_minutes": 120,
+            }
+        )
+
+        await heartbeat._layer2_evaluate(
+            UserSummary(user_id="u1", display_name="Alice"),
+            "stale topic",
+        )
+
+        prompt = mock_ai.generate_json.await_args.args[0]
+        assert "Private HEARTBEAT continuity" in prompt
+        assert "Already checked the Smash topic twice" in prompt
+        assert "Use this to decay stale interests" in prompt
+
 
 class TestTwoLayerIntegration:
     async def test_tick_triage_then_evaluate(
@@ -1561,6 +1598,7 @@ class TestTwoLayerIntegration:
                 "action": "message",
                 "content": "Hey Alice!",
                 "reflection": "Alice has been quiet, so I will reconnect gently.",
+                "concerns": ["Avoid repeating old greetings without new context."],
                 "target_user_id": "u1",
                 "target_adapter_id": "discord",
                 "next_heartbeat_minutes": 30,
@@ -1587,6 +1625,17 @@ class TestTwoLayerIntegration:
         metadata = json.loads(records[0]["metadata"])
         assert metadata["action"] == "message"
         assert metadata["triage_reason"] == "hasn't talked recently"
+        concerns = await memory.get_certain_records(
+            "u1", record_type="heartbeat_concern"
+        )
+        assert len(concerns) == 1
+        assert concerns[0]["content"] == (
+            "Avoid repeating old greetings without new context."
+        )
+        journals = await memory.get_certain_records(
+            "__system__", record_type="heartbeat_journal"
+        )
+        assert len(journals) == 1
 
     async def test_tick_triage_selects_no_one(
         self,
@@ -1641,6 +1690,34 @@ class TestTwoLayerIntegration:
         )
         metadata = json.loads(records[0]["metadata"])
         assert metadata["action"] == "none"
+
+    async def test_self_review_records_private_summary(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Periodic self-review summarizes recent private notes."""
+        heartbeat._config.self_review_interval_ticks = 1
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.add_certain_record(
+            "u1",
+            "Alice has had repeated stale topic check-ins.",
+            "heartbeat_reflection",
+        )
+        mock_ai.generate = AsyncMock(
+            return_value="I should let stale topics cool unless new evidence appears."
+        )
+
+        await heartbeat._maybe_run_self_review(
+            [UserSummary(user_id="u1", display_name="Alice")]
+        )
+
+        records = await memory.get_certain_records(
+            "__system__", record_type="heartbeat_self_review"
+        )
+        assert len(records) == 1
+        assert "stale topics cool" in records[0]["content"]
 
     async def test_tick_unknown_user_in_triage_skipped(
         self,

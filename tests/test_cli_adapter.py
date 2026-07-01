@@ -35,6 +35,7 @@ def test_build_cli_completion_tree_includes_pending_ids() -> None:
     assert tree["/approve"] == {"abc-123": None}
     assert tree["/reject"] == {"abc-123": None}
     assert tree["/proposals"] is None
+    assert tree["/link-confirm"] is None
 
 
 def test_mark_cli_proposal_action_sent_removes_pending_id() -> None:

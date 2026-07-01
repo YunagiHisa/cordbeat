@@ -220,6 +220,8 @@ adapters:
   #
   # DMs always bypass channel filters and respond_mode restrictions.
   # user_blocklist takes priority over everything (even DMs).
+  # Admin-gated proposals are approved by accounts linked to the CLI adapter
+  # via /link. Ordinary skill execution confirmations remain requester-owned.
   # ─────────────────────────────────────────────────────────────────────────
   discord:
     core_ws_url: "ws://localhost:8765"

@@ -85,6 +85,13 @@ _UPDATE_SKILL_FILE_TOOL_NAME = "update_skill_file"
 _DELETE_SKILL_FILE_TOOL_NAME = "delete_skill_file"
 _DELETE_SKILL_TOOL_NAME = "delete_skill"
 _UPDATE_SKILL_SETTINGS_TOOL_NAME = "update_skill_settings"
+_ADMIN_LINK_ADAPTER_ID = "cli"
+_ADMIN_APPROVAL_SKILL_NAMES = {
+    _UPDATE_SKILL_FILE_TOOL_NAME,
+    _DELETE_SKILL_FILE_TOOL_NAME,
+    _DELETE_SKILL_TOOL_NAME,
+    _UPDATE_SKILL_SETTINGS_TOOL_NAME,
+}
 _CREATE_SKILL_TOOL_DESCRIPTION = (
     "- create_skill: Propose a new local CordBeat skill for user approval "
     "(safety=requires_confirmation, params=[name: string, description: string, "
@@ -2662,6 +2669,8 @@ class CoreEngine:
             "/reject": lambda: self._cmd_reject(message, arg),
             "/proposals": lambda: self._cmd_proposals(message),
             "/link": lambda: self._cmd_link(message),
+            "/link-confirm": lambda: self._cmd_link_confirm(message, arg),
+            "/link_confirm": lambda: self._cmd_link_confirm(message, arg),
             "/unlink": lambda: self._cmd_unlink(message, arg),
             "/name": lambda: self._cmd_name(message, arg),
             "/quiet": lambda: self._cmd_quiet(message, arg),
@@ -2675,15 +2684,52 @@ class CoreEngine:
         await handler()
         return True
 
+    async def _resolve_command_user(self, message: GatewayMessage) -> str | None:
+        user_id = await self._memory.resolve_user(
+            message.adapter_id, message.platform_user_id
+        )
+        if user_id is None and message.adapter_id == _ADMIN_LINK_ADAPTER_ID:
+            user_id, _ = await self._resolve_user(message)
+        return user_id
+
+    async def _is_admin_user(
+        self,
+        user_id: str,
+        message: GatewayMessage,
+    ) -> bool:
+        if message.adapter_id == _ADMIN_LINK_ADAPTER_ID:
+            return True
+        links = await self._memory.get_linked_platforms(user_id)
+        return any(
+            link.get("adapter_id") == _ADMIN_LINK_ADAPTER_ID for link in links
+        )
+
+    def _proposal_requires_admin(self, meta: dict[str, Any]) -> bool:
+        proposal_type = str(meta.get("proposal_type") or ProposalType.GENERAL)
+        if proposal_type != ProposalType.SKILL_EXECUTION:
+            return True
+        skill_name = str(meta.get("skill_name") or "")
+        return skill_name in _ADMIN_APPROVAL_SKILL_NAMES
+
+    def _proposal_manageable_by(
+        self,
+        *,
+        proposal: dict[str, Any],
+        meta: dict[str, Any],
+        user_id: str,
+        is_admin: bool,
+    ) -> bool:
+        if self._proposal_requires_admin(meta):
+            return is_admin
+        return proposal.get("user_id") == user_id
+
     async def _cmd_approve(self, message: GatewayMessage, proposal_id: str) -> None:
         """Approve a pending proposal."""
         if not proposal_id:
             await self._send_reply(message, "Usage: /approve <proposal_id>")
             return
 
-        user_id = await self._memory.resolve_user(
-            message.adapter_id, message.platform_user_id
-        )
+        user_id = await self._resolve_command_user(message)
         if user_id is None:
             await self._send_reply(message, "User not found.")
             return
@@ -2693,12 +2739,20 @@ class CoreEngine:
             await self._send_reply(message, "Proposal not found.")
             return
 
-        # Verify ownership: proposal must belong to this user
-        if proposal["user_id"] != user_id:
-            await self._send_reply(message, "Proposal not found.")
+        meta = json.loads(proposal.get("metadata") or "{}")
+        is_admin = await self._is_admin_user(user_id, message)
+        if not self._proposal_manageable_by(
+            proposal=proposal,
+            meta=meta,
+            user_id=user_id,
+            is_admin=is_admin,
+        ):
+            await self._send_reply(
+                message,
+                "You are not authorized to manage this proposal.",
+            )
             return
 
-        meta = json.loads(proposal.get("metadata") or "{}")
         status = meta.get("status", "")
         if status != ProposalStatus.PENDING:
             await self._send_reply(
@@ -2727,9 +2781,7 @@ class CoreEngine:
             await self._send_reply(message, "Usage: /reject <proposal_id>")
             return
 
-        user_id = await self._memory.resolve_user(
-            message.adapter_id, message.platform_user_id
-        )
+        user_id = await self._resolve_command_user(message)
         if user_id is None:
             await self._send_reply(message, "User not found.")
             return
@@ -2739,11 +2791,20 @@ class CoreEngine:
             await self._send_reply(message, "Proposal not found.")
             return
 
-        if proposal["user_id"] != user_id:
-            await self._send_reply(message, "Proposal not found.")
+        meta = json.loads(proposal.get("metadata") or "{}")
+        is_admin = await self._is_admin_user(user_id, message)
+        if not self._proposal_manageable_by(
+            proposal=proposal,
+            meta=meta,
+            user_id=user_id,
+            is_admin=is_admin,
+        ):
+            await self._send_reply(
+                message,
+                "You are not authorized to manage this proposal.",
+            )
             return
 
-        meta = json.loads(proposal.get("metadata") or "{}")
         status = meta.get("status", "")
         if status != ProposalStatus.PENDING:
             await self._send_reply(
@@ -2760,17 +2821,26 @@ class CoreEngine:
         logger.info("Proposal %s rejected by user %s", proposal_id, user_id)
 
     async def _cmd_proposals(self, message: GatewayMessage) -> None:
-        """List pending proposals for the current user."""
-        user_id = await self._memory.resolve_user(
-            message.adapter_id, message.platform_user_id
-        )
+        """List pending proposals the current user can manage."""
+        user_id = await self._resolve_command_user(message)
         if user_id is None:
             await self._send_reply(message, "User not found.")
             return
 
-        proposals = await self._memory.get_pending_proposals(
-            user_id=user_id, status=ProposalStatus.PENDING
+        is_admin = await self._is_admin_user(user_id, message)
+        candidates = await self._memory.get_pending_proposals(
+            status=ProposalStatus.PENDING,
         )
+        proposals = []
+        for proposal in candidates:
+            meta = json.loads(proposal.get("metadata") or "{}")
+            if self._proposal_manageable_by(
+                proposal=proposal,
+                meta=meta,
+                user_id=user_id,
+                is_admin=is_admin,
+            ):
+                proposals.append(proposal)
         if not proposals:
             await self._send_reply(message, "No pending proposals.")
             return
@@ -2791,11 +2861,25 @@ class CoreEngine:
             message,
             f"Link token generated: {token}\n"
             "Send this token from your other platform "
-            "using the link confirm command.",
+            "using /link-confirm <token>.",
         )
         await self._audit_link_event(
             message, "link_request", f"Token issued on {message.adapter_id}"
         )
+
+    async def _cmd_link_confirm(self, message: GatewayMessage, token: str) -> None:
+        """Confirm a cross-platform link token from a text command."""
+        if not token:
+            await self._send_reply(message, "Usage: /link-confirm <token>")
+            return
+        confirm = GatewayMessage(
+            type=MessageType.LINK_CONFIRM,
+            adapter_id=message.adapter_id,
+            platform_user_id=message.platform_user_id,
+            content=token.strip(),
+            metadata=self._reply_metadata(message),
+        )
+        await self._handle_link_confirm(confirm)
 
     async def _cmd_unlink(self, message: GatewayMessage, platform: str) -> None:
         """Remove a platform link from the current user."""

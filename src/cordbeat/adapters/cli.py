@@ -16,6 +16,7 @@ _CORE_SLASH_COMMANDS = (
     "/reject",
     "/proposals",
     "/link",
+    "/link-confirm",
     "/unlink",
     "/name",
     "/quiet",

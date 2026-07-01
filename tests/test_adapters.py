@@ -82,6 +82,7 @@ class TestDiscordAdapter:
             "reject",
             "proposals",
             "link",
+            "link-confirm",
             "unlink",
             "name",
             "quiet",

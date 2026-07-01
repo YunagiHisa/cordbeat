@@ -29,6 +29,7 @@ _CORE_BOT_COMMANDS = (
     ("reject", "Reject a pending CordBeat proposal"),
     ("proposals", "List pending CordBeat proposals"),
     ("link", "Generate a cross-platform link token"),
+    ("link-confirm", "Confirm a cross-platform link token"),
     ("unlink", "Unlink a platform from your account"),
     ("name", "Update CordBeat's displayed character name"),
     ("quiet", "Set heartbeat quiet hours"),

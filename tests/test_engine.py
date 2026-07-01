@@ -1775,15 +1775,16 @@ class TestProposalCommands:
             },
         )
 
-    async def test_approve_proposal(
+    async def test_approve_general_proposal_requires_admin(
         self,
         engine: CoreEngine,
         memory: MemoryStore,
         mock_gateway: AsyncMock,
     ) -> None:
-        """Users can approve their own pending proposals."""
+        """CLI-linked admins can approve non-skill-execution proposals."""
         await memory.get_or_create_user("u1", "Alice")
         await memory.link_platform("u1", "test", "user1")
+        await memory.link_platform("u1", "cli", "cli_user")
         pid = await self._create_proposal(memory, "u1", "Add emoji reactions")
 
         msg = GatewayMessage(
@@ -1807,16 +1808,17 @@ class TestProposalCommands:
         ]
         assert any("approved" in content for content in sent)
 
-    async def test_approve_skill_proposal_executes_immediately(
+    async def test_approve_skill_creation_proposal_requires_admin(
         self,
         engine: CoreEngine,
         memory: MemoryStore,
         mock_gateway: AsyncMock,
         skills: SkillRegistry,
     ) -> None:
-        """Approving a skill creation proposal installs it without heartbeat wait."""
+        """Admin approval installs a skill creation proposal immediately."""
         await memory.get_or_create_user("u1", "Alice")
         await memory.link_platform("u1", "test", "user1")
+        await memory.link_platform("u1", "cli", "cli_user")
         pid = await memory.add_certain_record(
             user_id="u1",
             content="Create skill hello",
@@ -1854,15 +1856,106 @@ class TestProposalCommands:
         assert any("Proposal approved" in content for content in sent)
         assert any("installed successfully" in content for content in sent)
 
+    async def test_approve_ordinary_skill_execution_allows_owner(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        skills: SkillRegistry,
+    ) -> None:
+        """Ordinary skill execution remains approvable by the requester."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+
+        async def echo(value: str = "") -> dict[str, str]:
+            return {"result": value}
+
+        skills._skills["echo"] = Skill(
+            meta=SkillMeta(
+                name="echo",
+                description="Echo",
+                usage="",
+                safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
+            ),
+            _test_callable=echo,
+        )
+        pid = await memory.add_certain_record(
+            user_id="u1",
+            content="Run echo",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.PENDING,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "echo",
+                "skill_params": {"value": "ok"},
+                "adapter_id": "test",
+            },
+        )
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content=f"/approve {pid}",
+        )
+        await engine.handle_message(msg)
+
+        proposal = await memory.get_proposal(pid)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.EXECUTED
+
+    async def test_approve_skill_maintenance_requires_admin(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Skill maintenance proposals are admin-gated."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        pid = await memory.add_certain_record(
+            user_id="u1",
+            content="Update skill file",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.PENDING,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "update_skill_file",
+                "skill_params": {
+                    "skill_name": "demo",
+                    "path": "main.py",
+                    "content": "def execute(**kw): return {}",
+                },
+                "adapter_id": "test",
+            },
+        )
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content=f"/approve {pid}",
+        )
+        await engine.handle_message(msg)
+
+        proposal = await memory.get_proposal(pid)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.PENDING
+        reply_call = mock_gateway.send_to_adapter.call_args
+        assert "not authorized" in reply_call[0][1].content.lower()
+
     async def test_reject_proposal(
         self,
         engine: CoreEngine,
         memory: MemoryStore,
         mock_gateway: AsyncMock,
     ) -> None:
-        """Users can reject their own pending proposals."""
+        """CLI-linked admins can reject non-skill-execution proposals."""
         await memory.get_or_create_user("u1", "Alice")
         await memory.link_platform("u1", "test", "user1")
+        await memory.link_platform("u1", "cli", "cli_user")
         pid = await self._create_proposal(memory, "u1", "Change personality")
 
         msg = GatewayMessage(
@@ -1908,7 +2001,7 @@ class TestProposalCommands:
         memory: MemoryStore,
         mock_gateway: AsyncMock,
     ) -> None:
-        """Users cannot approve proposals belonging to other users."""
+        """Non-admin users cannot approve admin-gated proposals."""
         await memory.get_or_create_user("u1", "Alice")
         await memory.link_platform("u1", "test", "user1")
         await memory.get_or_create_user("u2", "Bob")
@@ -1930,7 +2023,34 @@ class TestProposalCommands:
         assert meta["status"] == ProposalStatus.PENDING
 
         reply_call = mock_gateway.send_to_adapter.call_args
-        assert "not found" in reply_call[0][1].content.lower()
+        assert "not authorized" in reply_call[0][1].content.lower()
+
+    async def test_admin_can_approve_other_users_general_proposal(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """CLI-linked admins can approve global/admin-gated proposals."""
+        await memory.get_or_create_user("admin", "Admin")
+        await memory.link_platform("admin", "test", "admin_user")
+        await memory.link_platform("admin", "cli", "cli_user")
+        await memory.get_or_create_user("u2", "Bob")
+        await memory.link_platform("u2", "test", "user2")
+        pid = await self._create_proposal(memory, "u2", "Bob's proposal")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="admin_user",
+            content=f"/approve {pid}",
+        )
+        await engine.handle_message(msg)
+
+        proposal = await memory.get_proposal(pid)
+        assert proposal is not None
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == ProposalStatus.EXECUTED
 
     async def test_approve_already_approved(
         self,
@@ -1941,6 +2061,7 @@ class TestProposalCommands:
         """Approving an already approved proposal returns error."""
         await memory.get_or_create_user("u1", "Alice")
         await memory.link_platform("u1", "test", "user1")
+        await memory.link_platform("u1", "cli", "cli_user")
         pid = await self._create_proposal(memory, "u1")
         await memory.update_proposal_status(pid, ProposalStatus.APPROVED)
 
@@ -1982,9 +2103,10 @@ class TestProposalCommands:
         memory: MemoryStore,
         mock_gateway: AsyncMock,
     ) -> None:
-        """Users can list their pending proposals."""
+        """Admins can list admin-gated pending proposals."""
         await memory.get_or_create_user("u1", "Alice")
         await memory.link_platform("u1", "test", "user1")
+        await memory.link_platform("u1", "cli", "cli_user")
         await self._create_proposal(memory, "u1", "Proposal A")
         await self._create_proposal(memory, "u1", "Proposal B")
 
@@ -2090,7 +2212,7 @@ class TestProposalCommands:
         memory: MemoryStore,
         mock_gateway: AsyncMock,
     ) -> None:
-        """Users cannot reject proposals belonging to other users."""
+        """Non-admin users cannot reject admin-gated proposals."""
         await memory.get_or_create_user("u1", "Alice")
         await memory.link_platform("u1", "test", "user1")
         await memory.get_or_create_user("u2", "Bob")
@@ -2112,7 +2234,7 @@ class TestProposalCommands:
         assert meta["status"] == ProposalStatus.PENDING
 
         reply_call = mock_gateway.send_to_adapter.call_args
-        assert "not found" in reply_call[0][1].content.lower()
+        assert "not authorized" in reply_call[0][1].content.lower()
 
     async def test_reject_already_rejected(
         self,
@@ -2123,6 +2245,7 @@ class TestProposalCommands:
         """Rejecting an already rejected proposal returns error."""
         await memory.get_or_create_user("u1", "Alice")
         await memory.link_platform("u1", "test", "user1")
+        await memory.link_platform("u1", "cli", "cli_user")
         pid = await self._create_proposal(memory, "u1")
         await memory.update_proposal_status(pid, ProposalStatus.REJECTED)
 
@@ -2246,6 +2369,55 @@ class TestLinkCommands:
         )
         assert len(records) >= 1
         assert records[-1]["content"] == "Token issued on discord"
+
+    async def test_link_confirm_command_links_requester_to_confirmer(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/link-confirm connects the token requester to the confirming user."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "user1")
+
+        link_msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="cli",
+            platform_user_id="cli_user",
+            content="/link",
+        )
+        await engine.handle_message(link_msg)
+        token_reply = mock_gateway.send_to_adapter.call_args[0][1]
+        token = token_reply.content.splitlines()[0].split(": ", 1)[1]
+
+        confirm_msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content=f"/link-confirm {token}",
+        )
+        await engine.handle_message(confirm_msg)
+
+        assert await memory.resolve_user("cli", "cli_user") == "u1"
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "account linked" in reply.content.lower()
+
+    async def test_link_confirm_command_without_token_shows_usage(
+        self,
+        engine: CoreEngine,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/link-confirm without a token shows usage."""
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content="/link-confirm",
+        )
+        await engine.handle_message(msg)
+
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "usage" in reply.content.lower()
 
     async def test_unlink_command_removes_platform(
         self,

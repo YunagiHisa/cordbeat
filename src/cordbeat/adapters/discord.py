@@ -56,6 +56,7 @@ _CORE_SLASH_COMMAND_NAMES = (
     "reject",
     "proposals",
     "link",
+    "link-confirm",
     "unlink",
     "name",
     "quiet",
@@ -290,6 +291,16 @@ class DiscordAdapter(RetryableConnection):
         )
         async def link_cmd(interaction: Any) -> None:
             await self._forward_core_command_interaction(interaction, "/link")
+
+        @self._tree.command(
+            name="link-confirm",
+            description="Confirm a CordBeat cross-platform link token",
+        )
+        @discord.app_commands.describe(token="Link token generated on another platform")
+        async def link_confirm_cmd(interaction: Any, token: str) -> None:
+            await self._forward_core_command_interaction(
+                interaction, f"/link-confirm {token}"
+            )
 
         @self._tree.command(
             name="unlink",

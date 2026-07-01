@@ -126,6 +126,7 @@ class ProposalStatus(StrEnum):
 class HeartbeatDecision:
     action: HeartbeatAction
     content: str = ""
+    reflection: str = ""
     skill_name: str | None = None
     skill_params: dict[str, Any] = field(default_factory=dict)
     trait_add: list[str] = field(default_factory=list)

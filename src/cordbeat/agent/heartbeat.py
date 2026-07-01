@@ -169,6 +169,7 @@ You MUST respond in valid JSON:
 {{
   "action": "message|skill|propose_improvement|propose_trait_change|propose_skill|none",
   "content": "message text or proposal description (empty for action=none)",
+  "reflection": "private 1-2 sentence note; no hidden reasoning",
   "skill_name": "skill name (only when action=skill)",
   "skill_params": {{}},
   "trait_add": ["traits to add (only when action=propose_trait_change)"],
@@ -199,6 +200,7 @@ _HEARTBEAT_DESTINATION_SENT_RECORD = "heartbeat_destination_sent"
 _HEARTBEAT_SKILL_RESULT_RECORD = "heartbeat_skill_result"
 _HEARTBEAT_SKILL_ERROR_RECORD = "heartbeat_skill_error"
 _HEARTBEAT_SKILL_APPROVAL_RECORD = "heartbeat_skill_approval_requested"
+_HEARTBEAT_REFLECTION_RECORD = "heartbeat_reflection"
 
 
 def _parse_time(s: str) -> time:
@@ -404,6 +406,7 @@ class HeartbeatLoop:
 
             logger.info("Layer 2: evaluating user %s (reason: %s)", uid, reason)
             decision = await self._layer2_evaluate(user, reason)
+            await self._record_reflection(decision, triage_reason=reason)
             if decision.action != HeartbeatAction.NONE:
                 if not budget.consume(decision.action.value):
                     logger.info(
@@ -542,6 +545,7 @@ class HeartbeatLoop:
         return HeartbeatDecision(
             action=HeartbeatAction(decision_data.get("action", "none")),
             content=decision_data.get("content", ""),
+            reflection=decision_data.get("reflection", ""),
             skill_name=decision_data.get("skill_name"),
             skill_params=decision_data.get("skill_params", {}),
             trait_add=decision_data.get("trait_add", []),
@@ -586,6 +590,45 @@ class HeartbeatLoop:
         lines.append("")
         lines.append("Decide what to do now.")
         return "\n".join(lines)
+
+    async def _record_reflection(
+        self,
+        decision: HeartbeatDecision,
+        *,
+        triage_reason: str,
+    ) -> None:
+        """Persist a private heartbeat note, separate from user-visible output."""
+        reflection = sanitize(
+            decision.reflection.strip(),
+            max_len=self._memory_config.max_user_input_len,
+        )
+        if not reflection:
+            return
+
+        user_id = decision.target_user_id or "__system__"
+        metadata = {
+            "source": "heartbeat",
+            "action": decision.action.value,
+            "triage_reason": sanitize(
+                triage_reason,
+                max_len=self._memory_config.max_user_input_len,
+            ),
+            "target_user_id": user_id,
+            "target_adapter_id": decision.target_adapter_id or "",
+            "next_heartbeat_minutes": decision.next_heartbeat_minutes,
+        }
+        try:
+            await self._memory.add_certain_record(
+                user_id,
+                reflection,
+                _HEARTBEAT_REFLECTION_RECORD,
+                metadata,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record HEARTBEAT reflection for user=%s",
+                user_id,
+            )
 
     async def _execute_decision(self, decision: HeartbeatDecision) -> None:
         match decision.action:
@@ -922,6 +965,7 @@ class HeartbeatLoop:
             proposal_decision = HeartbeatDecision(
                 action=decision.action,
                 content=decision.content,
+                reflection=decision.reflection,
                 target_user_id=decision.target_user_id,
                 target_adapter_id=decision.target_adapter_id,
                 skill_name=decision.skill_name,
@@ -1159,6 +1203,7 @@ class HeartbeatLoop:
         proposal_decision = HeartbeatDecision(
             action=decision.action,
             content=decision.content,
+            reflection=decision.reflection,
             target_user_id=decision.target_user_id,
             target_adapter_id=decision.target_adapter_id,
             skill_name=decision.skill_name,

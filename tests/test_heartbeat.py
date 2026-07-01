@@ -1560,6 +1560,7 @@ class TestTwoLayerIntegration:
             return {
                 "action": "message",
                 "content": "Hey Alice!",
+                "reflection": "Alice has been quiet, so I will reconnect gently.",
                 "target_user_id": "u1",
                 "target_adapter_id": "discord",
                 "next_heartbeat_minutes": 30,
@@ -1576,6 +1577,16 @@ class TestTwoLayerIntegration:
         mock_gateway.send_to_adapter.assert_called_once()
         # Min of triage(45) and decision(30)
         assert result == 30
+        records = await memory.get_certain_records(
+            "u1", record_type="heartbeat_reflection"
+        )
+        assert len(records) == 1
+        assert records[0]["content"] == (
+            "Alice has been quiet, so I will reconnect gently."
+        )
+        metadata = json.loads(records[0]["metadata"])
+        assert metadata["action"] == "message"
+        assert metadata["triage_reason"] == "hasn't talked recently"
 
     async def test_tick_triage_selects_no_one(
         self,
@@ -1596,6 +1607,40 @@ class TestTwoLayerIntegration:
         assert mock_ai.generate_json.call_count == 1
         mock_gateway.send_to_adapter.assert_not_called()
         assert result == 60
+
+    async def test_layer2_records_reflection_for_none_action(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """A quiet heartbeat can still leave a private continuity note."""
+        await memory.get_or_create_user("u1", "Alice")
+        heartbeat._layer2_evaluate = AsyncMock(
+            return_value=HeartbeatDecision(
+                action=HeartbeatAction.NONE,
+                reflection="Alice seems settled; I will stay quietly available.",
+                target_user_id="u1",
+                target_adapter_id="discord",
+                next_heartbeat_minutes=120,
+            )
+        )
+
+        result = await heartbeat._run_layer2(
+            [UserSummary(user_id="u1", display_name="Alice")],
+            [{"user_id": "u1", "reason": "routine check"}],
+            60,
+        )
+
+        assert result == 60
+        records = await memory.get_certain_records(
+            "u1", record_type="heartbeat_reflection"
+        )
+        assert len(records) == 1
+        assert records[0]["content"] == (
+            "Alice seems settled; I will stay quietly available."
+        )
+        metadata = json.loads(records[0]["metadata"])
+        assert metadata["action"] == "none"
 
     async def test_tick_unknown_user_in_triage_skipped(
         self,

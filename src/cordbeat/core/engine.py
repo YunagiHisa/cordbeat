@@ -2848,7 +2848,10 @@ class CoreEngine:
         lines = ["📋 Pending proposals:\n"]
         for p in proposals:
             content = p["content"][:60]
-            lines.append(f"  • {p['id'][:8]}… — {content}")
+            proposal_id = str(p["id"])
+            lines.append(f"  • {content}")
+            lines.append(f"    approve: /approve {proposal_id}")
+            lines.append(f"    reject:  /reject {proposal_id}")
         await self._send_reply(message, "\n".join(lines))
 
     async def _cmd_link(self, message: GatewayMessage) -> None:

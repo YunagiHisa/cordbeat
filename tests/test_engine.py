@@ -2107,8 +2107,8 @@ class TestProposalCommands:
         await memory.get_or_create_user("u1", "Alice")
         await memory.link_platform("u1", "test", "user1")
         await memory.link_platform("u1", "cli", "cli_user")
-        await self._create_proposal(memory, "u1", "Proposal A")
-        await self._create_proposal(memory, "u1", "Proposal B")
+        pid_a = await self._create_proposal(memory, "u1", "Proposal A")
+        pid_b = await self._create_proposal(memory, "u1", "Proposal B")
 
         msg = GatewayMessage(
             type=MessageType.MESSAGE,
@@ -2122,6 +2122,10 @@ class TestProposalCommands:
         response = reply_call[0][1].content
         assert "Proposal A" in response
         assert "Proposal B" in response
+        assert f"/approve {pid_a}" in response
+        assert f"/reject {pid_a}" in response
+        assert f"/approve {pid_b}" in response
+        assert f"/reject {pid_b}" in response
 
     async def test_list_proposals_empty(
         self,

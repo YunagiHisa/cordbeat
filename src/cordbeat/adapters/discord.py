@@ -47,6 +47,7 @@ _VC_ACTIVATION_MODES = frozenset({"always", "hybrid", "wake_phrase"})
 _SKILL_CONFIRM_APPROVE_CUSTOM_ID = "cordbeat:skill_confirm:approve"
 _SKILL_CONFIRM_DENY_CUSTOM_ID = "cordbeat:skill_confirm:deny"
 _PROPOSAL_ID_FOOTER_PREFIX = "Proposal ID:"
+_APPROVE_COMMAND_RE = re.compile(r"(?:^|\s)/approve\s+([^\s`]+)")
 _REQUIRED_VOICE_PERMISSIONS = (
     ("view_channel", "View Channel"),
     ("connect", "Connect"),
@@ -442,6 +443,7 @@ class DiscordAdapter(RetryableConnection):
         *,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        self._cache_pending_proposals_from_text(platform_user_id, content)
         if metadata and metadata.get("via_vc"):
             raw_guild_id = metadata.get("guild_id")
             try:
@@ -870,16 +872,43 @@ class DiscordAdapter(RetryableConnection):
         skill_name: str,
         skill_params: dict[str, Any],
     ) -> None:
+        self._cache_pending_proposal(
+            platform_user_id=platform_user_id,
+            proposal_id=proposal_id,
+            label=skill_name,
+            skill_params=skill_params,
+        )
+
+    def _cache_pending_proposal(
+        self,
+        *,
+        platform_user_id: str,
+        proposal_id: str,
+        label: str,
+        skill_params: dict[str, Any] | None = None,
+    ) -> None:
         if not proposal_id:
             return
         self._pending_skill_confirms[proposal_id] = {
             "platform_user_id": platform_user_id,
-            "skill_name": skill_name,
-            "skill_params": skill_params,
+            "skill_name": label or "proposal",
+            "skill_params": skill_params or {},
         }
         self._pending_skill_confirms.move_to_end(proposal_id)
         if len(self._pending_skill_confirms) > _PENDING_SKILL_CONFIRM_MAX:
             self._pending_skill_confirms.popitem(last=False)
+
+    def _cache_pending_proposals_from_text(
+        self,
+        platform_user_id: str,
+        content: str,
+    ) -> None:
+        for match in _APPROVE_COMMAND_RE.finditer(content):
+            self._cache_pending_proposal(
+                platform_user_id=platform_user_id,
+                proposal_id=match.group(1),
+                label="proposal",
+            )
 
     def _pending_proposal_choices(
         self, platform_user_id: str, current: str = ""

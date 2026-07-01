@@ -512,6 +512,25 @@ class TestDiscordAdapterInternals:
         narrowed = adapter._pending_proposal_choices("u1", current="prop1")
         assert narrowed and all("prop1" in v for _, v in narrowed)
 
+    def test_cache_pending_proposals_from_text(self) -> None:
+        adapter = self._adapter()
+        proposal_id = "076527a0-845b-4f5a-ac6d-12472b281eb2"
+
+        adapter._cache_pending_proposals_from_text(
+            "u1",
+            "\n".join(
+                [
+                    "📋 Pending proposals:",
+                    "  • Change traits",
+                    f"    approve: /approve {proposal_id}",
+                    f"    reject:  /reject {proposal_id}",
+                ]
+            ),
+        )
+
+        choices = adapter._pending_proposal_choices("u1", current="0765")
+        assert choices == [(f"{proposal_id[:8]}… proposal", proposal_id)]
+
     def test_mark_proposal_action_sent_removes_entry(self) -> None:
         adapter = self._adapter()
         adapter._pending_skill_confirms["abc"] = {"skill_name": "s"}

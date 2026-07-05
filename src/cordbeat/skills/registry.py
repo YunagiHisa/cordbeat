@@ -85,6 +85,10 @@ class Skill:
         the subprocess may then request whitelisted memory calls which
         are executed against this object.
         """
+        params, param_error = _coerce_skill_params(params, self.meta)
+        if param_error is not None:
+            return {"error": param_error}
+
         labels = {
             "skill": self.meta.name,
             "safety_level": self.meta.safety_level.value,
@@ -197,6 +201,70 @@ class Skill:
             return
         with nullcontext(work_dir) as path:
             yield path
+
+
+_TRUE_BOOL_VALUES = {"true", "1", "yes", "y", "on"}
+_FALSE_BOOL_VALUES = {"false", "0", "no", "n", "off"}
+
+
+def _coerce_skill_params(
+    params: dict[str, Any], meta: SkillMeta
+) -> tuple[dict[str, Any], str | None]:
+    """Coerce YAML-declared scalar parameter types before execution."""
+    coerced = dict(params)
+    for spec in meta.parameters:
+        if spec.name not in coerced:
+            continue
+
+        expected_type = spec.type.lower()
+        value = coerced[spec.name]
+        try:
+            if expected_type == "integer":
+                coerced[spec.name] = _coerce_integer(value)
+            elif expected_type == "number":
+                coerced[spec.name] = _coerce_number(value)
+            elif expected_type == "boolean":
+                coerced[spec.name] = _coerce_boolean(value)
+            elif expected_type == "string":
+                continue
+        except (TypeError, ValueError):
+            return params, f"invalid parameter {spec.name}: expected {expected_type}"
+
+    return coerced, None
+
+
+def _coerce_integer(value: Any) -> int:
+    if isinstance(value, bool):
+        raise TypeError
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"[+-]?\d+", value.strip()):
+        return int(value)
+    raise ValueError
+
+
+def _coerce_number(value: Any) -> float:
+    if isinstance(value, bool):
+        raise TypeError
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        return float(value)
+    raise ValueError
+
+
+def _coerce_boolean(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in _TRUE_BOOL_VALUES:
+            return True
+        if lowered in _FALSE_BOOL_VALUES:
+            return False
+    raise ValueError
 
 
 def _meta_requires_confirmation(meta: SkillMeta) -> bool:

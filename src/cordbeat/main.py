@@ -129,7 +129,11 @@ def _sync_managed_builtin_skill(src_skill: Path, dst_skill: Path) -> bool:
             if src_file.name == "skill.yaml" or not src_file.is_file():
                 continue
             shutil.copy2(src_file, dst_skill / src_file.name)
-        logger.info("Updated managed built-in skill '%s'", src_skill.name)
+        logger.warning(
+            "Updated managed built-in skill '%s'; CordBeat-managed code files "
+            "were overwritten while user settings were preserved",
+            src_skill.name,
+        )
         return True
     except (OSError, yaml.YAMLError, AttributeError):
         logger.exception("Failed to update managed built-in skill '%s'", src_skill.name)
@@ -403,8 +407,8 @@ async def main(
     await _cancel_with_timeout(queue_task, "queue_task")
     if metrics_server is not None:
         await _cancel_with_timeout(metrics_server.stop(), "metrics_server")
-    await ai.aclose()
-    await memory.close()
+    await _cancel_with_timeout(ai.aclose(), "ai_backend")
+    await _cancel_with_timeout(memory.close(), "memory")
     logger.info("CordBeat stopped")
 
 
@@ -448,8 +452,10 @@ async def main_with_cli(config_path: str) -> None:
         server_task.cancel()
         try:
             await server_task
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
             pass
+        except Exception:
+            logger.exception("CordBeat server task failed during CLI shutdown")
 
 
 def cli() -> None:

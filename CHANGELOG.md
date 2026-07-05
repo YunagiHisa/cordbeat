@@ -19,6 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Execution, voice, and tool hardening from source audit #3.** RVC checkpoint
+  loading now uses PyTorch safe weights-only mode, skill parameters are coerced
+  from `skill.yaml` types before execution, `shell_exec` cleans up timed-out
+  processes, and shutdown/CLI task errors are bounded and logged.
 - **Skill self-improvement hardening.** AI-generated skill metadata is now
   serialized with `yaml.safe_dump`, proposed parameters are schema-validated,
   skill metadata names must match their directory names, duplicate skill loads

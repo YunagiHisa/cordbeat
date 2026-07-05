@@ -1019,10 +1019,14 @@ class RVCBackend:
         logger.info("Loading RVC model: %s", model_file)
         try:
             cpt = _torch.load(  # type: ignore[name-defined]
-                str(model_file), map_location="cpu", weights_only=False
+                str(model_file), map_location="cpu", weights_only=True
             )
         except Exception:
-            logger.exception("Failed to load RVC checkpoint: %s", model_file)
+            logger.exception("Failed to safely load RVC checkpoint: %s", model_file)
+            return
+
+        if not isinstance(cpt, dict):
+            logger.error("RVC checkpoint is not a state dictionary: %s", model_file)
             return
 
         model_cfg = cpt.get("config")

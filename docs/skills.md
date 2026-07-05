@@ -95,6 +95,12 @@ keeping private-memory, filesystem, drawing, and side-effecting skills unavailab
 On startup, built-in skills missing this setting receive the bundled default; an
 explicit user-defined `true` or `false` value is never overwritten.
 
+CordBeat-managed built-in skills (`author: "cordbeat"`) may have their bundled
+code files refreshed on startup when the application ships an updated version.
+User settings such as `enabled`, ownership, mutability, approval policy, and
+`contexts.shared_voice` are preserved, but local edits to managed built-in code
+should be copied to a user-owned skill directory before upgrading.
+
 ## Web Research And Images
 
 CordBeat builds web-research guidance from the skills that are actually enabled in

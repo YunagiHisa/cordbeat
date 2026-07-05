@@ -13,6 +13,7 @@ async def execute(
     **_kwargs: Any,
 ) -> dict[str, Any]:
     """Run a shell command and return stdout/stderr."""
+    process: asyncio.subprocess.Process | None = None
     try:
         process = await asyncio.create_subprocess_shell(
             command,
@@ -21,7 +22,9 @@ async def execute(
         )
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
     except TimeoutError:
-        process.kill()
+        if process is not None:
+            process.kill()
+            await process.wait()
         return {"error": f"Command timed out after {timeout}s", "returncode": -1}
 
     return {

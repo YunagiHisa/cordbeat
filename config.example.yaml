@@ -344,6 +344,8 @@ tts:
   timeout: 60.0               # HTTP request timeout (seconds)
 
 # --- RVC: Voice conversion post-processor (requires uv sync --extra rvc) ---
+# RVC checkpoints are loaded with PyTorch's safe weights-only mode. Use only
+# trusted checkpoints that are compatible with weights_only=True.
 rvc:
   enabled: false
   model_path: ""              # path to .pth RVC checkpoint

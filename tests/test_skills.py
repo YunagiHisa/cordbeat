@@ -6,6 +6,7 @@ import hashlib
 import os
 import shutil
 import socket
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1274,6 +1275,42 @@ class TestTimerSkill:
         assert call_kwargs["metadata"]["status"] == "pending"
         assert "remind_at" in call_kwargs["metadata"]
 
+    async def test_timer_coerces_string_minutes(self, tmp_path: Path) -> None:
+        """integer parameters declared in skill.yaml are coerced before execute."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "timer")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("timer")
+        assert skill is not None
+
+        mock_memory = AsyncMock()
+        mock_memory.add_certain_record.return_value = "rec-045"
+
+        result = await skill.execute(
+            {"user_id": "u1", "message": "Stretch", "minutes": "45"},
+            memory=mock_memory,
+        )
+
+        assert result["status"] == "scheduled"
+        mock_memory.add_certain_record.assert_awaited_once()
+
+    async def test_boolean_parameter_coercion(self) -> None:
+        """boolean parameters accept common string values before execution."""
+        meta = SkillMeta(
+            name="flag_skill",
+            description="",
+            usage="",
+            parameters=[SkillParam(name="flag", type="boolean")],
+        )
+        skill = Skill(meta, _test_callable=lambda flag: {"flag": flag})
+
+        result = await skill.execute({"flag": "true"})
+
+        assert result == {"flag": True}
+
     async def test_timer_no_memory(self, tmp_path: Path) -> None:
         """timer returns error when memory is not available."""
         skills_dir = tmp_path / "skills"
@@ -1493,6 +1530,41 @@ class TestShellExecSkill:
         result = await mod.execute(command="echo hello", timeout=10)
         assert result["returncode"] == 0
         assert "hello" in result["stdout"]
+
+    async def test_shell_exec_invalid_timeout_type(self, tmp_path: Path) -> None:
+        """integer parameters reject non-integer strings before subprocess launch."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "shell_exec")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("shell_exec")
+        assert skill is not None
+
+        result = await skill.execute({"command": "echo hello", "timeout": "abc"})
+
+        assert result == {"error": "invalid parameter timeout: expected integer"}
+
+    async def test_shell_exec_timeout_kills_process(self) -> None:
+        """shell_exec returns a timeout error after killing the spawned shell."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_shell_exec_timeout",
+            str(_BUILTIN_SKILLS_DIR / "shell_exec" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        result = await mod.execute(
+            command=f'"{sys.executable}" -c "import time; time.sleep(2)"',
+            timeout=0.1,
+        )
+
+        assert result["returncode"] == -1
+        assert "timed out" in result["error"]
 
 
 class TestWebSearchSkill:

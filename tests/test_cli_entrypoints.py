@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -108,6 +110,37 @@ class TestMainCliKeyboardInterrupt:
             patch("cordbeat.adapters.cli.cli_main"),
         ):
             cli_chat()
+
+    async def test_main_with_cli_logs_server_shutdown_error(self) -> None:
+        """Server task exceptions during CLI shutdown should be logged."""
+        from cordbeat.main import main_with_cli
+
+        cfg = SimpleNamespace(
+            gateway=SimpleNamespace(host="localhost", port=8765, auth_token=None)
+        )
+
+        async def fake_main(_config_path: str, _ready=None) -> None:
+            if _ready is not None:
+                _ready.set()
+            try:
+                await asyncio.Future()
+            finally:
+                raise RuntimeError("shutdown failed")
+
+        async def fake_cli_main(_ws_url: str, _auth_token: str | None) -> None:
+            return None
+
+        with (
+            patch("cordbeat.main.load_config", return_value=cfg),
+            patch("cordbeat.main.main", side_effect=fake_main),
+            patch("cordbeat.adapters.cli.main", side_effect=fake_cli_main),
+            patch("cordbeat.main.logger") as mock_logger,
+        ):
+            await main_with_cli("config.yaml")
+
+        mock_logger.exception.assert_called_once_with(
+            "CordBeat server task failed during CLI shutdown"
+        )
 
 
 class TestAdapterRunnerKeyboardInterrupt:

@@ -9,6 +9,8 @@ usage: |
   Execute a shell command directly.
   Use this skill when system operations are required.
   Disabled by default and must be explicitly enabled by the user.
+  If a command times out, CordBeat kills the spawned shell process; commands
+  that create detached child process groups may require manual cleanup.
 
 parameters:
   - name: command

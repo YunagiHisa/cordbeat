@@ -9,7 +9,9 @@ from __future__ import annotations
 import builtins
 import json
 from collections import deque
+from pathlib import Path
 from time import monotonic
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -157,6 +159,49 @@ class TestRVCBackend:
             assert not backend.is_loaded()
         finally:
             rvc_mod._TORCH_AVAILABLE = orig
+
+    def test_load_uses_weights_only_checkpoint(self, tmp_path: Path) -> None:
+        import cordbeat.rvc_backend as rvc_mod
+
+        model_file = tmp_path / "model.pth"
+        model_file.write_bytes(b"checkpoint")
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = False
+        mock_torch.device.return_value = SimpleNamespace(type="cpu")
+        mock_torch.load.return_value = {}
+
+        with (
+            patch.object(rvc_mod, "_TORCH_AVAILABLE", True),
+            patch.object(rvc_mod, "_torch", mock_torch, create=True),
+        ):
+            backend = rvc_mod.RVCBackend()
+            backend.load(str(model_file))
+
+        mock_torch.load.assert_called_once_with(
+            str(model_file), map_location="cpu", weights_only=True
+        )
+
+    def test_load_does_not_retry_unsafe_checkpoint_load(self, tmp_path: Path) -> None:
+        import cordbeat.rvc_backend as rvc_mod
+
+        model_file = tmp_path / "model.pth"
+        model_file.write_bytes(b"checkpoint")
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = False
+        mock_torch.device.return_value = SimpleNamespace(type="cpu")
+        mock_torch.load.side_effect = RuntimeError("unsafe pickle")
+
+        with (
+            patch.object(rvc_mod, "_TORCH_AVAILABLE", True),
+            patch.object(rvc_mod, "_torch", mock_torch, create=True),
+        ):
+            backend = rvc_mod.RVCBackend()
+            backend.load(str(model_file))
+
+        assert mock_torch.load.call_count == 1
+        mock_torch.load.assert_called_once_with(
+            str(model_file), map_location="cpu", weights_only=True
+        )
 
     def test_convert_passthrough_when_not_loaded(self) -> None:
         from cordbeat.rvc_backend import RVCBackend

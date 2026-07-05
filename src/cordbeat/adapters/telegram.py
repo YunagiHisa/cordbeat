@@ -29,13 +29,16 @@ _CORE_BOT_COMMANDS = (
     ("reject", "Reject a pending CordBeat proposal"),
     ("proposals", "List pending CordBeat proposals"),
     ("link", "Generate a cross-platform link token"),
-    ("link-confirm", "Confirm a cross-platform link token"),
+    ("link_confirm", "Confirm a cross-platform link token"),
     ("unlink", "Unlink a platform from your account"),
     ("name", "Update CordBeat's displayed character name"),
     ("quiet", "Set heartbeat quiet hours"),
     ("prefer", "Set preferred heartbeat platform"),
     ("draw", "Run Draw DSL and return an image"),
 )
+_TELEGRAM_TO_CORE_COMMANDS = {
+    "/link_confirm": "/link-confirm",
+}
 
 
 def _normalize_telegram_command_text(text: str) -> str:
@@ -43,6 +46,7 @@ def _normalize_telegram_command_text(text: str) -> str:
     if not parts:
         return ""
     command = parts[0].split("@", 1)[0]
+    command = _TELEGRAM_TO_CORE_COMMANDS.get(command, command)
     rest = parts[1] if len(parts) > 1 else ""
     return f"{command} {rest}".strip()
 

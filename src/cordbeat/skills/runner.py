@@ -327,7 +327,7 @@ def _apply_resource_limits(
     timeout_seconds: int,
     max_fsize_mb: int = 64,
 ) -> None:
-    """Apply resource rlimits (Unix only). Silently no-op on Windows."""
+    """Apply resource rlimits when the platform exposes ``resource``."""
     try:
         import resource  # noqa: PLC0415
     except ImportError:

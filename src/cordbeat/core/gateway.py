@@ -153,7 +153,11 @@ class RetryableConnection(ABC):
     async def _listen_core(self) -> None:
         try:
             async for raw in self._ws:
-                data = json.loads(raw)
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    logger.warning("Invalid JSON from Core: %r", raw)
+                    continue
                 msg_type = data.get("type", "")
                 content = data.get("content", "")
                 platform_user_id = data.get("platform_user_id", "")
@@ -398,5 +402,5 @@ class GatewayServer:
         except websockets.ConnectionClosed:
             logger.info("Adapter disconnected: %s", adapter_id)
         finally:
-            if adapter_id and adapter_id in self._connections:
+            if adapter_id and self._connections.get(adapter_id) is websocket:
                 del self._connections[adapter_id]

@@ -102,3 +102,19 @@ def test_oversized_dsl_is_truncated_not_rejected() -> None:
     # Capped near MAX_AUTO_LINES (plus inserted SIZE/CANVAS/OUTPUT scaffolding).
     body = [ln for ln in result.normalized_dsl.splitlines() if ln.startswith("CIRCLE")]
     assert len(body) == draw_dsl.MAX_AUTO_LINES
+
+
+def test_normalize_reports_unbalanced_repeat_blocks() -> None:
+    result = normalize(
+        "REPEAT 3\n"
+        "CIRCLE 100 100 20 red FILL\n"
+    )
+
+    assert "REPEAT without matching END" in result.validation_issues[0]
+
+
+def test_normalize_rejects_polygon_with_too_few_points() -> None:
+    result = normalize("POLYGON 10 10 20 20 red FILL")
+
+    assert result.normalized_dsl == ""
+    assert "POLYGON has missing arguments" in result.validation_issues[0]

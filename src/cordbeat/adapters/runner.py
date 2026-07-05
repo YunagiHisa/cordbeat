@@ -11,6 +11,9 @@ from typing import Any
 from cordbeat.config import AdapterConfig, cordbeat_home, load_config
 
 logger = logging.getLogger("cordbeat")
+_KNOWN_ADAPTERS = frozenset(
+    {"discord", "telegram", "slack", "line", "whatsapp", "signal"}
+)
 
 
 def _resolve_adapter_config_path() -> str:
@@ -27,6 +30,10 @@ def _resolve_adapter_config_path() -> str:
 
 
 async def _run_adapter(adapter_name: str, config_path: str) -> None:
+    if adapter_name not in _KNOWN_ADAPTERS:
+        logger.error("Unknown adapter: %s", adapter_name)
+        return
+
     config = load_config(config_path)
 
     logging.basicConfig(
@@ -114,13 +121,10 @@ async def _run_adapter(adapter_name: str, config_path: str) -> None:
         from .whatsapp import WhatsAppAdapter
 
         adapter = WhatsAppAdapter(adapter_cfg)
-    elif adapter_name == "signal":
+    else:
         from .signal import SignalAdapter
 
         adapter = SignalAdapter(adapter_cfg)
-    else:
-        logger.error("Unknown adapter: %s", adapter_name)
-        return
 
     logger.info("Starting %s adapter...", adapter_name)
 

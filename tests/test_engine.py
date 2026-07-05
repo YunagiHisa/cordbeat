@@ -3291,6 +3291,7 @@ class TestAutoDraw:
         )
         text, images = await eng._maybe_draw("Here [DRAW: a red circle]")
 
+        assert text.startswith("Here")
         assert "Drawing failed" in text
         assert images == []
         assert mock_ai.generate.await_count == 3

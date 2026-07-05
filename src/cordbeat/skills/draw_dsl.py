@@ -54,7 +54,10 @@ _COMMAND_SPECS: dict[str, _CommandSpec] = {
     ),
     "LINE": _CommandSpec("LINE <x1> <y1> <x2> <y2> <color> [width]", 6, True, True),
     "POLYGON": _CommandSpec(
-        "POLYGON <x1> <y1> <x2> <y2> ... <color> [FILL]", 6, True, True
+        "POLYGON <x1> <y1> <x2> <y2> <x3> <y3> ... <color> [FILL]",
+        8,
+        True,
+        True,
     ),
     "TEXT": _CommandSpec('TEXT <x> <y> "<text>" <color> [size]', 5, True, True),
     "STAR": _CommandSpec(
@@ -247,6 +250,7 @@ def normalize(raw_dsl: str) -> NormalizedDrawDSL:
     has_canvas = False
     has_content = False
     truncated = False
+    repeat_stack: list[int] = []
 
     for lineno, raw_line in enumerate(raw_dsl.splitlines(), start=1):
         line = raw_line.strip()
@@ -268,6 +272,15 @@ def normalize(raw_dsl: str) -> NormalizedDrawDSL:
                 _validation_issue(lineno, f"{opcode} has missing arguments", line)
             )
             continue
+        if opcode == "REPEAT":
+            repeat_stack.append(lineno)
+        elif opcode == "END":
+            if not repeat_stack:
+                validation_issues.append(
+                    _validation_issue(lineno, "has unmatched END", line)
+                )
+                continue
+            repeat_stack.pop()
         if opcode == "OUTPUT":
             continue
         if opcode == "SIZE":
@@ -290,6 +303,11 @@ def normalize(raw_dsl: str) -> NormalizedDrawDSL:
             # rejected three times and the user got no image at all.)
             truncated = True
             break
+
+    for repeat_lineno in repeat_stack:
+        validation_issues.append(
+            f"line {repeat_lineno} has REPEAT without matching END"
+        )
 
     if not has_content:
         return NormalizedDrawDSL("", tuple(validation_issues), truncated)

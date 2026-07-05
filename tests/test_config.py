@@ -421,6 +421,23 @@ class TestValidateConfig:
             validate_config(cfg)
         assert "gateway.max_message_bytes" in str(excinfo.value)
 
+    def test_rejects_public_gateway_without_auth_token(self) -> None:
+        cfg = Config()
+        cfg.gateway.host = "0.0.0.0"
+        cfg.gateway.auth_token = ""
+
+        with pytest.raises(ConfigValidationError) as excinfo:
+            validate_config(cfg)
+
+        assert "gateway.auth_token" in str(excinfo.value)
+
+    def test_accepts_public_gateway_with_auth_token(self) -> None:
+        cfg = Config()
+        cfg.gateway.host = "0.0.0.0"
+        cfg.gateway.auth_token = "s3cret"
+
+        validate_config(cfg)
+
     def test_rejects_invalid_heartbeat_proactive_limits(self) -> None:
         cfg = Config()
         cfg.heartbeat.proactive_user_cooldown_minutes = -1

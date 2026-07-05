@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1010,17 +1011,20 @@ class TestTelegramAdapter:
     def test_core_bot_commands_cover_core_commands(self) -> None:
         from cordbeat.adapters.telegram import _CORE_BOT_COMMANDS
 
-        assert {name for name, _ in _CORE_BOT_COMMANDS} == {
+        command_names = {name for name, _ in _CORE_BOT_COMMANDS}
+        assert command_names == {
             "approve",
             "reject",
             "proposals",
             "link",
+            "link_confirm",
             "unlink",
             "name",
             "quiet",
             "prefer",
             "draw",
         }
+        assert all(re.fullmatch(r"[a-z0-9_]{1,32}", name) for name in command_names)
 
     def test_normalize_telegram_command_strips_bot_suffix(self) -> None:
         from cordbeat.adapters.telegram import _normalize_telegram_command_text
@@ -1030,6 +1034,10 @@ class TestTelegramAdapter:
             == "/approve abc-123"
         )
         assert _normalize_telegram_command_text("/proposals") == "/proposals"
+        assert (
+            _normalize_telegram_command_text("/link_confirm@CordBeatBot abc-123")
+            == "/link-confirm abc-123"
+        )
 
     def test_init(self) -> None:
         from cordbeat.adapters.telegram import TelegramAdapter

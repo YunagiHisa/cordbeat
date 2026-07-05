@@ -165,7 +165,10 @@ process. The sandbox enforces multiple layers of defense:
 ### Layer 1: Static Validation (AST)
 
 Before execution, `skill_validator.py` parses the skill source as an AST and
-checks it against a strict whitelist:
+checks it against a strict whitelist. This is the first layer, not the complete
+sandbox: Python can hide sensitive attribute access behind strings or data
+flows, so the hard boundary is the isolated subprocess plus runtime network,
+filesystem, and SSRF guards.
 
 | Check | Detail |
 |-------|--------|
@@ -185,7 +188,7 @@ with the following restrictions:
 |-------|-----------|------|
 | **Network** | `socket.socket` is replaced — all socket creation raises `OSError` | Skills needing network declare `network: true` in `skill.yaml`, which exempts this guard |
 | **Filesystem** | `open()` is wrapped to restrict paths to the skill directory and a temporary work directory; symlink following is blocked via `O_NOFOLLOW` | OS-level path resolution prevents directory traversal |
-| **Resource limits** | `RLIMIT_AS` (memory), `RLIMIT_CPU` (time), `RLIMIT_NOFILE` (file descriptors), `RLIMIT_FSIZE` (file size) are set via `resource.setrlimit` | Linux only; Windows falls back to timeout-based termination |
+| **Resource limits** | `RLIMIT_AS` (memory), `RLIMIT_CPU` (time), `RLIMIT_NOFILE` (file descriptors), `RLIMIT_FSIZE` (file size) are set via `resource.setrlimit` | Unix platforms with `resource`; Windows does not enforce these limits and falls back to timeout/output limits |
 | **sys.path** | Restricted to stdlib + skill directory only | Prevents importing arbitrary packages |
 | **Environment** | `os.environ` is sanitized — only `PATH`, `HOME`, `LANG`, `TZ`, `PYTHONPATH` are preserved | Secrets and tokens are not leaked to skills |
 | **Timeout** | Configurable per-skill via `SandboxConfig`; default 30 seconds | Process tree is killed on timeout via `psutil` |

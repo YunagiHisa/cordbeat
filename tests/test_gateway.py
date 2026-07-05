@@ -264,6 +264,30 @@ class TestGatewayServer:
         ack = json.loads(mock_ws.send.call_args_list[0][0][0])
         assert ack["type"] == "ack"
 
+    async def test_handle_connection_does_not_remove_newer_reconnect(self) -> None:
+        config = GatewayConfig()
+        queue = MessageQueue()
+        server = GatewayServer(config, queue)
+
+        old_ws = AsyncMock()
+        new_ws = AsyncMock()
+        old_ws.recv = AsyncMock(return_value=json.dumps({"adapter_id": "telegram"}))
+        old_ws.send = AsyncMock()
+
+        class _ReconnectIter:
+            def __aiter__(self) -> Any:
+                return self
+
+            async def __anext__(self) -> str:
+                server._connections["telegram"] = new_ws
+                raise StopAsyncIteration
+
+        old_ws.__aiter__ = lambda self: _ReconnectIter()
+
+        await server._handle_connection(old_ws)
+
+        assert server._connections["telegram"] is new_ws
+
     async def test_handle_connection_missing_adapter_id(self) -> None:
         config = GatewayConfig()
         queue = MessageQueue()
@@ -447,6 +471,35 @@ class TestRetryableConnection:
 
         await conn._listen_core()
         assert dispatched == [("u1", "hi")]
+
+    async def test_listen_core_skips_invalid_json(self) -> None:
+        conn = _ConcreteConnection()
+        dispatched: list[tuple[str, str]] = []
+
+        async def fake_dispatch(
+            uid: str,
+            content: str,
+            images: list[str],
+            *,
+            metadata: dict[str, Any] | None = None,
+        ) -> None:
+            dispatched.append((uid, content))
+
+        conn._dispatch_core_message = fake_dispatch  # type: ignore[assignment]
+        valid = json.dumps(
+            {
+                "type": "message",
+                "platform_user_id": "u1",
+                "content": "still connected",
+            }
+        )
+        mock_ws = AsyncMock()
+        mock_ws.__aiter__ = lambda self: _AsyncIter(["not valid json", valid])
+        conn._ws = mock_ws
+
+        await conn._listen_core()
+
+        assert dispatched == [("u1", "still connected")]
 
     async def test_listen_core_dispatches_ack_progress(self) -> None:
         """User-facing progress ACKs must reach platform adapters."""

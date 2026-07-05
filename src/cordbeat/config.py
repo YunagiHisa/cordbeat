@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,6 +11,17 @@ from typing import Any
 import yaml
 
 _ENV_PREFIX = "CORDBEAT_"
+_LOOPBACK_HOSTS = {"localhost"}
+
+
+def _is_loopback_host(host: str) -> bool:
+    normalized = host.strip().lower().strip("[]")
+    if normalized in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
 
 
 def cordbeat_home() -> Path:
@@ -540,6 +552,11 @@ def validate_config(cfg: Config) -> None:
         errors.append(
             "gateway.max_message_bytes must be at least 1048576 "
             "(1 MiB). Increase it for image attachments."
+        )
+    if not cfg.gateway.auth_token and not _is_loopback_host(cfg.gateway.host):
+        errors.append(
+            "gateway.auth_token is required when gateway.host is not a "
+            "loopback address"
         )
     if cfg.heartbeat.proactive_user_cooldown_minutes < 0:
         errors.append("heartbeat.proactive_user_cooldown_minutes must be >= 0")

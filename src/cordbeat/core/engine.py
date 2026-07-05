@@ -2310,8 +2310,9 @@ class CoreEngine:
     async def _maybe_draw(self, response: str) -> tuple[str, list[str]]:
         """Parse [DRAW: ...] tags from LLM response and execute the draw skill.
 
-        Returns (clean_text, images). Only the first tag is processed.
-        Falls back to (original_response, []) on any failure.
+        Returns (clean_text, images). Only the first tag is processed. If image
+        generation ultimately fails, the clean reply text is kept and a failure
+        note is appended.
         """
         draw_skill = self._skills.get("draw")
         if draw_skill is None or not getattr(
@@ -2413,6 +2414,8 @@ class CoreEngine:
             sanitize(retry_reason or "unknown failure", strict=True, max_len=500),
         )
         failure_note = "⚠️ Drawing failed, so I couldn't attach an image."
+        if clean_text:
+            return f"{clean_text}\n\n{failure_note}", []
         return failure_note, []
 
     async def _execute_auto_draw(

@@ -19,6 +19,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Gateway, Telegram, and auto-draw reliability fixes.** Telegram registers
+  `/link_confirm` while routing it to Core's `/link-confirm`, Gateway reconnects
+  no longer delete a newer connection, invalid Core JSON no longer resets
+  adapters, auto-draw failures preserve the text reply, public Gateway binds now
+  require auth, Draw DSL validates `REPEAT`/`END` balance and 3-point polygons,
+  and Windows skill resource-limit caveats are documented and logged.
 - **Draw DSL generation and interpreter consistency.** The generator now receives
   concrete composition/layering guidance, while common shapes consistently parse
   HSL colors and Turtle/gradient/shape validation matches the documented DSL.

@@ -46,7 +46,11 @@ Each user gets their own memory space. Long-term facts, preferences, and convers
 
 ### 🛠 SKILL — Pluggable Actions
 Discrete capabilities the agent can invoke: web search, file manipulation, API calls, and more.  
-Self-contained and easy to add or remove.
+Self-contained and easy to add or remove. Skills run in isolated subprocesses
+with runtime network/filesystem guards; Unix platforms also apply memory, CPU,
+file descriptor, and file-size rlimits. On Windows, those rlimits are not
+available, so the skill sandbox relies on subprocess timeout and output limits
+for resource control.
 
 ---
 

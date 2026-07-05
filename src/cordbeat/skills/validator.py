@@ -45,12 +45,14 @@ class SkillValidationError(SkillError, ValueError):
 
 
 # Modules a skill is allowed to import. Anything outside this set is
-# rejected. We intentionally omit:
+# rejected. We intentionally omit direct host-system access:
 #   - subprocess, os (except limited), sys, ctypes, multiprocessing,
 #     importlib, builtins — direct access to the host system.
-#   - socket, ssl — direct network (skills should go through `httpx`).
 #   - pickle, marshal — arbitrary code execution via deserialization.
 #   - shutil — broad filesystem manipulation.
+# socket and ssl are allowed for compatibility with httpx/httpcore and
+# network-capable stdlib helpers. Actual socket use is gated at runtime by the
+# subprocess sandbox and SSRF/network guards.
 ALLOWED_IMPORTS: frozenset[str] = frozenset(
     {
         # Future annotations (harmless, often auto-added)

@@ -38,6 +38,7 @@ class SandboxConfig:
 
 
 DEFAULT_CONFIG = SandboxConfig()
+_warned_windows_resource_limits = False
 
 
 async def _kill_tree(pid: int) -> None:
@@ -105,6 +106,13 @@ async def run_skill_in_subprocess(
     host interpreter (``sys.executable``) is used.
     """
     cfg = config or DEFAULT_CONFIG
+    global _warned_windows_resource_limits
+    if sys.platform == "win32" and not _warned_windows_resource_limits:
+        logger.warning(
+            "Skill memory/CPU/file resource limits are not enforced on Windows; "
+            "relying on subprocess timeout and output limits"
+        )
+        _warned_windows_resource_limits = True
 
     init_msg = {
         "type": "init",

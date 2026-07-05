@@ -11,6 +11,8 @@ import yaml
 
 from cordbeat.models import SafetyLevel
 
+from .validator import SkillValidationError, validate_skill_source
+
 SANDBOX_SHARED_WORK_DIR = "shared"
 SKILL_SETTINGS_FIELDS = {
     "ownership",
@@ -257,6 +259,30 @@ def update_skill_file(
             "requires_approval_to_modify": access.requires_approval_to_modify,
         }
     text = str(content or "")
+    if access.target_path.suffix == ".py":
+        yaml_path = access.skill_dir / "skill.yaml"
+        try:
+            raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+        except FileNotFoundError:
+            raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        safety = raw.get("safety") or {}
+        if not isinstance(safety, dict):
+            safety = {}
+        try:
+            validate_skill_source(
+                text,
+                access.skill_name,
+                allow_subprocess=safety.get("level") == SafetyLevel.DANGEROUS.value,
+            )
+        except SkillValidationError as exc:
+            return {
+                "error": "validation_failed",
+                "detail": str(exc),
+                "skill_name": access.skill_name,
+                "path": access.relative_path,
+            }
     access.target_path.parent.mkdir(parents=True, exist_ok=True)
     access.target_path.write_text(text, encoding="utf-8")
     return {

@@ -105,6 +105,15 @@ def test_jsonable_handles_nested_containers_and_fallback() -> None:
     assert out == {"1": ["OPAQUE"]}  # int key -> str, tuple -> list, repr fallback
 
 
+def test_jsonable_handles_cycles() -> None:
+    value: dict[str, Any] = {"name": "loop"}
+    value["self"] = value
+
+    out = _jsonable(value)
+
+    assert out == {"name": "loop", "self": "<cycle>"}
+
+
 # ----------------------- _handle_memory_call -------------------------
 
 

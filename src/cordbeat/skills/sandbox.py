@@ -291,16 +291,28 @@ async def _handle_memory_call(
     await _send({"type": "memory_result", "id": msg_id, "result": _jsonable(result)})
 
 
-def _jsonable(obj: Any) -> Any:
+def _jsonable(obj: Any, seen: set[int] | None = None) -> Any:
+    seen = seen or set()
     try:
         json.dumps(obj)
         return obj
     except (TypeError, ValueError):
         pass
-    if hasattr(obj, "__dict__"):
-        return {k: _jsonable(v) for k, v in vars(obj).items() if not k.startswith("_")}
-    if isinstance(obj, (list | tuple)):
-        return [_jsonable(x) for x in obj]
-    if isinstance(obj, dict):
-        return {str(k): _jsonable(v) for k, v in obj.items()}
-    return str(obj)
+    obj_id = id(obj)
+    if obj_id in seen:
+        return "<cycle>"
+    seen.add(obj_id)
+    try:
+        if hasattr(obj, "__dict__"):
+            return {
+                k: _jsonable(v, seen)
+                for k, v in vars(obj).items()
+                if not k.startswith("_")
+            }
+        if isinstance(obj, (list | tuple)):
+            return [_jsonable(x, seen) for x in obj]
+        if isinstance(obj, dict):
+            return {str(k): _jsonable(v, seen) for k, v in obj.items()}
+        return str(obj)
+    finally:
+        seen.remove(obj_id)

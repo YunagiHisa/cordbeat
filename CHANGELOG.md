@@ -19,6 +19,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Skill self-improvement hardening.** AI-generated skill metadata is now
+  serialized with `yaml.safe_dump`, proposed parameters are schema-validated,
+  skill metadata names must match their directory names, duplicate skill loads
+  no longer replace the first loaded skill, and Python skill-file updates are
+  validated before writing so failed self-repairs do not remove installed skills.
 - **Gateway, Telegram, and auto-draw reliability fixes.** Telegram registers
   `/link_confirm` while routing it to Core's `/link-confirm`, Gateway reconnects
   no longer delete a newer connection, invalid Core JSON no longer resets

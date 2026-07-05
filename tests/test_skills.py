@@ -18,11 +18,12 @@ from cordbeat.main import (
     _sync_builtin_skills,
     _sync_managed_builtin_skill,
 )
-from cordbeat.models import SafetyLevel
-from cordbeat.skills import SandboxConfig, SkillPermissionError, SkillRegistry
+from cordbeat.models import SafetyLevel, SkillMeta, SkillParam
+from cordbeat.skills import SandboxConfig, Skill, SkillPermissionError, SkillRegistry
 from cordbeat.skills.policy import (
     sandbox_overrides_for_skill,
     skill_requires_confirmation,
+    update_skill_file,
 )
 
 
@@ -385,6 +386,61 @@ class TestSkillRegistry:
         registry = SkillRegistry(skills_dir)
         registry.load_all()
         assert registry.get("nocheck") is not None
+
+    def test_rejects_skill_yaml_name_that_differs_from_directory(
+        self, tmp_path: Path
+    ) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "innocent")
+        yaml_path = skills_dir / "innocent" / "skill.yaml"
+        yaml_path.write_text(
+            yaml_path.read_text(encoding="utf-8").replace(
+                "name: innocent",
+                "name: file_read",
+            ),
+            encoding="utf-8",
+        )
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+
+        assert registry.get("innocent") is None
+        assert registry.get("file_read") is None
+
+    def test_duplicate_skill_load_does_not_replace_first(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "stable")
+        registry = SkillRegistry(skills_dir)
+
+        registry._load_skill(skills_dir / "stable")
+        first = registry.get("stable")
+        registry._load_skill(skills_dir / "stable")
+
+        assert registry.get("stable") is first
+
+    def test_update_skill_file_rejects_invalid_python_without_writing(
+        self, tmp_path: Path
+    ) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "repairable")
+        main_path = skills_dir / "repairable" / "main.py"
+        original = main_path.read_text(encoding="utf-8")
+
+        result = update_skill_file(
+            skills_dir,
+            skill_name="repairable",
+            path="main.py",
+            content="def execute(**kw)\n    return {'broken': True}\n",
+            approved=True,
+        )
+
+        assert result["error"] == "validation_failed"
+        assert "syntax error" in result["detail"]
+        assert main_path.read_text(encoding="utf-8") == original
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        assert registry.get("repairable") is not None
 
 
 class TestSkillSandbox:

@@ -276,6 +276,12 @@ class SkillRegistry:
         with yaml_path.open(encoding="utf-8") as f:
             raw: dict[str, Any] = yaml.safe_load(f) or {}
         raw = apply_default_skill_settings(raw)
+        raw_name = raw.get("name", skill_path.name)
+        if raw_name != skill_path.name:
+            raise ValueError(
+                f"Skill metadata name {raw_name!r} must match directory "
+                f"name {skill_path.name!r}"
+            )
 
         safety_raw = raw.get("safety", {})
         contexts_raw = raw.get("contexts", {})
@@ -301,7 +307,7 @@ class SkillRegistry:
                 rate_limit_per_minute = value
 
         meta = SkillMeta(
-            name=raw.get("name", skill_path.name),
+            name=skill_path.name,
             description=raw.get("description", ""),
             usage=raw.get("usage", ""),
             parameters=parameters,
@@ -342,6 +348,14 @@ class SkillRegistry:
             meta.name,
             allow_subprocess=meta.safety_level == SafetyLevel.DANGEROUS,
         )
+
+        if meta.name in self._skills:
+            logger.error(
+                "Duplicate skill name %r from %s ignored; keeping first loaded skill",
+                meta.name,
+                skill_path,
+            )
+            return
 
         self._skills[meta.name] = Skill(
             meta=meta,

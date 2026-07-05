@@ -40,6 +40,10 @@ _UPDATE_SKILL_FILE_TOOL_NAME = "update_skill_file"
 _DELETE_SKILL_FILE_TOOL_NAME = "delete_skill_file"
 _DELETE_SKILL_TOOL_NAME = "delete_skill"
 _UPDATE_SKILL_SETTINGS_TOOL_NAME = "update_skill_settings"
+_PROPOSED_SKILL_PARAM_NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,49}")
+_PROPOSED_SKILL_PARAM_TYPES = frozenset(
+    {"string", "number", "integer", "boolean"}
+)
 
 
 def _can_update_ai_skill(skills_dir: Path, name: str) -> bool:
@@ -90,6 +94,50 @@ def validate_proposed_skill(
     code = proposed.get("code", "")
     if not isinstance(code, str) or not code.strip():
         raise ValueError("Skill code is empty.")
+
+    description = proposed.get("description", "")
+    if description is not None and (
+        not isinstance(description, str) or len(description) > 500
+    ):
+        raise ValueError("Skill description must be a string up to 500 characters.")
+
+    usage = proposed.get("usage", "")
+    if usage is not None and (not isinstance(usage, str) or len(usage) > 2000):
+        raise ValueError("Skill usage must be a string up to 2000 characters.")
+
+    parameters = proposed.get("parameters", [])
+    if parameters is None:
+        parameters = []
+    if not isinstance(parameters, list):
+        raise ValueError("Skill parameters must be a list.")
+    for index, param in enumerate(parameters, start=1):
+        if not isinstance(param, dict):
+            raise ValueError(f"Skill parameter #{index} must be a mapping.")
+        param_name = param.get("name")
+        if (
+            not isinstance(param_name, str)
+            or not _PROPOSED_SKILL_PARAM_NAME_RE.fullmatch(param_name)
+        ):
+            raise ValueError(f"Invalid skill parameter name: {param_name!r}.")
+        param_type = param.get("type", "string")
+        if (
+            not isinstance(param_type, str)
+            or param_type not in _PROPOSED_SKILL_PARAM_TYPES
+        ):
+            raise ValueError(f"Invalid skill parameter type: {param_type!r}.")
+        required = param.get("required", True)
+        if not isinstance(required, bool):
+            raise ValueError(
+                f"Skill parameter {param_name!r} required must be boolean."
+            )
+        param_description = param.get("description", "")
+        if param_description is not None and (
+            not isinstance(param_description, str) or len(param_description) > 500
+        ):
+            raise ValueError(
+                f"Skill parameter {param_name!r} description must be a string "
+                "up to 500 characters."
+            )
 
     try:
         validate_skill_source(code, name)
@@ -455,53 +503,33 @@ class ProposalExecutor:
         skill_dir = self._skills.skills_dir / name
         code = proposed.get("code", "")
 
-        description = proposed.get("description", "AI-generated skill")
-        usage = proposed.get("usage", "")
-        parameters = proposed.get("parameters", [])
+        description = proposed.get("description") or "AI-generated skill"
+        usage = proposed.get("usage") or ""
+        parameters = proposed.get("parameters") or []
 
-        safe_desc = description.replace("\\", "\\\\").replace('"', '\\"')
-        safe_usage = usage.replace("\r\n", "\n").replace("\r", "\n")
-        safe_usage = safe_usage.replace("\n", "\n  ")
-        yaml_lines = [
-            f"name: {name}",
-            f'description: "{safe_desc}"',
-            'version: "1.0.0"',
-            f'author: "{_AI_GENERATED_AUTHOR}"',
-            "ownership: ai",
-            "mutable_by_ai: true",
-            "requires_approval_to_modify: false",
-            "",
-            f"usage: |\n  {safe_usage}",
-            "",
-        ]
-        if parameters:
-            yaml_lines.append("parameters:")
-        else:
-            yaml_lines.append("parameters: []")
-        for param in parameters:
-            yaml_lines.append(f"  - name: {param.get('name', 'arg')}")
-            yaml_lines.append(f"    type: {param.get('type', 'string')}")
-            yaml_lines.append(
-                f"    required: {str(param.get('required', True)).lower()}"
-            )
-            desc = param.get("description", "")
-            if desc:
-                safe = desc.replace("\\", "\\\\").replace('"', '\\"')
-                yaml_lines.append(f'    description: "{safe}"')
-        yaml_lines.extend(
-            [
-                "",
-                "contexts:",
-                "  shared_voice: false",
-                "",
-                "safety:",
-                "  level: safe",
-                "  sandbox: true",
-                "  network: false",
-                "  filesystem: false",
-            ]
+        yaml_data = {
+            "name": name,
+            "description": description,
+            "version": "1.0.0",
+            "author": _AI_GENERATED_AUTHOR,
+            "ownership": "ai",
+            "mutable_by_ai": True,
+            "requires_approval_to_modify": False,
+            "usage": usage,
+            "parameters": parameters,
+            "contexts": {"shared_voice": False},
+            "safety": {
+                "level": "safe",
+                "sandbox": True,
+                "network": False,
+                "filesystem": False,
+            },
+        }
+        yaml_content = yaml.safe_dump(
+            yaml_data,
+            sort_keys=False,
+            allow_unicode=True,
         )
-        yaml_content = "\n".join(yaml_lines) + "\n"
 
         code_header = (
             f'"""AI-generated skill: {name}."""\n\n'
@@ -642,6 +670,17 @@ class ProposalExecutor:
                 content=skill_params.get("content"),
                 approved=True,
             )
+            if result.get("error"):
+                detail = str(result.get("detail") or result["error"])
+                await self._memory.update_proposal_status(
+                    proposal_id, ProposalStatus.EXPIRED
+                )
+                await self._notify_result(
+                    proposal,
+                    "❌ Skill file update failed"
+                    f" ({result['error']}) — {detail[:500]}",
+                )
+                return
             self._skills.load_all()
             await self._memory.update_proposal_status(
                 proposal_id, ProposalStatus.EXECUTED

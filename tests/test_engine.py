@@ -4569,6 +4569,54 @@ class TestReActLoop:
         sent = [c[0][1] for c in mock_gateway.send_to_adapter.call_args_list]
         assert all(m.type != MessageType.SKILL_CONFIRM for m in sent)
 
+    async def test_update_skill_file_virtual_tool_rejects_invalid_python(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """Invalid repair source is surfaced as an error and not written."""
+
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return (
+                "[SKILL: update_skill_file | skill_name=repairable | "
+                "path=main.py | "
+                "content=def execute(**kw)\\n    return {'version': 2}]"
+            )
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(return_value="Could not apply it.")
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        skill_dir = self._write_skill(eng._skills.skills_dir, "repairable")
+        eng._skills.load_all()
+        original = (skill_dir / "main.py").read_text(encoding="utf-8")
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Repair skill badly",
+            )
+        )
+
+        assert (skill_dir / "main.py").read_text(encoding="utf-8") == original
+        assert eng._skills.get("repairable") is not None
+        tool_result = mock_ai.generate_chat.await_args.args[0][-2]["content"]
+        assert "validation_failed" in tool_result
+
     async def test_update_locked_skill_file_virtual_tool_requests_confirmation(
         self,
         mock_ai: AsyncMock,

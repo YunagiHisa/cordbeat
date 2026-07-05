@@ -1769,7 +1769,8 @@ class CoreEngine:
                         path=params.get("path"),
                         content=params.get("content"),
                     )
-                    self._skills.load_all()
+                    if not result.get("error"):
+                        self._skills.load_all()
                     output, is_error = _serialize_skill_result(result)
                     results.append(
                         ToolCallResult(

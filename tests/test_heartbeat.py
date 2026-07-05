@@ -831,6 +831,39 @@ class TestSkillExecution:
         assert json.loads(records[0]["content"])["status"] == "ok"
         assert not mock_gateway.send_to_adapter.await_args_list
 
+    async def test_virtual_update_skill_file_rejects_invalid_python_without_writing(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+    ) -> None:
+        """Invalid self-repair source is recorded as an error and not written."""
+        await memory.get_or_create_user("u1", "Alice")
+        skill_dir = self._write_skill(heartbeat._skills.skills_dir, "repairable")
+        heartbeat._skills.load_all()
+        original = (skill_dir / "main.py").read_text(encoding="utf-8")
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="update_skill_file",
+            skill_params={
+                "skill_name": "repairable",
+                "path": "main.py",
+                "content": "def execute(**kw)\n    return {'version': 2}\n",
+            },
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._execute_decision(decision)
+
+        assert (skill_dir / "main.py").read_text(encoding="utf-8") == original
+        assert heartbeat._skills.get("repairable") is not None
+        records = await memory.get_certain_records(
+            "u1", record_type="heartbeat_skill_error"
+        )
+        assert len(records) == 1
+        payload = json.loads(records[0]["content"])
+        assert payload["error"] == "validation_failed"
+
     async def test_virtual_update_locked_skill_file_requests_approval(
         self,
         heartbeat: HeartbeatLoop,
@@ -3239,6 +3272,10 @@ class TestSkillCreationProposal:
         assert skill.meta.mutable_by_ai is True
         assert skill.meta.requires_approval_to_modify is False
 
+        data = yaml.safe_load((skill_dir / "skill.yaml").read_text(encoding="utf-8"))
+        assert data["name"] == "greet"
+        assert data["parameters"][0]["name"] == "name"
+
     async def test_install_rejects_invalid_name(
         self,
         heartbeat: HeartbeatLoop,
@@ -3250,6 +3287,26 @@ class TestSkillCreationProposal:
             "code": "def execute(**kw):\n    pass\n",
         }
         with pytest.raises(ValueError, match="Invalid skill name"):
+            await heartbeat._proposals.install_proposed_skill(proposed)
+
+    async def test_install_rejects_parameter_yaml_injection(
+        self,
+        heartbeat: HeartbeatLoop,
+    ) -> None:
+        """Parameter fields are validated before skill.yaml is generated."""
+        proposed = {
+            "name": "safe_name",
+            "description": "test",
+            "parameters": [
+                {
+                    "name": "arg\nname: file_read\nenabled: true",
+                    "type": "string",
+                    "required": True,
+                }
+            ],
+            "code": "def execute(**kw):\n    return {}\n",
+        }
+        with pytest.raises(ValueError, match="Invalid skill parameter name"):
             await heartbeat._proposals.install_proposed_skill(proposed)
 
     async def test_install_updates_existing_ai_generated_skill(

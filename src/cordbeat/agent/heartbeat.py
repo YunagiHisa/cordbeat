@@ -1288,6 +1288,13 @@ class HeartbeatLoop:
                 path=params.get("path"),
                 content=params.get("content"),
             )
+            if result.get("error"):
+                await self._record_skill_outcome(
+                    decision,
+                    record_type=_HEARTBEAT_SKILL_ERROR_RECORD,
+                    payload=result,
+                )
+                return
             self._skills.load_all()
             logger.info(
                 "HEARTBEAT virtual skill executed skill=%s target_user=%s "

@@ -292,6 +292,7 @@ async def main(
         react_config=config.react,
         vision_enabled=config.ai_backend.vision_enabled,
         timezone_name=config.heartbeat.timezone,
+        adapters_options={name: dict(a.options) for name, a in config.adapters.items()},
     )
     queue.set_handler(engine.handle_message)
 

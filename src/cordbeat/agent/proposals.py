@@ -213,11 +213,65 @@ class ProposalExecutor:
         skills: SkillRegistry,
         gateway: GatewayServer,
         soul: Soul,
+        adapters_options: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self._memory = memory
         self._skills = skills
         self._gateway = gateway
         self._soul = soul
+        self._adapters_options = adapters_options or {}
+
+    async def _notification_metadata(
+        self,
+        user_id: str,
+        adapter_id: str,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        opts = self._adapters_options.get(adapter_id, {})
+        if str(opts.get("dm_policy", "reply_only")).lower() == "never":
+            logger.info(
+                "Proposal notification skipped (dm_policy=never) user=%s adapter=%s",
+                user_id,
+                adapter_id,
+            )
+            return None
+        metadata: dict[str, Any] = dict(extra or {})
+        last_seen = await self._memory.get_last_seen_channel(user_id, adapter_id)
+        if last_seen is not None:
+            channel_id, is_dm = last_seen
+            metadata["channel_id"] = channel_id
+            metadata["is_dm"] = is_dm
+            metadata["allow_dm_fallback"] = False
+        else:
+            metadata["allow_dm_fallback"] = True
+        return metadata
+
+    async def _send_notification(
+        self,
+        *,
+        user_id: str,
+        adapter_id: str,
+        platform_user_id: str,
+        content: str,
+        message_type: MessageType = MessageType.HEARTBEAT_MESSAGE,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        routed_metadata = await self._notification_metadata(
+            user_id,
+            adapter_id,
+            metadata,
+        )
+        if routed_metadata is None:
+            return False
+        notification = GatewayMessage(
+            type=message_type,
+            adapter_id=adapter_id,
+            platform_user_id=platform_user_id,
+            content=content,
+            metadata=routed_metadata,
+        )
+        await self._gateway.send_to_adapter(adapter_id, notification)
+        return True
 
     async def store_and_notify(
         self,
@@ -250,8 +304,8 @@ class ProposalExecutor:
             )
             if platform_user_id:
                 soul_snap = self._soul.get_soul_snapshot()
-                notification = GatewayMessage(
-                    type=MessageType.HEARTBEAT_MESSAGE,
+                sent = await self._send_notification(
+                    user_id=user_id,
                     adapter_id=adapter_id,
                     platform_user_id=platform_user_id,
                     content=(
@@ -259,12 +313,12 @@ class ProposalExecutor:
                         f"\n\n(proposal ID: {proposal_id})"
                     ),
                 )
-                await self._gateway.send_to_adapter(adapter_id, notification)
-                logger.info(
-                    "Proposal notification sent to %s via %s",
-                    user_id,
-                    adapter_id,
-                )
+                if sent:
+                    logger.info(
+                        "Proposal notification sent to %s via %s",
+                        user_id,
+                        adapter_id,
+                    )
         return proposal_id
 
     async def store_skill_proposal(
@@ -324,10 +378,11 @@ class ProposalExecutor:
             )
             if platform_user_id:
                 soul_snap = self._soul.get_soul_snapshot()
-                notification = GatewayMessage(
-                    type=MessageType.SKILL_CONFIRM,
+                await self._send_notification(
+                    user_id=user_id,
                     adapter_id=adapter_id,
                     platform_user_id=platform_user_id,
+                    message_type=MessageType.SKILL_CONFIRM,
                     content=(
                         f"🔧 {soul_snap['name']} wants to run "
                         f"skill '{skill_name}'.\n"
@@ -340,7 +395,6 @@ class ProposalExecutor:
                         "skill_params": decision.skill_params,
                     },
                 )
-                await self._gateway.send_to_adapter(adapter_id, notification)
 
         return proposal_id
 
@@ -392,8 +446,8 @@ class ProposalExecutor:
             if platform_user_id:
                 soul_snap = self._soul.get_soul_snapshot()
                 traits_display = ", ".join(preview["preview"])
-                notification = GatewayMessage(
-                    type=MessageType.HEARTBEAT_MESSAGE,
+                await self._send_notification(
+                    user_id=user_id,
                     adapter_id=adapter_id,
                     platform_user_id=platform_user_id,
                     content=(
@@ -404,7 +458,6 @@ class ProposalExecutor:
                         f"(proposal ID: {proposal_id})"
                     ),
                 )
-                await self._gateway.send_to_adapter(adapter_id, notification)
 
         return proposal_id
 
@@ -476,8 +529,8 @@ class ProposalExecutor:
                 params_desc = ", ".join(
                     p.get("name", "?") for p in proposed.get("parameters", [])
                 )
-                notification = GatewayMessage(
-                    type=MessageType.HEARTBEAT_MESSAGE,
+                await self._send_notification(
+                    user_id=user_id,
                     adapter_id=adapter_id,
                     platform_user_id=platform_user_id,
                     content=(
@@ -488,7 +541,6 @@ class ProposalExecutor:
                         f"(proposal ID: {proposal_id})"
                     ),
                 )
-                await self._gateway.send_to_adapter(adapter_id, notification)
 
         return proposal_id
 
@@ -563,6 +615,16 @@ class ProposalExecutor:
             proposal_type = meta.get("proposal_type", ProposalType.GENERAL)
             current_id = proposal["id"]
             if proposal_id is not None and current_id != proposal_id:
+                continue
+            try:
+                claimed = await self._memory.update_proposal_status(
+                    current_id,
+                    ProposalStatus.EXECUTING,
+                )
+            except ValueError:
+                logger.info("Proposal %s was already claimed or completed", current_id)
+                continue
+            if not claimed:
                 continue
 
             if proposal_type == ProposalType.SKILL_EXECUTION:
@@ -905,10 +967,9 @@ class ProposalExecutor:
                 "has now completed."
             )
 
-        notification = GatewayMessage(
-            type=MessageType.HEARTBEAT_MESSAGE,
+        await self._send_notification(
+            user_id=user_id,
             adapter_id=adapter_id,
             platform_user_id=platform_user_id,
             content=message,
         )
-        await self._gateway.send_to_adapter(adapter_id, notification)

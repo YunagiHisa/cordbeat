@@ -268,12 +268,14 @@ class HeartbeatLoop:
             skills=skills,
             gateway=gateway,
             soul=soul,
+            adapters_options=self._adapters_options,
         )
         self._sleep = SleepPhase(
             memory=memory,
             ai=ai,
             soul=soul,
             memory_config=self._memory_config,
+            timezone=config.timezone,
         )
 
     async def start(self) -> None:
@@ -1031,11 +1033,19 @@ class HeartbeatLoop:
             # and backfill the link so future heartbeats resolve cleanly.
             platform_user_id = decision.target_user_id
             try:
-                await self._memory.link_platform(
+                inserted = await self._memory.link_platform_if_absent(
                     decision.target_user_id,
                     decision.target_adapter_id,
                     platform_user_id,
                 )
+                if not inserted:
+                    logger.warning(
+                        "Cannot backfill platform_link for user=%s adapter=%s: "
+                        "platform identity is already linked",
+                        decision.target_user_id,
+                        decision.target_adapter_id,
+                    )
+                    return
                 logger.info(
                     "Backfilled platform_link for legacy user=%s adapter=%s",
                     decision.target_user_id,

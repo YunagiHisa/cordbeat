@@ -117,6 +117,7 @@ class ProposalType(StrEnum):
 class ProposalStatus(StrEnum):
     PENDING = "pending"
     APPROVED = "approved"
+    EXECUTING = "executing"
     REJECTED = "rejected"
     EXECUTED = "executed"
     EXPIRED = "expired"

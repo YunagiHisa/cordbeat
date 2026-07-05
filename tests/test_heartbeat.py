@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
@@ -2359,6 +2360,50 @@ class TestApprovedProposalExecution:
         meta = json.loads(proposal["metadata"])
         assert meta["status"] == ProposalStatus.EXECUTED
 
+    async def test_execute_approved_claims_before_running_skill(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+    ) -> None:
+        async def execute_once(**_kwargs: object) -> dict[str, bool]:
+            await asyncio.sleep(0.01)
+            return {"ok": True}
+
+        execute_fn = AsyncMock(side_effect=execute_once)
+        skill = Skill(
+            meta=SkillMeta(
+                name="dangerous_once",
+                description="Test",
+                usage="test",
+                safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
+            ),
+            _test_callable=execute_fn,
+        )
+        skills._skills["dangerous_once"] = skill
+
+        proposal_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Run dangerous_once",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "dangerous_once",
+                "skill_params": {},
+            },
+        )
+
+        await asyncio.gather(
+            heartbeat._proposals.execute_approved(proposal_id=proposal_id),
+            heartbeat._proposals.execute_approved(proposal_id=proposal_id),
+        )
+
+        execute_fn.assert_awaited_once()
+        proposal = await memory.get_proposal(proposal_id)
+        assert proposal is not None
+        assert json.loads(proposal["metadata"])["status"] == ProposalStatus.EXECUTED
+
     async def test_approved_sandbox_local_file_skill_uses_sandbox_override(
         self,
         heartbeat: HeartbeatLoop,
@@ -3848,6 +3893,49 @@ class TestSendHeartbeatMessageDmPolicy:
         loop = heartbeat_factory("never")
         await loop._send_heartbeat_message(await self._decision())
         mock_gateway.send_to_adapter.assert_not_awaited()
+
+    async def test_proposal_notification_respects_dm_policy_never(
+        self,
+        heartbeat_factory: Any,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.link_platform("uid-policy", "discord", "snowflake-x")
+        loop = heartbeat_factory("never")
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_params={},
+            target_user_id="uid-policy",
+            target_adapter_id="discord",
+        )
+
+        await loop._proposals.store_skill_proposal(decision, "dangerous_skill")
+
+        mock_gateway.send_to_adapter.assert_not_awaited()
+
+    async def test_proposal_notification_uses_last_seen_channel_metadata(
+        self,
+        heartbeat_factory: Any,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.link_platform("uid-policy", "discord", "snowflake-x")
+        await memory.record_last_seen_channel("uid-policy", "discord", "555", False)
+        loop = heartbeat_factory("allow_proactive")
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_params={"path": "notes.md"},
+            target_user_id="uid-policy",
+            target_adapter_id="discord",
+        )
+
+        await loop._proposals.store_skill_proposal(decision, "file_read")
+
+        mock_gateway.send_to_adapter.assert_awaited_once()
+        _, sent = mock_gateway.send_to_adapter.await_args.args
+        assert sent.metadata["channel_id"] == "555"
+        assert sent.metadata["is_dm"] is False
+        assert sent.metadata["allow_dm_fallback"] is False
 
     async def test_reply_only_without_last_seen_skips(
         self,

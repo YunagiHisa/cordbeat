@@ -2374,6 +2374,27 @@ class TestLinkCommands:
         assert len(records) >= 1
         assert records[-1]["content"] == "Token issued on discord"
 
+    async def test_link_command_does_not_expose_token_in_public_channel(
+        self,
+        engine: CoreEngine,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="user1",
+            content="/link",
+            metadata={"is_dm": False, "channel_id": "public"},
+        )
+
+        await engine.handle_message(msg)
+
+        public_reply = mock_gateway.send_to_adapter.call_args_list[0].args[1]
+        dm_reply = mock_gateway.send_to_adapter.call_args_list[1].args[1]
+        assert "Link token generated:" not in public_reply.content
+        assert "Link token generated:" in dm_reply.content
+        assert dm_reply.metadata["allow_dm_fallback"] is True
+
     async def test_link_confirm_command_links_requester_to_confirmer(
         self,
         engine: CoreEngine,
@@ -2405,6 +2426,35 @@ class TestLinkCommands:
         assert await memory.resolve_user("cli", "cli_user") == "u1"
         reply = mock_gateway.send_to_adapter.call_args[0][1]
         assert "account linked" in reply.content.lower()
+
+    async def test_link_confirm_rejects_repointing_existing_platform(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.get_or_create_user("requester", "Requester")
+        await memory.link_platform("requester", "discord", "discord_x")
+        await memory.get_or_create_user("confirmer", "Confirmer")
+        await memory.link_platform("confirmer", "telegram", "tg_y")
+        token = await memory.store_link_token("discord", "discord_x")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="telegram",
+            platform_user_id="tg_y",
+            content=f"/link-confirm {token}",
+        )
+        await engine.handle_message(msg)
+
+        assert await memory.resolve_user("discord", "discord_x") == "requester"
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "already linked" in reply.content.lower()
+        records = await memory.get_certain_records(
+            "confirmer", record_type="link_audit"
+        )
+        assert records
+        assert "Rejected repoint" in records[-1]["content"]
 
     async def test_link_confirm_command_without_token_shows_usage(
         self,
@@ -2622,10 +2672,14 @@ class TestSoulCommands:
     async def test_name_command_updates_name(
         self,
         engine: CoreEngine,
+        memory: MemoryStore,
         soul: Soul,
         mock_gateway: AsyncMock,
     ) -> None:
         """/name <new> updates the SOUL name."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        await memory.link_platform("u1", "cli", "cli_user")
         msg = GatewayMessage(
             type=MessageType.MESSAGE,
             adapter_id="test",
@@ -2637,6 +2691,28 @@ class TestSoulCommands:
         assert soul.name == "Athena"
         reply = mock_gateway.send_to_adapter.call_args[0][1]
         assert "athena" in reply.content.lower()
+
+    async def test_name_command_rejects_non_admin(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        soul: Soul,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/name Athena",
+        )
+        await engine.handle_message(msg)
+
+        assert soul.name != "Athena"
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "administrators" in reply.content.lower()
 
     async def test_quiet_command_shows_current(
         self,
@@ -2658,10 +2734,14 @@ class TestSoulCommands:
     async def test_quiet_command_updates_hours(
         self,
         engine: CoreEngine,
+        memory: MemoryStore,
         soul: Soul,
         mock_gateway: AsyncMock,
     ) -> None:
         """/quiet <start> <end> updates quiet hours."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        await memory.link_platform("u1", "cli", "cli_user")
         msg = GatewayMessage(
             type=MessageType.MESSAGE,
             adapter_id="test",
@@ -2673,6 +2753,28 @@ class TestSoulCommands:
         assert soul.quiet_hours == ("23:00", "08:00")
         reply = mock_gateway.send_to_adapter.call_args[0][1]
         assert "23:00" in reply.content
+
+    async def test_quiet_command_rejects_non_admin(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        soul: Soul,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/quiet 23:00 08:00",
+        )
+        await engine.handle_message(msg)
+
+        assert soul.quiet_hours != ("23:00", "08:00")
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "administrators" in reply.content.lower()
 
     async def test_quiet_command_invalid_format(
         self,

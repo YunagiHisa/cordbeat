@@ -425,6 +425,32 @@ class TestResolvePlatformUser:
         result = await memory.resolve_platform_user("u1", "telegram")
         assert result is None
 
+    async def test_link_platform_rejects_repoint_by_default(
+        self, memory: MemoryStore
+    ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.get_or_create_user("u2", "Bob")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        with pytest.raises(MemorySubsystemError):
+            await memory.link_platform("u2", "discord", "discord_123")
+
+        assert await memory.resolve_user("discord", "discord_123") == "u1"
+
+    async def test_link_platform_if_absent_does_not_repoint(
+        self, memory: MemoryStore
+    ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.get_or_create_user("u2", "Bob")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        inserted = await memory.link_platform_if_absent(
+            "u2", "discord", "discord_123"
+        )
+
+        assert inserted is False
+        assert await memory.resolve_user("discord", "discord_123") == "u1"
+
 
 class TestProposalOperations:
     async def test_get_proposal_by_id(self, memory: MemoryStore) -> None:

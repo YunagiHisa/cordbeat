@@ -98,7 +98,8 @@ class RecordStore:
     # Valid proposal status transitions
     _VALID_TRANSITIONS: dict[str, set[str]] = {
         "pending": {"approved", "rejected", "expired"},
-        "approved": {"executed", "expired"},
+        "approved": {"executing", "executed", "expired"},
+        "executing": {"executed", "expired"},
     }
 
     async def update_proposal_status(

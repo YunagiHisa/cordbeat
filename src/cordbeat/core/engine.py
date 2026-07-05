@@ -832,6 +832,7 @@ class CoreEngine:
         react_config: ReActConfig | None = None,
         vision_enabled: bool = False,
         timezone_name: str = "UTC",
+        adapters_options: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self._ai = ai
         self._soul = soul
@@ -842,6 +843,7 @@ class CoreEngine:
         self._react_config = react_config or ReActConfig()
         self._vision_enabled = vision_enabled
         self._timezone_name = timezone_name
+        self._adapters_options = adapters_options or {}
         self._extractor = MemoryExtractor(ai, soul, memory, self._memory_config)
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._post_process_lock = asyncio.Lock()
@@ -2575,18 +2577,7 @@ class CoreEngine:
             requester_adapter_id=message.adapter_id,
             requester_platform_user_id=message.platform_user_id,
         )
-        reply = GatewayMessage(
-            type=MessageType.ACK,
-            adapter_id=message.adapter_id,
-            platform_user_id=message.platform_user_id,
-            content=(
-                f"Link token generated: {token}\n"
-                "Send this token from your other platform "
-                "using the link confirm command."
-            ),
-            metadata=self._reply_metadata(message),
-        )
-        await self._gateway.send_to_adapter(message.adapter_id, reply)
+        await self._send_link_token(message, token)
         logger.info(
             "Link token issued for %s on %s",
             message.platform_user_id,
@@ -2630,6 +2621,25 @@ class CoreEngine:
         # Link the requester's platform to the confirmer's user
         requester_adapter_id = result["requester_adapter_id"]
         requester_platform_user_id = result["requester_platform_user_id"]
+        existing_user_id = await self._memory.resolve_user(
+            requester_adapter_id,
+            requester_platform_user_id,
+        )
+        if existing_user_id is not None and existing_user_id != confirmer_user_id:
+            await self._send_reply(
+                message,
+                "This platform identity is already linked to another account. "
+                "Linking was rejected for safety.",
+            )
+            await self._audit_link_event(
+                message,
+                "link_confirm_rejected",
+                f"Rejected repoint of {requester_adapter_id}/"
+                f"{requester_platform_user_id} from user {existing_user_id} "
+                f"to user {confirmer_user_id}",
+            )
+            return
+
         await self._memory.link_platform(
             confirmer_user_id,
             requester_adapter_id,
@@ -2765,7 +2775,13 @@ class CoreEngine:
             )
             return
 
-        await self._memory.update_proposal_status(proposal_id, ProposalStatus.APPROVED)
+        try:
+            await self._memory.update_proposal_status(
+                proposal_id, ProposalStatus.APPROVED
+            )
+        except ValueError:
+            await self._send_reply(message, "This proposal has already been handled.")
+            return
         await self._send_reply(
             message,
             f"✅ Proposal approved: {proposal['content'][:80]}",
@@ -2776,6 +2792,7 @@ class CoreEngine:
             self._skills,
             self._gateway,
             self._soul,
+            adapters_options=self._adapters_options,
         )
         await executor.execute_approved(proposal_id=proposal_id)
 
@@ -2817,7 +2834,13 @@ class CoreEngine:
             )
             return
 
-        await self._memory.update_proposal_status(proposal_id, ProposalStatus.REJECTED)
+        try:
+            await self._memory.update_proposal_status(
+                proposal_id, ProposalStatus.REJECTED
+            )
+        except ValueError:
+            await self._send_reply(message, "This proposal has already been handled.")
+            return
         await self._send_reply(
             message,
             f"❌ Proposal rejected: {proposal['content'][:80]}",
@@ -2864,15 +2887,32 @@ class CoreEngine:
             requester_adapter_id=message.adapter_id,
             requester_platform_user_id=message.platform_user_id,
         )
-        await self._send_reply(
-            message,
-            f"Link token generated: {token}\n"
-            "Send this token from your other platform "
-            "using /link-confirm <token>.",
-        )
+        await self._send_link_token(message, token)
         await self._audit_link_event(
             message, "link_request", f"Token issued on {message.adapter_id}"
         )
+
+    async def _send_link_token(self, message: GatewayMessage, token: str) -> None:
+        content = (
+            f"Link token generated: {token}\n"
+            "Send this token from your other platform using /link-confirm <token>."
+        )
+        if message.metadata.get("is_dm") is False:
+            await self._send_reply(
+                message,
+                "Link token generated. For safety, I sent the token by DM.",
+            )
+            dm_message = GatewayMessage(
+                type=MessageType.ACK,
+                adapter_id=message.adapter_id,
+                platform_user_id=message.platform_user_id,
+                content=content,
+                metadata={"allow_dm_fallback": True, "is_dm": True},
+            )
+            await self._gateway.send_to_adapter(message.adapter_id, dm_message)
+            return
+
+        await self._send_reply(message, content)
 
     async def _cmd_link_confirm(self, message: GatewayMessage, token: str) -> None:
         """Confirm a cross-platform link token from a text command."""
@@ -2941,6 +2981,15 @@ class CoreEngine:
             )
             return
 
+        user_id = await self._resolve_command_user(message)
+        if user_id is None or not await self._is_admin_user(user_id, message):
+            await self._send_reply(
+                message,
+                "This operation is only available to administrators "
+                "(accounts linked to CLI).",
+            )
+            return
+
         self._soul.update_name(name, caller=SoulCaller.USER)
         await self._send_reply(message, f"✅ Name updated to: {name}")
         logger.info("SOUL name changed to '%s'", name)
@@ -2971,6 +3020,15 @@ class CoreEngine:
         ):
             await self._send_reply(
                 message, "Invalid time format. Use HH:MM (e.g. 01:00)."
+            )
+            return
+
+        user_id = await self._resolve_command_user(message)
+        if user_id is None or not await self._is_admin_user(user_id, message):
+            await self._send_reply(
+                message,
+                "This operation is only available to administrators "
+                "(accounts linked to CLI).",
             )
             return
 

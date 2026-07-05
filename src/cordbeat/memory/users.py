@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import aiosqlite
 
+from cordbeat.exceptions import MemorySubsystemError
 from cordbeat.models import UserSummary
 
 from .common import ensure_aware
@@ -110,7 +111,15 @@ class UserStore:
         user_id: str,
         adapter_id: str,
         platform_user_id: str,
+        *,
+        allow_repoint: bool = False,
     ) -> None:
+        existing = await self.resolve_user(adapter_id, platform_user_id)
+        if existing is not None and existing != user_id and not allow_repoint:
+            raise MemorySubsystemError(
+                f"Platform identity {adapter_id}/{platform_user_id} is already "
+                f"linked to another user."
+            )
         await self._db.execute(
             "INSERT OR REPLACE INTO platform_links "
             "(user_id, adapter_id, platform_user_id, linked_at) "
@@ -118,6 +127,21 @@ class UserStore:
             (user_id, adapter_id, platform_user_id, datetime.now(tz=UTC).isoformat()),
         )
         await self._db.commit()
+
+    async def link_platform_if_absent(
+        self,
+        user_id: str,
+        adapter_id: str,
+        platform_user_id: str,
+    ) -> bool:
+        cursor = await self._db.execute(
+            "INSERT OR IGNORE INTO platform_links "
+            "(user_id, adapter_id, platform_user_id, linked_at) "
+            "VALUES (?, ?, ?, ?)",
+            (user_id, adapter_id, platform_user_id, datetime.now(tz=UTC).isoformat()),
+        )
+        await self._db.commit()
+        return cursor.rowcount > 0
 
     async def unlink_platform(
         self,

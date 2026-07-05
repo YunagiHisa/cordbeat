@@ -141,8 +141,27 @@ class MemoryStore:
         user_id: str,
         adapter_id: str,
         platform_user_id: str,
+        *,
+        allow_repoint: bool = False,
     ) -> None:
-        await self._users.link_platform(user_id, adapter_id, platform_user_id)
+        await self._users.link_platform(
+            user_id,
+            adapter_id,
+            platform_user_id,
+            allow_repoint=allow_repoint,
+        )
+
+    async def link_platform_if_absent(
+        self,
+        user_id: str,
+        adapter_id: str,
+        platform_user_id: str,
+    ) -> bool:
+        return await self._users.link_platform_if_absent(
+            user_id,
+            adapter_id,
+            platform_user_id,
+        )
 
     async def resolve_user(
         self,

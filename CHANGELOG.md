@@ -19,6 +19,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Linking, proposals, and global-command hardening from source audit #5.**
+  Platform links no longer silently repoint to another user, public `/link`
+  replies no longer expose tokens, approved proposals are claimed before
+  execution, global `/name` and `/quiet` writes require admin linkage, and
+  proposal notifications respect adapter DM policy and last-seen channel
+  routing metadata.
 - **Memory, recall, heartbeat, and voice hardening from source audit #4.**
   Sleep consolidation now uses timezone-aware day windows instead of vector
   searching for `"today"`, duplicate memory merges reinforce from the current

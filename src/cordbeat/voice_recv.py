@@ -29,6 +29,7 @@ SAMPLE_RATE = 48000
 CHANNELS = 2
 SAMPLE_WIDTH = 2  # int16
 FRAME_SIZE = 960  # 20 ms @ 48 kHz
+DEFAULT_MAX_SPEECH_SEC = 60.0
 
 
 def _is_non_speech_noise(
@@ -224,6 +225,7 @@ class VoiceReceiver:
         noise_rms_threshold: float = 50.0,
         noise_active_ratio: float = 0.15,
         speech_queue_max: int = 5,
+        max_speech_sec: float = DEFAULT_MAX_SPEECH_SEC,
     ) -> None:
         self.vc = voice_client
         self._decoder = _OpusDecoder()
@@ -236,6 +238,12 @@ class VoiceReceiver:
         self._noise_rms_threshold = noise_rms_threshold
         self._noise_active_ratio = noise_active_ratio
         self._speech_queue_max = speech_queue_max
+        self._max_buffer_bytes = int(
+            max_speech_sec * SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH
+        )
+        self._detector_task: asyncio.Task[None] | None = None
+        self._speech_tasks: set[asyncio.Task[None]] = set()
+        self._force_flush: set[int] = set()
         # Diagnostics
         self._pkt_count = 0
         self._decode_ok = 0
@@ -274,7 +282,8 @@ class VoiceReceiver:
         sink = BasicSink(self._on_voice_data, decode=False)
         self.vc.listen(sink)
         logger.info("Voice receive started (BasicSink decode=False, manual Opus)")
-        asyncio.create_task(self._silence_detector())
+        self._detector_task = asyncio.create_task(self._silence_detector())
+        self._detector_task.add_done_callback(self._log_detector_failure)
 
     async def stop(self) -> None:
         """Stop receiving audio and clear buffers."""
@@ -283,8 +292,29 @@ class VoiceReceiver:
             self.vc.stop_listening()
         except Exception as exc:
             logger.debug("stop_listening skipped: %s", exc)
+        if self._detector_task is not None:
+            self._detector_task.cancel()
+            try:
+                await self._detector_task
+            except asyncio.CancelledError:
+                pass
+            self._detector_task = None
+        if self._speech_tasks:
+            tasks = list(self._speech_tasks)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self._speech_tasks.clear()
         self._buffers.clear()
         self._last_time.clear()
+        self._force_flush.clear()
+
+    def _log_detector_failure(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Voice silence detector crashed", exc_info=exc)
 
     # ── BasicSink callback ───────────────────────────────────────────────────
 
@@ -336,6 +366,19 @@ class VoiceReceiver:
 
         self._buffers[user.id].extend(pcm)
         self._last_time[user.id] = time.monotonic()
+        if (
+            len(self._buffers[user.id]) >= self._max_buffer_bytes
+            and user.id not in self._force_flush
+        ):
+            # This callback runs on the voice receive thread, where no event
+            # loop is running — only mark the user here and let
+            # _silence_detector finalise the utterance on the loop.
+            self._force_flush.add(user.id)
+            logger.warning(
+                "Voice buffer exceeded %.1f seconds for user=%d; forcing flush",
+                self._max_buffer_bytes / (SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH),
+                user.id,
+            )
 
     # ── DAVE encryption ──────────────────────────────────────────────────────
 
@@ -395,7 +438,6 @@ class VoiceReceiver:
         _stats_tick = 0
         while self._running:
             now = time.monotonic()
-            finished: list[tuple[int, bytes]] = []
 
             _stats_tick += 1
             if _stats_tick % 100 == 0 and self._pkt_count > 0:
@@ -410,48 +452,86 @@ class VoiceReceiver:
                 self._refresh_dave()
 
             for user_id in list(self._last_time):
-                last_t = self._last_time.get(user_id, now)
-                if now - last_t < self._silence_sec:
-                    continue
-                if user_id not in self._buffers:
-                    continue
-
-                pcm = bytes(self._buffers.pop(user_id, b""))
-                self._last_time.pop(user_id, None)
-
-                duration = len(pcm) / (SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH)
-                if duration < self._min_speech_sec:
-                    logger.debug("Skipping short utterance (%.1f s)", duration)
-                    continue
-
-                is_noise, rms, active_ratio = _is_non_speech_noise(
-                    pcm, self._noise_rms_threshold, self._noise_active_ratio
-                )
-                if is_noise:
-                    logger.debug(
-                        "Skipping non-speech noise: user=%d duration=%.1f s "
-                        "rms=%.1f active_ratio=%.2f",
-                        user_id,
-                        duration,
-                        rms,
-                        active_ratio,
-                    )
-                    continue
-
-                wav = _pcm_to_wav(pcm)
-                logger.info(
-                    "Speech end: user=%d duration=%.1f s wav=%d bytes",
-                    user_id,
-                    duration,
-                    len(wav),
-                )
-                finished.append((user_id, wav))
-
-            for user_id, wav_data in finished:
-                for cb in self._callbacks:
-                    try:
-                        await cb(user_id, wav_data)
-                    except Exception:
-                        logger.exception("Speech callback error for user %d", user_id)
+                try:
+                    last_t = self._last_time.get(user_id, now)
+                    if (
+                        user_id not in self._force_flush
+                        and now - last_t < self._silence_sec
+                    ):
+                        continue
+                    utterance = self._finish_user_buffer(user_id)
+                    if utterance is not None:
+                        self._queue_speech(*utterance)
+                except Exception:
+                    logger.exception("Speech detection error for user %d", user_id)
 
             await asyncio.sleep(0.1)
+
+    def _finish_user_buffer(self, user_id: int) -> tuple[int, bytes] | None:
+        self._force_flush.discard(user_id)
+        if user_id not in self._buffers:
+            self._last_time.pop(user_id, None)
+            return None
+
+        pcm = bytes(self._buffers.pop(user_id, b""))
+        self._last_time.pop(user_id, None)
+
+        duration = len(pcm) / (SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH)
+        if duration < self._min_speech_sec:
+            logger.debug("Skipping short utterance (%.1f s)", duration)
+            return None
+
+        is_noise, rms, active_ratio = _is_non_speech_noise(
+            pcm, self._noise_rms_threshold, self._noise_active_ratio
+        )
+        if is_noise:
+            logger.debug(
+                "Skipping non-speech noise: user=%d duration=%.1f s "
+                "rms=%.1f active_ratio=%.2f",
+                user_id,
+                duration,
+                rms,
+                active_ratio,
+            )
+            return None
+
+        wav = _pcm_to_wav(pcm)
+        logger.info(
+            "Speech end: user=%d duration=%.1f s wav=%d bytes",
+            user_id,
+            duration,
+            len(wav),
+        )
+        return user_id, wav
+
+    def _queue_speech(self, user_id: int, wav_data: bytes) -> None:
+        if len(self._speech_tasks) >= self._speech_queue_max:
+            logger.warning(
+                "Dropping speech for user=%d because speech queue is full (%d)",
+                user_id,
+                self._speech_queue_max,
+            )
+            return
+
+        task = asyncio.create_task(self._dispatch_speech(user_id, wav_data))
+        self._speech_tasks.add(task)
+        task.add_done_callback(self._speech_tasks.discard)
+        task.add_done_callback(
+            lambda done: self._log_speech_task_failure(done, user_id)
+        )
+
+    async def _dispatch_speech(self, user_id: int, wav_data: bytes) -> None:
+        for cb in self._callbacks:
+            try:
+                await cb(user_id, wav_data)
+            except Exception:
+                logger.exception("Speech callback error for user %d", user_id)
+
+    def _log_speech_task_failure(
+        self, task: asyncio.Task[None], user_id: int
+    ) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Speech dispatch crashed for user %d", user_id, exc_info=exc)

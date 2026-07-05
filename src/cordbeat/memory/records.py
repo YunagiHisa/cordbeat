@@ -316,13 +316,20 @@ class RecordStore:
         ) < datetime.now(tz=UTC):
             return None
 
-        # Mark as used
-        meta["used"] = True
-        await self._db.execute(
-            "UPDATE certain_records SET metadata = ? WHERE id = ?",
-            (json.dumps(meta), row["id"]),
+        # Mark as used with a conditional update so concurrent verifiers cannot
+        # both consume the same token.
+        cursor = await self._db.execute(
+            "UPDATE certain_records "
+            "SET metadata = json_set(metadata, '$.used', json('true')) "
+            "WHERE id = ? "
+            "AND COALESCE(json_extract(metadata, '$.used'), 0) = 0",
+            (row["id"],),
         )
         await self._db.commit()
+        if cursor.rowcount != 1:
+            return None
+
+        meta["used"] = True
 
         return {
             "requester_adapter_id": meta["requester_adapter_id"],

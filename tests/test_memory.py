@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import asyncio
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from cordbeat.config import MemoryConfig
+from cordbeat.exceptions import MemorySubsystemError
 from cordbeat.memory import MemoryStore
 from cordbeat.models import MemoryEntry, MemoryLayer
 
@@ -348,6 +350,52 @@ class TestFlashbulbMemory:
         assert results[0]["id"] == "old-ordinary"
         assert results[0]["metadata"]["archived_at"] is None
 
+    async def test_duplicate_merge_reinforces_from_current_strength(
+        self, tmp_path: Path
+    ) -> None:
+        config = MemoryConfig(
+            sqlite_path=str(tmp_path / "dedup.db"),
+            decay_rate=0.1,
+            dedup_distance_threshold=0.01,
+        )
+        store = MemoryStore(config)
+        await store.initialize()
+        try:
+            await store.get_or_create_user("u1", "Test")
+            old_origin = datetime.now(tz=UTC) - timedelta(days=30)
+            entry = MemoryEntry(
+                id="dedup-1",
+                user_id="u1",
+                layer=MemoryLayer.SEMANTIC,
+                content="User likes tiny blue notebooks",
+                strength=1.0,
+                emotion_weight=0.0,
+                created_at=old_origin,
+                last_accessed_at=old_origin,
+            )
+            await store.add_semantic_memory(entry)
+
+            before = await store.search_semantic("u1", "tiny blue notebooks")
+            before_strength = float(before[0]["metadata"]["strength"])
+
+            duplicate = MemoryEntry(
+                id="dedup-2",
+                user_id="u1",
+                layer=MemoryLayer.SEMANTIC,
+                content="User likes tiny blue notebooks",
+                strength=1.0,
+                emotion_weight=0.0,
+            )
+            merged_id = await store.add_semantic_memory(duplicate)
+
+            after = await store.search_semantic("u1", "tiny blue notebooks")
+            after_strength = float(after[0]["metadata"]["strength"])
+
+            assert merged_id == "dedup-1"
+            assert after_strength >= min(1.0, before_strength + 0.099)
+        finally:
+            await store.close()
+
     async def test_flashbulb_with_custom_metadata(self, memory: MemoryStore) -> None:
         await memory.get_or_create_user("u1", "Test")
         await memory.add_flashbulb_memory(
@@ -487,6 +535,18 @@ class TestLinkTokenOperations:
         second = await memory.verify_link_token(token)
         assert second is None
 
+    async def test_token_concurrent_verify_only_succeeds_once(
+        self, memory: MemoryStore
+    ) -> None:
+        token = await memory.store_link_token("telegram", "tg_user_1")
+
+        results = await asyncio.gather(
+            memory.verify_link_token(token),
+            memory.verify_link_token(token),
+        )
+
+        assert sum(result is not None for result in results) == 1
+
     async def test_expired_token(self, memory: MemoryStore) -> None:
         """Expired tokens cannot be verified."""
         # Create token with 0-minute expiry (immediately expired)
@@ -585,6 +645,63 @@ class TestGetMessagesOnDate:
         today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
         messages = await memory.get_messages_on_date("u1", today)
         assert messages == []
+
+    async def test_timezone_local_midnight_includes_utc_previous_day(
+        self, memory: MemoryStore
+    ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        early_jst_id = await memory.add_message(
+            "u1", "user", "JST early morning", "discord"
+        )
+        previous_local_id = await memory.add_message(
+            "u1", "user", "Previous local night", "discord"
+        )
+        await memory._conn.execute(
+            "UPDATE conversation_messages SET created_at = ? WHERE id = ?",
+            ("2026-07-04T16:30:00+00:00", early_jst_id),
+        )
+        await memory._conn.execute(
+            "UPDATE conversation_messages SET created_at = ? WHERE id = ?",
+            ("2026-07-04T14:30:00+00:00", previous_local_id),
+        )
+        await memory._conn.commit()
+
+        messages = await memory.get_messages_on_date(
+            "u1", "2026-07-05", timezone="Asia/Tokyo"
+        )
+
+        assert [m["content"] for m in messages] == ["JST early morning"]
+
+
+class TestGetEpisodicSince:
+    async def test_returns_only_episodes_since_boundary(
+        self, memory: MemoryStore
+    ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        recent = MemoryEntry(
+            id="recent-ep",
+            user_id="u1",
+            layer=MemoryLayer.EPISODIC,
+            content="Today Alice talked about piano",
+            created_at=datetime(2026, 7, 5, 1, 0, tzinfo=UTC),
+            last_accessed_at=datetime(2026, 7, 5, 1, 0, tzinfo=UTC),
+        )
+        old = MemoryEntry(
+            id="old-ep",
+            user_id="u1",
+            layer=MemoryLayer.EPISODIC,
+            content="Yesterday Alice talked about chess",
+            created_at=datetime(2026, 7, 3, 23, 0, tzinfo=UTC),
+            last_accessed_at=datetime(2026, 7, 3, 23, 0, tzinfo=UTC),
+        )
+        await memory.add_episodic_memory(old)
+        await memory.add_episodic_memory(recent)
+
+        results = await memory.get_episodic_since(
+            "u1", "2026-07-05T00:00:00+00:00", limit=10
+        )
+
+        assert [r["id"] for r in results] == ["recent-ep"]
 
 
 class TestRecallHints:

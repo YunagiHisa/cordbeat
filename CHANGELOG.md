@@ -19,6 +19,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Memory, recall, heartbeat, and voice hardening from source audit #4.**
+  Sleep consolidation now uses timezone-aware day windows instead of vector
+  searching for `"today"`, duplicate memory merges reinforce from the current
+  decay point, heartbeat messages reject unknown AI-supplied adapters, recalled
+  memory data is stricter against prompt injection, voice receive tasks are
+  bounded and supervised, and link tokens are consumed atomically.
 - **Execution, voice, and tool hardening from source audit #3.** RVC checkpoint
   loading now uses PyTorch safe weights-only mode, skill parameters are coerced
   from `skill.yaml` types before execution, `shell_exec` cleans up timed-out

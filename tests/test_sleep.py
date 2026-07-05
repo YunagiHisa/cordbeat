@@ -8,7 +8,7 @@ from cordbeat.config import MemoryConfig
 
 async def test_promote_episodic_memories_accepts_fenced_json() -> None:
     memory = MagicMock()
-    memory.search_episodic = AsyncMock(
+    memory.get_episodic_since = AsyncMock(
         return_value=[{"content": "The user said they enjoy hiking."}]
     )
     memory.add_semantic_memory = AsyncMock()
@@ -25,8 +25,32 @@ async def test_promote_episodic_memories_accepts_fenced_json() -> None:
 
     ai_call = ai.generate.await_args.kwargs
     assert ai_call["system"].startswith("/no_think\n")
+    assert "The user said they enjoy hiking." not in ai_call["system"]
+    assert "The user said they enjoy hiking." in ai_call["prompt"]
     entry = memory.add_semantic_memory.await_args.args[0]
     assert entry.content == "Enjoys hiking"
+
+
+async def test_promote_episodic_memories_uses_recent_day_scope() -> None:
+    memory = MagicMock()
+    memory.get_episodic_since = AsyncMock(return_value=[])
+    memory.add_semantic_memory = AsyncMock()
+    ai = MagicMock()
+    ai.generate = AsyncMock(return_value='{"facts": ["old fact"]}')
+    sleep = SleepPhase(
+        memory=memory,
+        ai=ai,
+        soul=MagicMock(),
+        memory_config=MemoryConfig(),
+        timezone="Asia/Tokyo",
+    )
+
+    await sleep._promote_episodic_memories("user-1")
+
+    memory.get_episodic_since.assert_awaited_once()
+    assert memory.get_episodic_since.await_args.args[0] == "user-1"
+    ai.generate.assert_not_awaited()
+    memory.add_semantic_memory.assert_not_awaited()
 
 
 async def test_write_diary_disables_thinking() -> None:
@@ -121,3 +145,24 @@ async def test_compress_old_messages_skips_when_summary_empty() -> None:
 
     memory.add_episodic_memory.assert_not_awaited()
     memory.delete_messages_with_ids.assert_not_awaited()
+
+
+async def test_precompute_chain_links_uses_recent_day_scope() -> None:
+    memory = MagicMock()
+    memory.get_episodic_since = AsyncMock(
+        return_value=[{"id": "today-ep", "content": "Today Alice discussed piano"}]
+    )
+    memory.search_semantic = AsyncMock(
+        return_value=[
+            {"id": "sem-1", "content": "Alice likes piano", "distance": 0.2}
+        ]
+    )
+    memory.search_episodic = AsyncMock(return_value=[])
+    memory.store_chain_link = AsyncMock()
+    sleep = _compress_sleep(memory, MagicMock())
+
+    await sleep._precompute_chain_links("user-1")
+
+    memory.get_episodic_since.assert_awaited_once()
+    memory.store_chain_link.assert_awaited_once()
+    assert memory.store_chain_link.await_args.kwargs["source_memory_id"] == "today-ep"

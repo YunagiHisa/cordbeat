@@ -54,6 +54,16 @@ class TestHeartbeatValidation:
         )
         assert not r.valid
 
+    def test_target_adapter_id_must_be_string(self) -> None:
+        r = validate_heartbeat_decision(
+            {
+                "action": "none",
+                "target_adapter_id": ["discord"],
+            }
+        )
+        assert not r.valid
+        assert any(err.field == "target_adapter_id" for err in r.errors)
+
     def test_valid_propose_trait_change(self) -> None:
         r = validate_heartbeat_decision(
             {

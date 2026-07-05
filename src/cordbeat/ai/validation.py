@@ -58,6 +58,16 @@ def validate_heartbeat_decision(data: dict[str, Any]) -> ValidationResult:
             )
         )
 
+    target_adapter_id = data.get("target_adapter_id")
+    if target_adapter_id is not None and not isinstance(target_adapter_id, str):
+        errors.append(
+            ValidationError(
+                field="target_adapter_id",
+                message="must be a string when provided",
+                value=target_adapter_id,
+            )
+        )
+
     minutes = data.get("next_heartbeat_minutes")
     if minutes is not None:
         if not isinstance(minutes, int | float) or minutes < 1 or minutes > 1440:

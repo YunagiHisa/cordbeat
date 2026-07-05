@@ -861,10 +861,62 @@ class HeartbeatLoop:
             case HeartbeatAction.NONE:
                 logger.debug("HEARTBEAT decided: do nothing")
 
+    async def _get_user_summary(self, user_id: str) -> UserSummary | None:
+        try:
+            users = await self._memory.get_all_user_summaries()
+        except Exception:
+            logger.exception("Failed to load user summaries for adapter validation")
+            return None
+        for user in users:
+            if user.user_id == user_id:
+                return user
+        return None
+
+    async def _resolve_target_adapter(
+        self,
+        user_id: str,
+        requested_adapter_id: str | None,
+    ) -> str | None:
+        known_adapters = set(self._adapters_options)
+        if not known_adapters:
+            return requested_adapter_id
+        if requested_adapter_id in known_adapters:
+            return requested_adapter_id
+
+        user = await self._get_user_summary(user_id)
+        candidates = (
+            user.preferred_platform if user else None,
+            user.last_platform if user else None,
+        )
+        for candidate in candidates:
+            if candidate in known_adapters:
+                logger.warning(
+                    "HEARTBEAT ignored unknown target_adapter_id=%r for user=%s; "
+                    "using %s instead",
+                    requested_adapter_id,
+                    user_id,
+                    candidate,
+                )
+                return candidate
+
+        logger.warning(
+            "HEARTBEAT skipped message for user=%s: unknown target_adapter_id=%r",
+            user_id,
+            requested_adapter_id,
+        )
+        return None
+
     async def _send_heartbeat_message(self, decision: HeartbeatDecision) -> None:
-        if not decision.target_user_id or not decision.target_adapter_id:
+        if not decision.target_user_id:
             logger.warning("HEARTBEAT message missing target")
             return
+        target_adapter_id = await self._resolve_target_adapter(
+            decision.target_user_id, decision.target_adapter_id
+        )
+        if not target_adapter_id:
+            return
+        decision.target_adapter_id = target_adapter_id
+
         if self._queue.is_busy():
             logger.info(
                 "HEARTBEAT skipped before send: message queue became busy "
@@ -961,6 +1013,16 @@ class HeartbeatLoop:
             decision.target_adapter_id,
         )
         if not platform_user_id:
+            user = await self._get_user_summary(decision.target_user_id)
+            if user is not None and user.last_platform != decision.target_adapter_id:
+                logger.warning(
+                    "HEARTBEAT skipped platform_link backfill for user=%s "
+                    "adapter=%s because last_platform=%r",
+                    decision.target_user_id,
+                    decision.target_adapter_id,
+                    user.last_platform,
+                )
+                return
             # Self-heal for legacy users (pre-#310deb4): historically the
             # internal user_id was set to the platform_user_id itself
             # (e.g. a Discord snowflake or "cli_user") and no platform_link

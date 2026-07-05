@@ -275,7 +275,7 @@ def build_context(
                 sanitize_reasoning_artifacts(str(mem["content"]))
             )
             if content:
-                parts.append(f"  - {sanitize(content, max_len=500)}")
+                parts.append(f"  - {sanitize(content, strict=True, max_len=500)}")
         parts.append("[END RECALLED FACTS]")
 
     if episodic_memories:
@@ -286,7 +286,7 @@ def build_context(
         if episodes:
             parts.append("\n[BEGIN RECALLED EPISODES]")
             for content in episodes:
-                parts.append(f"  - {sanitize(content, max_len=500)}")
+                parts.append(f"  - {sanitize(content, strict=True, max_len=500)}")
             parts.append("[END RECALLED EPISODES]")
 
     if recall_hints:
@@ -294,7 +294,7 @@ def build_context(
         for hint in recall_hints:
             content = sanitize_tool_artifacts(sanitize_reasoning_artifacts(str(hint)))
             if content:
-                parts.append(f"  - {sanitize(content, max_len=500)}")
+                parts.append(f"  - {sanitize(content, strict=True, max_len=500)}")
         parts.append("[END RECALL HINTS]")
 
     if history:
@@ -339,7 +339,12 @@ def build_context(
 
 def _escape_tool_response(text: str) -> str:
     """Escape </tool_response> tags in tool output to prevent prompt injection."""
-    return text.replace("</tool_response>", "<\\/tool_response>")
+    return re.sub(
+        r"</\s*tool_response\s*>",
+        "<\\/tool_response>",
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 def build_react_continuation_prompt(

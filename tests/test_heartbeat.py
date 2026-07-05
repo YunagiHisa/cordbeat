@@ -3641,6 +3641,25 @@ class TestSendHeartbeatMessagePlatformLink:
         resolved = await memory.resolve_platform_user("294731191007969280", "discord")
         assert resolved == "294731191007969280"
 
+    async def test_unknown_adapter_does_not_backfill_or_send(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.get_or_create_user("uid-1", "Alice")
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.MESSAGE,
+            content="hi",
+            target_user_id="uid-1",
+            target_adapter_id="fake_adapter",
+        )
+
+        await heartbeat._send_heartbeat_message(decision)
+
+        mock_gateway.send_to_adapter.assert_not_awaited()
+        assert await memory.resolve_platform_user("uid-1", "fake_adapter") is None
+
     async def test_missing_target_skips_send(
         self,
         heartbeat: HeartbeatLoop,

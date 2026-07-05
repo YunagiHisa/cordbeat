@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -340,15 +340,29 @@ class MemoryStore:
     async def get_todays_messages(
         self,
         user_id: str,
+        timezone: str | tzinfo | None = UTC,
     ) -> list[dict[str, str]]:
-        return await self._conversations.get_todays_messages(user_id)
+        return await self._conversations.get_todays_messages(user_id, timezone)
+
+    async def get_messages_between(
+        self,
+        user_id: str,
+        start_iso: str,
+        end_iso: str,
+    ) -> list[dict[str, str]]:
+        return await self._conversations.get_messages_between(
+            user_id, start_iso, end_iso
+        )
 
     async def get_messages_on_date(
         self,
         user_id: str,
         date_str: str,
+        timezone: str | tzinfo | None = UTC,
     ) -> list[dict[str, str]]:
-        return await self._conversations.get_messages_on_date(user_id, date_str)
+        return await self._conversations.get_messages_on_date(
+            user_id, date_str, timezone
+        )
 
     async def trim_old_messages(
         self,
@@ -403,6 +417,15 @@ class MemoryStore:
         async with time_block(MEMORY_QUERY_LATENCY, {"kind": "episodic"}):
             return await self._vectors.search_episodic(user_id, query, n_results)
 
+    async def get_episodic_since(
+        self,
+        user_id: str,
+        since_iso: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        async with time_block(MEMORY_QUERY_LATENCY, {"kind": "episodic_since"}):
+            return await self._vectors.get_episodic_since(user_id, since_iso, limit)
+
     async def search_by_emotion(
         self,
         user_id: str,
@@ -431,9 +454,10 @@ class MemoryStore:
     ) -> float:
         """Apply Ebbinghaus-inspired forgetting curve.
 
-        Kept as a public helper for diagnostics / tests. Production code
-        no longer needs to call this — strength is computed lazily inside
-        :meth:`VectorMemory._search` on every read.
+        ``elapsed_days`` is measured since the current base strength was
+        written (``last_accessed_at`` in stored rows). Kept as a public helper
+        for diagnostics / tests. Production code no longer needs to call this
+        — strength is computed lazily inside :meth:`VectorMemory._search`.
         """
         effective_decay = self._config.decay_rate * (1.0 - emotion_weight * 0.5)
         return base_strength * (1.0 / (1.0 + effective_decay * elapsed_days))

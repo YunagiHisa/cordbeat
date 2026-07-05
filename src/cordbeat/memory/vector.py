@@ -142,6 +142,15 @@ class VectorMemory:
     ) -> list[dict[str, Any]]:
         return await self._search("episodic", user_id, query, n_results)
 
+    async def get_episodic_since(
+        self,
+        user_id: str,
+        since_iso: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Return recent episodic memories by creation time, without vector search."""
+        return await self._get_since("episodic", user_id, since_iso, limit)
+
     async def search_by_emotion(
         self,
         user_id: str,
@@ -177,12 +186,12 @@ class VectorMemory:
     def _compute_strength(
         self,
         base_strength: float,
-        created_at: datetime,
+        decay_origin: datetime,
         emotion_weight: float,
         now: datetime,
     ) -> float:
         """Apply Ebbinghaus-inspired forgetting curve at read time."""
-        elapsed_days = max(0.0, (now - created_at).total_seconds() / 86400.0)
+        elapsed_days = max(0.0, (now - decay_origin).total_seconds() / 86400.0)
         effective_decay = self._config.decay_rate * (1.0 - emotion_weight * 0.5)
         return base_strength * (1.0 / (1.0 + effective_decay * elapsed_days))
 
@@ -237,7 +246,7 @@ class VectorMemory:
         """Return the nearest existing memory if within dedup threshold."""
         sql = f"""
             SELECT m.id, m.strength, m.emotion_weight, m.created_at,
-                   m.metadata_json, m.archived_at, v.distance
+                   m.last_accessed_at, m.metadata_json, m.archived_at, v.distance
               FROM {vec_table} AS v
               JOIN {meta_table} AS m ON m.vec_rowid = v.rowid
              WHERE v.user_id = ?
@@ -257,7 +266,9 @@ class VectorMemory:
         else:
             strength = self._compute_strength(
                 base_strength=float(row["strength"]),
-                created_at=ensure_aware(datetime.fromisoformat(row["created_at"])),
+                decay_origin=ensure_aware(
+                    datetime.fromisoformat(row["last_accessed_at"])
+                ),
                 emotion_weight=float(row["emotion_weight"]),
                 now=datetime.now(tz=UTC),
             )
@@ -314,11 +325,12 @@ class VectorMemory:
     ) -> list[dict[str, Any]]:
         """Search with lazy decay.
 
-        Strength is computed on read from ``base_strength`` + ``created_at``
-        + ``emotion_weight`` (Ebbinghaus). Non-flashbulb entries that fall
-        below ``archive_threshold`` are archived on read and excluded from
-        ordinary recall, but the rows remain in SQLite for future deep recall
-        or explicit deletion. Results are ranked by a composite score
+        Strength is computed on read from ``base_strength`` +
+        ``last_accessed_at`` + ``emotion_weight`` (Ebbinghaus).
+        Non-flashbulb entries that fall below ``archive_threshold`` are
+        archived on read and excluded from ordinary recall, but the rows
+        remain in SQLite for future deep recall or explicit deletion.
+        Results are ranked by a composite score
         ``strength / (1 + distance)`` so strong memories outrank
         weakly-relevant ones at the margin.
         """
@@ -353,13 +365,13 @@ class VectorMemory:
         for row in rows:
             extras = json.loads(row["metadata_json"] or "{}")
             is_flashbulb = bool(extras.get("flashbulb", False))
-            created_at = ensure_aware(datetime.fromisoformat(row["created_at"]))
+            decay_origin = ensure_aware(datetime.fromisoformat(row["last_accessed_at"]))
             if is_flashbulb:
                 current_strength = float(row["strength"])
             else:
                 current_strength = self._compute_strength(
                     base_strength=float(row["strength"]),
-                    created_at=created_at,
+                    decay_origin=decay_origin,
                     emotion_weight=float(row["emotion_weight"]),
                     now=now,
                 )
@@ -396,3 +408,74 @@ class VectorMemory:
 
         enriched.sort(key=lambda item: item[0], reverse=True)
         return [result for _, result in enriched[:n_results]]
+
+    async def _get_since(
+        self,
+        layer: str,
+        user_id: str,
+        since_iso: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Fetch memories created after ``since_iso`` without vector similarity."""
+        meta_table = f"{layer}_memory"
+        threshold = self._config.archive_threshold
+        now = datetime.now(tz=UTC)
+
+        sql = f"""
+            SELECT id, vec_rowid, user_id, content, trust_level, strength,
+                   emotion_weight, created_at, last_accessed_at, metadata_json,
+                   archived_at, archive_reason
+              FROM {meta_table}
+             WHERE user_id = ?
+               AND archived_at IS NULL
+               AND created_at >= ?
+             ORDER BY created_at DESC
+             LIMIT ?
+        """  # noqa: S608
+        async with self._conn.execute(sql, (user_id, since_iso, limit)) as cur:
+            rows = await cur.fetchall()
+
+        results: list[dict[str, Any]] = []
+        to_archive: list[tuple[str, float]] = []
+        for row in rows:
+            extras = json.loads(row["metadata_json"] or "{}")
+            is_flashbulb = bool(extras.get("flashbulb", False))
+            if is_flashbulb:
+                current_strength = float(row["strength"])
+            else:
+                current_strength = self._compute_strength(
+                    base_strength=float(row["strength"]),
+                    decay_origin=ensure_aware(
+                        datetime.fromisoformat(row["last_accessed_at"])
+                    ),
+                    emotion_weight=float(row["emotion_weight"]),
+                    now=now,
+                )
+            if not is_flashbulb and current_strength < threshold:
+                to_archive.append((row["id"], current_strength))
+                continue
+            result = _row_to_result(row, None)
+            result["metadata"]["strength"] = current_strength
+            results.append(result)
+
+        archived_at = now.isoformat()
+        for entry_id, current_strength in to_archive:
+            await self._conn.execute(
+                f"""UPDATE {meta_table}
+                       SET archived_at = ?,
+                           archive_reason = ?,
+                           last_accessed_at = ?
+                     WHERE id = ?
+                       AND archived_at IS NULL""",  # noqa: S608
+                (
+                    archived_at,
+                    f"decayed below archive_threshold={threshold} "
+                    f"(strength={current_strength:.6f})",
+                    archived_at,
+                    entry_id,
+                ),
+            )
+        if to_archive:
+            await self._conn.commit()
+
+        return results

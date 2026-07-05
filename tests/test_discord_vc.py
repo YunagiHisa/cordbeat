@@ -6,6 +6,7 @@ these tests run in the default dev environment without extras installed.
 
 from __future__ import annotations
 
+import asyncio
 import builtins
 import json
 from collections import deque
@@ -88,6 +89,20 @@ class TestVoiceReceiver:
             assert 123 not in receiver._buffers
             assert 123 not in receiver._last_time
 
+    async def test_stop_cancels_detector_task(self) -> None:
+        with patch("cordbeat.voice_recv._OpusDecoder"):
+            from cordbeat.voice_recv import VoiceReceiver
+
+            receiver = VoiceReceiver(MagicMock())
+            receiver._running = True
+            task = asyncio.create_task(asyncio.sleep(10))
+            receiver._detector_task = task
+
+            await receiver.stop()
+
+            assert task.done()
+            assert receiver._detector_task is None
+
     def test_bot_packets_ignored(self) -> None:
         with patch("cordbeat.voice_recv._OpusDecoder"):
             from cordbeat.voice_recv import VoiceReceiver
@@ -104,6 +119,65 @@ class TestVoiceReceiver:
 
             # No buffer should be created for a bot user
             assert 9999 not in receiver._buffers
+
+    async def test_silence_detector_survives_user_processing_error(self) -> None:
+        with patch("cordbeat.voice_recv._OpusDecoder"):
+            from cordbeat.voice_recv import VoiceReceiver
+
+            receiver = VoiceReceiver(MagicMock(), silence_sec=0.0)
+            receiver._running = True
+            receiver._last_time[123] = 0.0
+            with patch.object(
+                receiver,
+                "_finish_user_buffer",
+                side_effect=[RuntimeError("bad wav"), None],
+            ):
+                task = asyncio.create_task(receiver._silence_detector())
+                await asyncio.sleep(0.15)
+                assert not task.done()
+                receiver._running = False
+                await asyncio.wait_for(task, timeout=1.0)
+
+    async def test_max_buffer_forces_speech_flush(self) -> None:
+        with patch("cordbeat.voice_recv._OpusDecoder"):
+            from cordbeat.voice_recv import VoiceReceiver
+
+            receiver = VoiceReceiver(
+                MagicMock(),
+                silence_sec=60.0,
+                min_speech_sec=0.0,
+                speech_queue_max=2,
+                max_speech_sec=0.001,
+            )
+            receiver._running = True
+            receiver._decoder.decode.return_value = b"\x01" * 400
+            callback = AsyncMock()
+            receiver.on_speech_end(callback)
+            user = MagicMock(id=123, bot=False)
+            data = MagicMock(opus=b"\x01" * 10)
+
+            with (
+                patch(
+                    "cordbeat.voice_recv._is_non_speech_noise",
+                    return_value=(False, 1.0, 1.0),
+                ),
+                patch("cordbeat.voice_recv._pcm_to_wav", return_value=b"wav"),
+            ):
+                # The BasicSink callback fires on the voice receive thread,
+                # where no event loop is running. The overflow path must only
+                # mark the user; finalisation happens in the detector loop.
+                await asyncio.to_thread(receiver._on_voice_data, user, data)
+                assert 123 in receiver._force_flush
+                assert 123 in receiver._buffers
+
+                detector = asyncio.create_task(receiver._silence_detector())
+                await asyncio.sleep(0.15)
+                receiver._running = False
+                await asyncio.wait_for(detector, timeout=1.0)
+
+            callback.assert_awaited_once_with(123, b"wav")
+            assert 123 not in receiver._buffers
+            assert 123 not in receiver._force_flush
 
     def test_is_non_speech_noise_no_numpy(self) -> None:
         from cordbeat.voice_recv import _is_non_speech_noise

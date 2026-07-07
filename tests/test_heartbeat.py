@@ -90,6 +90,12 @@ class TestInQuietHours:
             mock_dt.now.return_value = MagicMock(time=lambda: time(7, 0))
             assert _in_quiet_hours("01:00", "07:00") is True
 
+    def test_invalid_quiet_hours_fail_closed_with_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        assert _in_quiet_hours("25:99", "07:00") is False
+        assert "Invalid quiet hours configured" in caplog.text
+
 
 # ── Fixtures ──────────────────────────────────────────────────────────
 

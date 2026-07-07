@@ -3014,12 +3014,19 @@ class CoreEngine:
             return
 
         start, end = parts
-        # Basic HH:MM validation
-        if not re.fullmatch(r"\d{1,2}:\d{2}", start) or not re.fullmatch(
-            r"\d{1,2}:\d{2}", end
-        ):
+        def _is_quiet_time(value: str) -> bool:
+            if not re.fullmatch(r"\d{1,2}:\d{2}", value):
+                return False
+            hour_text, minute_text = value.split(":", maxsplit=1)
+            hour = int(hour_text)
+            minute = int(minute_text)
+            return 0 <= hour <= 23 and 0 <= minute <= 59
+
+        if not _is_quiet_time(start) or not _is_quiet_time(end):
             await self._send_reply(
-                message, "Invalid time format. Use HH:MM (e.g. 01:00)."
+                message,
+                "Invalid time format. Use HH:MM with hour 0-23 and minute 0-59 "
+                "(e.g. 01:00).",
             )
             return
 

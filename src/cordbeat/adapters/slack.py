@@ -25,7 +25,7 @@ from collections import OrderedDict
 from datetime import UTC, datetime
 from typing import Any
 
-from cordbeat.adapters._utils import AdapterFilter
+from cordbeat.adapters._utils import AdapterFilter, normalize_inbound_text
 from cordbeat.config import AdapterConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -169,6 +169,10 @@ class SlackAdapter(RetryableConnection):
     ) -> None:
         if not user_id:
             return
+        normalized = normalize_inbound_text(text, adapter_id=ADAPTER_ID)
+        if normalized is None:
+            return
+        text = normalized
 
         # ── E-4 response filtering ────────────────────────────────────
         is_dm = channel_type == "im"

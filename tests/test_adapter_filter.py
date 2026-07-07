@@ -8,7 +8,11 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from cordbeat.adapters._utils import AdapterFilter
+from cordbeat.adapters._utils import (
+    MAX_INBOUND_TEXT_CHARS,
+    AdapterFilter,
+    normalize_inbound_text,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -169,12 +173,12 @@ class TestModeAIDecision:
         f = _filter(respond_mode="ai_decision", ai_decision_keywords=["CordBeat"])
         assert f.should_respond(user_id="u", text="hey cordbeat!") is True
 
-    def test_no_keywords_no_soul_allows_all(self) -> None:
-        """When no keywords configured and soul.yaml unavailable, allow all."""
+    def test_no_keywords_no_soul_rejects_public_message(self) -> None:
+        """When no keywords configured and soul.yaml unavailable, fail closed."""
         f = _filter(respond_mode="ai_decision")
         with patch("cordbeat.adapters._utils._read_soul_keywords", return_value=[]):
             result = f.should_respond(user_id="u", text="hello")
-        assert result is True
+        assert result is False
 
     def test_extra_keywords_used_as_fallback(self) -> None:
         """extra_keywords fills the gap when ai_keywords list is empty."""
@@ -243,3 +247,15 @@ class TestFromOptions:
     def test_respond_mode_stored(self) -> None:
         f = AdapterFilter.from_options({"respond_mode": "mention_only"})
         assert f.respond_mode == "mention_only"
+
+
+class TestInboundText:
+    def test_blank_text_is_dropped(self) -> None:
+        assert normalize_inbound_text("   \n", adapter_id="test") is None
+
+    def test_long_text_is_truncated(self) -> None:
+        text = "x" * (MAX_INBOUND_TEXT_CHARS + 25)
+        normalized = normalize_inbound_text(text, adapter_id="test")
+
+        assert normalized is not None
+        assert len(normalized) == MAX_INBOUND_TEXT_CHARS

@@ -154,6 +154,54 @@ async def test_prepare_raises_when_uv_fails(
                 await mgr.prepare(skill_dir_with_deps, "myskill")
 
 
+async def test_failed_pip_install_does_not_leave_partial_final_env(
+    cache_root: Path, skill_dir_with_deps: Path
+) -> None:
+    from cordbeat.skills.env import _python_in
+
+    mgr = SkillEnvManager(cache_root=cache_root)
+    env_dir = cache_root / "myskill"
+    calls = 0
+
+    async def fail_on_pip(_uv_exe: str, *args: str) -> None:
+        nonlocal calls
+        calls += 1
+        if args[0] == "venv":
+            tmp_env = Path(args[1])
+            python = _python_in(tmp_env)
+            python.parent.mkdir(parents=True, exist_ok=True)
+            python.write_text("", encoding="utf-8")
+            return
+        raise SkillEnvError("uv pip install failed: network error")
+
+    with (
+        patch("cordbeat.skills.env._find_uv", return_value="/usr/bin/uv"),
+        patch.object(SkillEnvManager, "_run_uv", side_effect=fail_on_pip),
+        pytest.raises(SkillEnvError, match="network error"),
+    ):
+        await mgr.prepare(skill_dir_with_deps, "myskill")
+
+    assert calls == 2
+    assert not env_dir.exists()
+    assert list(cache_root.glob(".myskill.tmp-*")) == []
+
+    async def succeed(_uv_exe: str, *args: str) -> None:
+        if args[0] == "venv":
+            tmp_env = Path(args[1])
+            python = _python_in(tmp_env)
+            python.parent.mkdir(parents=True, exist_ok=True)
+            python.write_text("", encoding="utf-8")
+
+    with (
+        patch("cordbeat.skills.env._find_uv", return_value="/usr/bin/uv"),
+        patch.object(SkillEnvManager, "_run_uv", side_effect=succeed),
+    ):
+        python_exe = await mgr.prepare(skill_dir_with_deps, "myskill")
+
+    assert python_exe == str(_python_in(env_dir))
+    assert (env_dir / ".cordbeat-skill-hash").exists()
+
+
 async def test_invalid_pyproject_raises(cache_root: Path, tmp_path: Path) -> None:
     skill_dir = tmp_path / "broken"
     skill_dir.mkdir()

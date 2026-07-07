@@ -2793,6 +2793,35 @@ class TestSoulCommands:
         reply = mock_gateway.send_to_adapter.call_args[0][1]
         assert "invalid" in reply.content.lower()
 
+    @pytest.mark.parametrize(
+        "content",
+        ["/quiet 25:99 08:00", "/quiet 12:60 08:00", "/quiet 24:00 08:00"],
+    )
+    async def test_quiet_command_invalid_time_range_rejected(
+        self,
+        content: str,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        soul: Soul,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        await memory.link_platform("u1", "cli", "cli_user")
+        before = soul.quiet_hours
+
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content=content,
+        )
+        await engine.handle_message(msg)
+
+        assert soul.quiet_hours == before
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "invalid" in reply.content.lower()
+
     async def test_quiet_command_missing_end(
         self,
         engine: CoreEngine,

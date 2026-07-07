@@ -19,6 +19,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Adapter input and quiet-hours hardening from source audit #6.** Quiet-hours
+  values are range-validated (0-23/0-59) and invalid persisted values disable
+  quiet hours with a warning instead of breaking heartbeat ticks, inbound
+  adapter text is capped at 16k characters and blank messages are dropped,
+  keyword-based respond modes fail closed when no keywords resolve, and skill
+  environments build in a temp directory with an atomic rename so failed
+  installs leave no partial venv.
 - **Linking, proposals, and global-command hardening from source audit #5.**
   Platform links no longer silently repoint to another user, public `/link`
   replies no longer expose tokens, approved proposals are claimed before

@@ -220,13 +220,23 @@ _HEARTBEAT_SELF_REVIEW_RECORD = "heartbeat_self_review"
 
 def _parse_time(s: str) -> time:
     parts = s.split(":")
+    if len(parts) != 2:
+        raise ValueError(f"Invalid HH:MM time: {s!r}")
     return time(hour=int(parts[0]), minute=int(parts[1]))
 
 
 def _in_quiet_hours(quiet_start: str, quiet_end: str, tz: tzinfo = UTC) -> bool:
     now = datetime.now(tz=tz).time()
-    start = _parse_time(quiet_start)
-    end = _parse_time(quiet_end)
+    try:
+        start = _parse_time(quiet_start)
+        end = _parse_time(quiet_end)
+    except ValueError:
+        logger.warning(
+            "Invalid quiet hours configured: %s - %s; treating as disabled",
+            quiet_start,
+            quiet_end,
+        )
+        return False
     if start <= end:
         return start <= now <= end
     # Wraps midnight (e.g., 01:00 - 07:00)

@@ -33,7 +33,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from cordbeat.adapters._utils import AdapterFilter
+from cordbeat.adapters._utils import AdapterFilter, normalize_inbound_text
 from cordbeat.config import AdapterConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -201,6 +201,10 @@ class WhatsAppAdapter(RetryableConnection):
     async def _forward_to_core(self, *, user_id: str, text: str) -> None:
         if not user_id:
             return
+        normalized = normalize_inbound_text(text, adapter_id=ADAPTER_ID)
+        if normalized is None:
+            return
+        text = normalized
 
         # WhatsApp Cloud API is 1:1 — always a DM; no channel filters needed.
         # respond_mode and ai_decision_keywords still apply.

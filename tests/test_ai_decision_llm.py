@@ -78,6 +78,14 @@ async def test_ai_decision_llm_no_backend_falls_back_to_keywords() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ai_decision_llm_no_backend_without_keywords_rejects() -> None:
+    f = AdapterFilter(respond_mode="ai_decision_llm")
+    assert not await f.should_respond_async(
+        user_id="u", channel_id="c", is_dm=False, text="hello"
+    )
+
+
+@pytest.mark.asyncio
 async def test_ai_decision_llm_backend_exception_allows_message() -> None:
     class Boom:
         async def generate(self, prompt: str, **kwargs: Any) -> str:

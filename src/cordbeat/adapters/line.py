@@ -25,7 +25,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from cordbeat.adapters._utils import AdapterFilter
+from cordbeat.adapters._utils import AdapterFilter, normalize_inbound_text
 from cordbeat.config import AdapterConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -168,6 +168,10 @@ class LineAdapter(RetryableConnection):
     ) -> None:
         if not user_id:
             return
+        normalized = normalize_inbound_text(text, adapter_id=ADAPTER_ID)
+        if normalized is None:
+            return
+        text = normalized
 
         # ── E-4 response filtering ────────────────────────────────────
         # LINE groups don't have a platform @mention; treat keyword-match as "mentioned"
@@ -179,8 +183,6 @@ class LineAdapter(RetryableConnection):
             kws = list(self._filter.ai_keywords) or _read_soul_keywords()
             if kws:
                 is_mentioned = any(kw.lower() in text.lower() for kw in kws)
-            else:
-                is_mentioned = True  # no keywords → treat as mentioned
         if not await self._filter.should_respond_async(
             user_id=user_id,
             channel_id=channel_id,

@@ -40,6 +40,7 @@ MODE_AI_DECISION_LLM = "ai_decision_llm"
 
 JUDGE_DEFAULT_MAX_TOKENS = 8
 JUDGE_DEFAULT_TEMPERATURE = 0.0
+MAX_INBOUND_TEXT_CHARS = 16_000
 
 _judge_backend: AIBackend | None = None
 _judge_max_tokens: int = JUDGE_DEFAULT_MAX_TOKENS
@@ -76,6 +77,21 @@ def get_judge_backend() -> AIBackend | None:
 def get_judge_params() -> tuple[int, float]:
     """Return ``(max_tokens, temperature)`` for ai_decision_llm yes/no calls."""
     return _judge_max_tokens, _judge_temperature
+
+
+def normalize_inbound_text(text: str, *, adapter_id: str) -> str | None:
+    """Drop empty inbound text and cap payload size before Core forwarding."""
+    if not text or not text.strip():
+        return None
+    if len(text) <= MAX_INBOUND_TEXT_CHARS:
+        return text
+    logger.warning(
+        "Truncating inbound text from %s: %d -> %d chars",
+        adapter_id,
+        len(text),
+        MAX_INBOUND_TEXT_CHARS,
+    )
+    return text[:MAX_INBOUND_TEXT_CHARS]
 
 
 async def judge_yes_no(prompt: str, *, fail_open: bool = False) -> bool:
@@ -208,7 +224,11 @@ class AdapterFilter:
             if extra_keywords:
                 keywords.extend(k for k in extra_keywords if k)
             if not keywords:
-                return True  # no filter available → allow
+                logger.warning(
+                    "respond_mode=%s has no keywords; dropping public message",
+                    self.respond_mode,
+                )
+                return False
             text_lower = text.lower()
             return any(kw.lower() in text_lower for kw in keywords)
 
@@ -222,7 +242,11 @@ class AdapterFilter:
                 if extra_keywords:
                     keywords.extend(k for k in extra_keywords if k)
                 if not keywords:
-                    return True
+                    logger.warning(
+                        "respond_mode=%s has no keywords; dropping public message",
+                        self.respond_mode,
+                    )
+                    return False
                 text_lower = text.lower()
                 return any(kw.lower() in text_lower for kw in keywords)
             return True  # defer to async judge

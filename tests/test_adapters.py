@@ -2054,20 +2054,42 @@ class TestLineAdapter:
         assert payload["metadata"]["channel_id"] == "Gline"
         assert payload["metadata"]["is_dm"] is False
 
+    async def test_line_group_without_keywords_is_not_mentioned(self) -> None:
+        from cordbeat.adapters.line import LineAdapter
+
+        config = AdapterConfig(options={"respond_mode": "mention_only"})
+        adapter = LineAdapter(config)
+        adapter._ws = AsyncMock()
+
+        with patch("cordbeat.adapters._utils._read_soul_keywords", return_value=[]):
+            await adapter._forward_to_core(
+                user_id="Uline",
+                text="hello",
+                is_group=True,
+                channel_id="Gline",
+            )
+
+        adapter._ws.send.assert_not_awaited()
+
 
 class TestWhatsAppAdapter:
     async def test_forward_to_core_marks_dm_scope(self) -> None:
+        from cordbeat.adapters._utils import MAX_INBOUND_TEXT_CHARS
         from cordbeat.adapters.whatsapp import WhatsAppAdapter
 
         config = AdapterConfig(options={})
         adapter = WhatsAppAdapter(config)
         adapter._ws = AsyncMock()
 
-        await adapter._forward_to_core(user_id="15551234567", text="hello")
+        await adapter._forward_to_core(
+            user_id="15551234567",
+            text="x" * (MAX_INBOUND_TEXT_CHARS + 10),
+        )
 
         adapter._ws.send.assert_awaited_once()
         payload = json.loads(adapter._ws.send.call_args[0][0])
         assert payload["adapter_id"] == "whatsapp"
+        assert len(payload["content"]) == MAX_INBOUND_TEXT_CHARS
         assert payload["metadata"]["channel_id"] == "15551234567"
         assert payload["metadata"]["is_dm"] is True
 

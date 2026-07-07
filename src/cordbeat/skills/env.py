@@ -25,6 +25,7 @@ import logging
 import shutil
 import sys
 import tomllib
+import uuid
 from pathlib import Path
 
 from ..exceptions import SkillError
@@ -130,12 +131,10 @@ class SkillEnvManager:
                     "Preparing uv env for skill '%s' at %s", skill_name, env_dir
                 )
                 deps = _read_dependencies(pyproject)
-                await self._build(env_dir, python_exe, deps)
-                env_dir.mkdir(parents=True, exist_ok=True)
-                hash_file.write_text(current_hash, encoding="utf-8")
+                await self._build(env_dir, deps, current_hash)
         return str(python_exe)
 
-    async def _build(self, env_dir: Path, python_exe: Path, deps: list[str]) -> None:
+    async def _build(self, env_dir: Path, deps: list[str], env_hash: str) -> None:
         uv_exe = _find_uv()
         if uv_exe is None:
             raise SkillEnvError(
@@ -145,20 +144,29 @@ class SkillEnvManager:
                 "/usr/local/bin/uv."
             )
         env_dir.parent.mkdir(parents=True, exist_ok=True)
-        if env_dir.exists():
-            shutil.rmtree(env_dir, ignore_errors=True)
+        tmp_dir = env_dir.parent / f".{env_dir.name}.tmp-{uuid.uuid4().hex}"
+        hash_file = tmp_dir / ".cordbeat-skill-hash"
 
-        await self._run_uv(uv_exe, "venv", str(env_dir), "--quiet")
-        if deps:
-            await self._run_uv(
-                uv_exe,
-                "pip",
-                "install",
-                "--python",
-                str(python_exe),
-                "--quiet",
-                *deps,
-            )
+        try:
+            tmp_dir.mkdir(parents=True, exist_ok=False)
+            await self._run_uv(uv_exe, "venv", str(tmp_dir), "--quiet")
+            if deps:
+                await self._run_uv(
+                    uv_exe,
+                    "pip",
+                    "install",
+                    "--python",
+                    str(_python_in(tmp_dir)),
+                    "--quiet",
+                    *deps,
+                )
+            hash_file.write_text(env_hash, encoding="utf-8")
+            if env_dir.exists():
+                await asyncio.to_thread(shutil.rmtree, env_dir, ignore_errors=True)
+            await asyncio.to_thread(tmp_dir.replace, env_dir)
+        finally:
+            if tmp_dir.exists():
+                await asyncio.to_thread(shutil.rmtree, tmp_dir, ignore_errors=True)
 
     @staticmethod
     async def _run_uv(uv_exe: str, *args: str) -> None:

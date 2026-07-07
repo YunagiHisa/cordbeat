@@ -79,6 +79,19 @@ def _serialize_metadata(entry: MemoryEntry) -> str:
     return json.dumps(payload, default=str)
 
 
+def _load_metadata_json(row: aiosqlite.Row) -> dict[str, Any] | None:
+    memory_id = row["id"] if "id" in row.keys() else "<unknown>"
+    try:
+        metadata = json.loads(row["metadata_json"] or "{}")
+    except (TypeError, json.JSONDecodeError):
+        logger.warning("Memory %s has invalid metadata_json", memory_id)
+        return None
+    if not isinstance(metadata, dict):
+        logger.warning("Memory %s metadata_json is not an object", memory_id)
+        return None
+    return metadata
+
+
 def _row_to_result(row: aiosqlite.Row, distance: float | None) -> dict[str, Any]:
     """Shape a metadata row + distance into the public result dict."""
     metadata: dict[str, Any] = {
@@ -91,8 +104,9 @@ def _row_to_result(row: aiosqlite.Row, distance: float | None) -> dict[str, Any]
         "archived_at": row["archived_at"],
         "archive_reason": row["archive_reason"],
     }
-    extra = json.loads(row["metadata_json"] or "{}")
-    metadata.update(extra)
+    extra = _load_metadata_json(row)
+    if extra is not None:
+        metadata.update(extra)
     return {
         "id": row["id"],
         "content": row["content"],
@@ -209,31 +223,35 @@ class VectorMemory:
                 await self._merge_duplicate(meta_table, existing, entry)
                 return str(existing["id"])
 
-        async with self._conn.execute(
-            f"INSERT INTO {vec_table}(user_id, embedding) VALUES (?, ?)",  # noqa: S608
-            (entry.user_id, embedding),
-        ) as cur:
-            vec_rowid = cur.lastrowid
+        try:
+            async with self._conn.execute(
+                f"INSERT INTO {vec_table}(user_id, embedding) VALUES (?, ?)",  # noqa: S608
+                (entry.user_id, embedding),
+            ) as cur:
+                vec_rowid = cur.lastrowid
 
-        await self._conn.execute(
-            f"""INSERT INTO {meta_table}
-                (id, vec_rowid, user_id, content, trust_level, strength,
-                 emotion_weight, created_at, last_accessed_at, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",  # noqa: S608
-            (
-                entry_id,
-                vec_rowid,
-                entry.user_id,
-                entry.content,
-                entry.trust_level.value,
-                entry.strength,
-                entry.emotion_weight,
-                entry.created_at.isoformat(),
-                entry.last_accessed_at.isoformat(),
-                _serialize_metadata(entry),
-            ),
-        )
-        await self._conn.commit()
+            await self._conn.execute(
+                f"""INSERT INTO {meta_table}
+                    (id, vec_rowid, user_id, content, trust_level, strength,
+                     emotion_weight, created_at, last_accessed_at, metadata_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",  # noqa: S608
+                (
+                    entry_id,
+                    vec_rowid,
+                    entry.user_id,
+                    entry.content,
+                    entry.trust_level.value,
+                    entry.strength,
+                    entry.emotion_weight,
+                    entry.created_at.isoformat(),
+                    entry.last_accessed_at.isoformat(),
+                    _serialize_metadata(entry),
+                ),
+            )
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
         return entry_id
 
     async def _find_near_duplicate(
@@ -260,7 +278,9 @@ class VectorMemory:
             return None
         if float(row["distance"]) > self._config.dedup_distance_threshold:
             return None
-        extras = json.loads(row["metadata_json"] or "{}")
+        extras = _load_metadata_json(row)
+        if extras is None:
+            return None
         if extras.get("flashbulb", False):
             strength = float(row["strength"])
         else:
@@ -363,7 +383,9 @@ class VectorMemory:
         to_archive: list[tuple[str, float]] = []
 
         for row in rows:
-            extras = json.loads(row["metadata_json"] or "{}")
+            extras = _load_metadata_json(row)
+            if extras is None:
+                continue
             is_flashbulb = bool(extras.get("flashbulb", False))
             decay_origin = ensure_aware(datetime.fromisoformat(row["last_accessed_at"]))
             if is_flashbulb:
@@ -438,7 +460,9 @@ class VectorMemory:
         results: list[dict[str, Any]] = []
         to_archive: list[tuple[str, float]] = []
         for row in rows:
-            extras = json.loads(row["metadata_json"] or "{}")
+            extras = _load_metadata_json(row)
+            if extras is None:
+                continue
             is_flashbulb = bool(extras.get("flashbulb", False))
             if is_flashbulb:
                 current_strength = float(row["strength"])

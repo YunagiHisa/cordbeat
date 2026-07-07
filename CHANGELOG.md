@@ -19,6 +19,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Vector memory resilience from source audit #12.** A memory row with
+  corrupt metadata JSON no longer breaks semantic/episodic recall or
+  memory writes for that user: corrupt rows are skipped with a warning
+  (without archiving them) and a corrupt near-duplicate candidate falls
+  back to a normal insert. Vector and metadata inserts roll back together
+  on failure so aborted writes leave no orphan vectors.
 - **Proposal pipeline and AI-retry robustness from source audit #11.** A
   proposal row with corrupt metadata JSON no longer blocks execution or
   expiry of every other proposal (invalid rows are detected in SQL via

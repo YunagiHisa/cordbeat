@@ -409,6 +409,109 @@ class TestFlashbulbMemory:
         assert results[0]["metadata"]["emotion"] == "joy"
 
 
+class TestVectorMetadataRobustness:
+    async def test_search_semantic_skips_corrupt_metadata_json(
+        self,
+        memory: MemoryStore,
+    ) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        corrupt = MemoryEntry(
+            id="semantic-corrupt",
+            user_id="u1",
+            layer=MemoryLayer.SEMANTIC,
+            content="User likes sour lemon candy",
+        )
+        valid = MemoryEntry(
+            id="semantic-valid",
+            user_id="u1",
+            layer=MemoryLayer.SEMANTIC,
+            content="User likes striped mint candy",
+        )
+        await memory.add_semantic_memory(corrupt)
+        await memory.add_semantic_memory(valid)
+        await memory._conn.execute(
+            "UPDATE semantic_memory SET metadata_json = ? WHERE id = ?",
+            ('{"broken"', corrupt.id),
+        )
+        await memory._conn.commit()
+
+        results = await memory.search_semantic("u1", "striped mint candy", n_results=5)
+
+        assert [result["id"] for result in results] == ["semantic-valid"]
+
+    async def test_add_semantic_ignores_corrupt_duplicate_candidate(
+        self,
+        memory: MemoryStore,
+    ) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        original = MemoryEntry(
+            id="semantic-corrupt-duplicate",
+            user_id="u1",
+            layer=MemoryLayer.SEMANTIC,
+            content="User keeps a pocket sketchbook",
+        )
+        await memory.add_semantic_memory(original)
+        await memory._conn.execute(
+            "UPDATE semantic_memory SET metadata_json = ? WHERE id = ?",
+            ('{"broken"', original.id),
+        )
+        await memory._conn.commit()
+
+        duplicate = MemoryEntry(
+            id="semantic-new-after-corrupt",
+            user_id="u1",
+            layer=MemoryLayer.SEMANTIC,
+            content="User keeps a pocket sketchbook",
+        )
+
+        inserted_id = await memory.add_semantic_memory(duplicate)
+
+        assert inserted_id == "semantic-new-after-corrupt"
+        cur = await memory._conn.execute(
+            "SELECT COUNT(*) AS count FROM semantic_memory WHERE user_id = ?",
+            ("u1",),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        assert row is not None
+        assert row["count"] == 2
+
+    async def test_get_episodic_since_skips_corrupt_metadata_json(
+        self,
+        memory: MemoryStore,
+    ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        corrupt = MemoryEntry(
+            id="episodic-corrupt",
+            user_id="u1",
+            layer=MemoryLayer.EPISODIC,
+            content="Alice talked about a broken note",
+            created_at=datetime(2026, 7, 5, 2, 0, tzinfo=UTC),
+            last_accessed_at=datetime(2026, 7, 5, 2, 0, tzinfo=UTC),
+        )
+        valid = MemoryEntry(
+            id="episodic-valid",
+            user_id="u1",
+            layer=MemoryLayer.EPISODIC,
+            content="Alice talked about a clean note",
+            created_at=datetime(2026, 7, 5, 1, 0, tzinfo=UTC),
+            last_accessed_at=datetime(2026, 7, 5, 1, 0, tzinfo=UTC),
+        )
+        await memory.add_episodic_memory(valid)
+        await memory.add_episodic_memory(corrupt)
+        await memory._conn.execute(
+            "UPDATE episodic_memory SET metadata_json = ? WHERE id = ?",
+            ('{"broken"', corrupt.id),
+        )
+        await memory._conn.commit()
+
+        results = await memory.get_episodic_since(
+            "u1", "2026-07-05T00:00:00+00:00", limit=10
+        )
+
+        assert [result["id"] for result in results] == ["episodic-valid"]
+
+
 class TestResolvePlatformUser:
     async def test_resolve_linked_user(self, memory: MemoryStore) -> None:
         await memory.get_or_create_user("u1", "Alice")

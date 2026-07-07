@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any
@@ -56,7 +56,7 @@ class GatewayMessage:
     adapter_id: str
     platform_user_id: str
     content: str
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
     metadata: dict[str, Any] = field(default_factory=dict)
     images: list[str] = field(default_factory=list)  # base64-encoded image data
     is_voice: bool = False  # True if the message originated from a voice
@@ -89,7 +89,7 @@ class PlatformLink:
     user_id: str
     adapter_id: str
     platform_user_id: str
-    linked_at: datetime = field(default_factory=datetime.now)
+    linked_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 # ── HEARTBEAT ─────────────────────────────────────────────────────────
@@ -224,8 +224,8 @@ class MemoryEntry:
     trust_level: TrustLevel = TrustLevel.NORMAL
     strength: float = 1.0
     emotion_weight: float = 0.0
-    created_at: datetime = field(default_factory=datetime.now)
-    last_accessed_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
+    last_accessed_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

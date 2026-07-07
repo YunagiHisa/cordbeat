@@ -225,6 +225,18 @@ class SlackAdapter(RetryableConnection):
             hinted = str(metadata.get("channel_id") or metadata.get("channel") or "")
         channel = hinted or self._user_channels.get(platform_user_id)
         if not channel:
+            allow_dm_fallback = (
+                True
+                if metadata is None
+                else metadata.get("allow_dm_fallback", True) is not False
+            )
+            if not allow_dm_fallback:
+                logger.info(
+                    "Slack channel unknown for user %s and DM fallback disabled; "
+                    "dropping message",
+                    platform_user_id,
+                )
+                return
             # Fall back to opening a DM
             try:
                 resp = await self._web_client.conversations_open(users=platform_user_id)

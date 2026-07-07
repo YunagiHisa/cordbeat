@@ -304,10 +304,13 @@ def normalize(raw_dsl: str) -> NormalizedDrawDSL:
             truncated = True
             break
 
-    for repeat_lineno in repeat_stack:
-        validation_issues.append(
-            f"line {repeat_lineno} has REPEAT without matching END"
-        )
+    if truncated:
+        normalized.extend("END" for _ in repeat_stack)
+    else:
+        for repeat_lineno in repeat_stack:
+            validation_issues.append(
+                f"line {repeat_lineno} has REPEAT without matching END"
+            )
 
     if not has_content:
         return NormalizedDrawDSL("", tuple(validation_issues), truncated)

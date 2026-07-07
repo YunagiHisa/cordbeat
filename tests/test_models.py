@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import UTC
+
 from cordbeat.models import (
     Emotion,
     EmotionState,
+    GatewayMessage,
     HeartbeatAction,
     HeartbeatDecision,
     MemoryLayer,
+    MessageType,
+    PlatformLink,
     SafetyLevel,
     TrustLevel,
     UserSummary,
@@ -37,6 +42,24 @@ class TestUserSummary:
     def test_clamp_attention(self) -> None:
         user = UserSummary(user_id="u1", display_name="T", attention_score=2.0)
         assert user.attention_score == 1.0
+
+
+class TestTimestamps:
+    def test_default_model_datetimes_are_timezone_aware(self) -> None:
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="u1",
+            content="hi",
+        )
+        link = PlatformLink(
+            user_id="u1",
+            adapter_id="test",
+            platform_user_id="p1",
+        )
+
+        assert msg.timestamp.tzinfo is UTC
+        assert link.linked_at.tzinfo is UTC
 
 
 class TestHeartbeatDecision:

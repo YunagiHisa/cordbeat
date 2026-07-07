@@ -3763,6 +3763,46 @@ class TestReActLoop:
         contents = [c[0][1].content for c in calls]
         assert any("The answer is 42" in c for c in contents)
 
+    async def test_react_pre_text_strips_draw_tags(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        async def _generate(**kw: object) -> str:
+            prompt = str(kw.get("prompt", ""))
+            if "recall keywords" in prompt.lower():
+                return '{"keywords": []}'
+            if "what emotion" in prompt.lower():
+                return '{"emotion": "joy", "intensity": 0.7}'
+            if "extract memory" in prompt.lower():
+                return (
+                    '{"topic": "t", "emotional_tone": "n",'
+                    ' "facts": [], "episode_summary": ""}'
+                )
+            return "Look [DRAW: private prompt] now. [SKILL: test_tool]"
+
+        mock_ai.generate = AsyncMock(side_effect=_generate)
+        mock_ai.generate_chat = AsyncMock(return_value="Done.")
+
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        eng._skills._skills["test_tool"] = self._make_safe_skill("tool output")
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="Run",
+            )
+        )
+
+        sent = [c[0][1].content for c in mock_gateway.send_to_adapter.call_args_list]
+        assert any("Look  now." in content for content in sent)
+        assert all("[DRAW:" not in content for content in sent)
+
     async def test_react_continuation_retryable_http_error_retries_until_recovered(
         self,
         mock_ai: AsyncMock,

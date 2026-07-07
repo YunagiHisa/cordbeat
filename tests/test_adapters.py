@@ -2207,6 +2207,38 @@ class TestSlackAdapter:
             text="hello",
         )
 
+    async def test_send_to_slack_dm_fallback_when_metadata_missing(self) -> None:
+        from cordbeat.adapters.slack import SlackAdapter
+
+        adapter = SlackAdapter(AdapterConfig(options={}))
+        adapter._web_client = AsyncMock()
+        adapter._web_client.conversations_open.return_value = {
+            "channel": {"id": "Dnew"}
+        }
+
+        await adapter._send_to_slack("U123", "hello")
+
+        adapter._web_client.conversations_open.assert_awaited_once_with(users="U123")
+        adapter._web_client.chat_postMessage.assert_awaited_once_with(
+            channel="Dnew",
+            text="hello",
+        )
+
+    async def test_send_to_slack_respects_disabled_dm_fallback(self) -> None:
+        from cordbeat.adapters.slack import SlackAdapter
+
+        adapter = SlackAdapter(AdapterConfig(options={}))
+        adapter._web_client = AsyncMock()
+
+        await adapter._send_to_slack(
+            "U123",
+            "hello",
+            metadata={"allow_dm_fallback": False},
+        )
+
+        adapter._web_client.conversations_open.assert_not_awaited()
+        adapter._web_client.chat_postMessage.assert_not_awaited()
+
 
 class TestLineAdapter:
     async def test_forward_to_core_includes_channel_scope(self) -> None:

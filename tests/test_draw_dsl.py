@@ -104,6 +104,37 @@ def test_oversized_dsl_is_truncated_not_rejected() -> None:
     assert len(body) == draw_dsl.MAX_AUTO_LINES
 
 
+def test_truncated_repeat_block_is_closed_without_validation_issue() -> None:
+    raw = "\n".join(
+        ["REPEAT 3"] + [f"CIRCLE {i} {i} 5 red FILL" for i in range(400)]
+    )
+
+    result = normalize(raw)
+
+    assert result.truncated is True
+    assert not any(
+        "REPEAT without matching END" in issue
+        for issue in result.validation_issues
+    )
+    lines = result.normalized_dsl.splitlines()
+    assert lines.count("REPEAT 3") == lines.count("END")
+    assert lines[-1] == "OUTPUT"
+
+
+def test_balanced_repeat_under_limit_is_unchanged() -> None:
+    result = normalize(
+        "SIZE 100 100\n"
+        "CANVAS white\n"
+        "REPEAT 2\n"
+        "CIRCLE 10 10 5 red FILL\n"
+        "END\n"
+    )
+
+    assert result.truncated is False
+    assert result.validation_issues == ()
+    assert "REPEAT 2\nCIRCLE 10 10 5 red FILL\nEND" in result.normalized_dsl
+
+
 def test_normalize_reports_unbalanced_repeat_blocks() -> None:
     result = normalize(
         "REPEAT 3\n"

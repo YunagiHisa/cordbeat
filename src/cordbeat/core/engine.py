@@ -1600,7 +1600,7 @@ class CoreEngine:
 
             # D13: Extract pre-tag text and flush to user immediately
             first_tag_start = tags[0].start_index
-            pre_text = response[:first_tag_start].strip()
+            pre_text = DRAW_TAG_RE.sub("", response[:first_tag_start]).strip()
             if pre_text and not shared_voice:
                 pre_msg = GatewayMessage(
                     type=MessageType.MESSAGE,

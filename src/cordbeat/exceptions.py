@@ -9,18 +9,16 @@ code should raise typed exceptions below.
 Hierarchy
 ---------
 - CordBeatError
-    - SoulPermissionError
     - SkillError
-        - SkillPermissionError
-        - SkillSandboxError
-        - SkillValidationError   (also subclasses ``ValueError``)
+        - SkillExecutionError
+        - SkillRateLimitError
     - MemorySubsystemError
     - AIBackendError
     - OutputValidationError
 
-The existing concrete classes continue to live in the modules where they
-were first defined (``models``, ``skill_sandbox``, ``skill_validator``);
-this module re-exports them so new callers have a single import site.
+Other typed errors live with their owning subsystems, such as
+``SoulPermissionError`` in ``models.py`` and skill policy/sandbox validation
+errors under ``cordbeat.skills``.
 """
 
 from __future__ import annotations

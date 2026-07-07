@@ -19,6 +19,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Draw truncation, Slack DM routing, and model datetime fixes from source
+  audit #10.** Draw DSL normalization now closes REPEAT blocks that were cut
+  open by the line cap instead of manufacturing a validation issue that
+  forced every retry to fail, the Slack adapter respects
+  `allow_dm_fallback=False` so channel replies no longer leak to DMs, ReAct
+  pre-tool text strips [DRAW: ...] tags before flushing to the user, model
+  dataclass timestamps default to timezone-aware UTC, and the exceptions
+  module docstring matches the real hierarchy.
 - **Telegram delivery and approval-UI hardening from source audit #9.** Telegram
   replies now split at the 4096-character API limit via a shared `split_message`
   helper (also reused by Discord), over-long photo captions are delivered as a

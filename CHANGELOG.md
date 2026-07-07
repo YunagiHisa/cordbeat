@@ -19,6 +19,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Telegram delivery and approval-UI hardening from source audit #9.** Telegram
+  replies now split at the 4096-character API limit via a shared `split_message`
+  helper (also reused by Discord), over-long photo captions are delivered as a
+  follow-up text message instead of silently failing, skill-approval buttons on
+  both Discord and Telegram verify the owner before acting and use neutral
+  wording when ownership is unknown, and the Gateway closes a stale WebSocket
+  before accepting a reconnecting adapter with the same ID.
 - **AI validation and prompt robustness from source audit #8.** ReAct tool-error
   output is truncated and JSON-escaped like the success path, `validated_ai_json`
   survives validator crashes by retrying, summary/soul validators reject

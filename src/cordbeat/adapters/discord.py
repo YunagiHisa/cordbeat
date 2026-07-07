@@ -18,7 +18,12 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from cordbeat.adapters._utils import AdapterFilter, get_judge_backend, judge_yes_no
+from cordbeat.adapters._utils import (
+    AdapterFilter,
+    get_judge_backend,
+    judge_yes_no,
+    split_message,
+)
 from cordbeat.config import AdapterConfig, RVCConfig, STTConfig, TTSConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -1109,21 +1114,7 @@ class DiscordAdapter(RetryableConnection):
             ]
 
         # Discord 400s on empty string content; use None to allow files-only messages.
-        # Discord enforces a 2000-character limit per message — split long content.
-        chunks: list[str] = []
-        if content:
-            remaining = content
-            while len(remaining) > _DISCORD_MESSAGE_LIMIT:
-                # Prefer splitting on a newline boundary within the limit
-                split_at = remaining.rfind("\n", 0, _DISCORD_MESSAGE_LIMIT)
-                if split_at <= 0:
-                    split_at = remaining.rfind(" ", 0, _DISCORD_MESSAGE_LIMIT)
-                if split_at <= 0:
-                    split_at = _DISCORD_MESSAGE_LIMIT
-                chunks.append(remaining[:split_at])
-                remaining = remaining[split_at:].lstrip("\n")
-            if remaining:
-                chunks.append(remaining)
+        chunks = split_message(content, _DISCORD_MESSAGE_LIMIT)
 
         if not chunks and not decoded_images:
             return

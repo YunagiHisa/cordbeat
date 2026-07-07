@@ -352,6 +352,9 @@ class GatewayServer:
                     )
                     return
 
+            old_websocket = self._connections.get(adapter_id)
+            if old_websocket is not None and old_websocket is not websocket:
+                await old_websocket.close(1012, "Replaced by new connection")
             self._connections[adapter_id] = websocket
             logger.info("Adapter connected: %s", adapter_id)
 

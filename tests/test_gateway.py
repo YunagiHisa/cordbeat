@@ -264,6 +264,27 @@ class TestGatewayServer:
         ack = json.loads(mock_ws.send.call_args_list[0][0][0])
         assert ack["type"] == "ack"
 
+    async def test_handle_connection_closes_previous_adapter_socket(self) -> None:
+        config = GatewayConfig()
+        queue = MessageQueue()
+        server = GatewayServer(config, queue)
+
+        old_ws = AsyncMock()
+        old_ws.close = AsyncMock()
+        server._connections["telegram"] = old_ws
+
+        new_ws = AsyncMock()
+        new_ws.recv = AsyncMock(return_value=json.dumps({"adapter_id": "telegram"}))
+        new_ws.send = AsyncMock()
+        new_ws.__aiter__ = lambda self: _AsyncIter([])
+
+        await server._handle_connection(new_ws)
+
+        old_ws.close.assert_awaited_once_with(
+            1012,
+            "Replaced by new connection",
+        )
+
     async def test_handle_connection_does_not_remove_newer_reconnect(self) -> None:
         config = GatewayConfig()
         queue = MessageQueue()

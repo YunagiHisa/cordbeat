@@ -7,10 +7,11 @@ import base64
 import io
 import json
 import logging
+from collections import OrderedDict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from cordbeat.adapters._utils import AdapterFilter
+from cordbeat.adapters._utils import AdapterFilter, split_message
 from cordbeat.config import AdapterConfig, STTConfig, TTSConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -24,6 +25,9 @@ ADAPTER_ID = "telegram"
 _MAX_IMAGES_PER_MESSAGE = 4
 _IMAGE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024
 _TYPING_REFRESH_SECONDS = 4
+_TELEGRAM_MESSAGE_LIMIT = 4096
+_TELEGRAM_CAPTION_LIMIT = 1024
+_PENDING_SKILL_CONFIRM_MAX = 1_000
 _CORE_BOT_COMMANDS = (
     ("approve", "Approve a pending CordBeat proposal"),
     ("reject", "Reject a pending CordBeat proposal"),
@@ -78,6 +82,7 @@ class TelegramAdapter(RetryableConnection):
         self._typing_tasks: dict[int, asyncio.Task[None]] = {}
         # Track which users last communicated via voice (for TTS routing)
         self._voice_users: set[str] = set()
+        self._pending_skill_confirm_owners: OrderedDict[str, str] = OrderedDict()
 
         self._stt: STTBackend | None = None
         self._tts: TTSBackend | None = None
@@ -321,12 +326,17 @@ class TelegramAdapter(RetryableConnection):
                 await query.answer("Unknown action")
                 return
 
-            await query.answer()
             sent = False
+            user = update.effective_user
+            platform_user_id = str(user.id) if user is not None else ""
+            owner_id = self._pending_skill_confirm_owners.get(proposal_id)
+            if owner_id is not None and owner_id != platform_user_id:
+                await query.answer("This approval isn't yours", show_alert=True)
+                return
+
+            await query.answer()
             if self._ws is not None:
                 try:
-                    user = update.effective_user
-                    platform_user_id = str(user.id) if user is not None else ""
                     await self._ws.send(
                         json.dumps(
                             {
@@ -342,13 +352,19 @@ class TelegramAdapter(RetryableConnection):
                 except Exception:
                     logger.warning("Failed to forward skill confirm to Core")
 
-            label_map = {
-                "approve": "✅ Approved once",
-                "reject": "❌ Denied",
-            }
-            label = label_map[action]
+            if owner_id is None and sent:
+                verb = "approve" if action == "approve" else "deny"
+                label = f"📨 Sent {verb} request — see the reply."
+            else:
+                label_map = {
+                    "approve": "✅ Approved once",
+                    "reject": "❌ Denied",
+                }
+                label = label_map[action]
             if not sent:
                 label = "⚠️ Failed to send approval to CordBeat Core."
+            else:
+                self._pending_skill_confirm_owners.pop(proposal_id, None)
             try:
                 await query.edit_message_reply_markup(reply_markup=None)
                 await query.message.reply_text(label)
@@ -451,6 +467,11 @@ class TelegramAdapter(RetryableConnection):
                 parse_mode="Markdown",
                 reply_markup=keyboard,
             )
+            if proposal_id:
+                self._pending_skill_confirm_owners[proposal_id] = platform_user_id
+                self._pending_skill_confirm_owners.move_to_end(proposal_id)
+                if len(self._pending_skill_confirm_owners) > _PENDING_SKILL_CONFIRM_MAX:
+                    self._pending_skill_confirm_owners.popitem(last=False)
         except ImportError:
             await super()._dispatch_skill_confirm(platform_user_id, data)
         except Exception:
@@ -602,10 +623,11 @@ class TelegramAdapter(RetryableConnection):
 
         self._stop_typing(chat_id)
         try:
-            await self._app.bot.send_message(
-                chat_id=chat_id,
-                text=content,
-            )
+            for chunk in split_message(content, _TELEGRAM_MESSAGE_LIMIT):
+                await self._app.bot.send_message(
+                    chat_id=chat_id,
+                    text=chunk,
+                )
         except Exception:
             logger.exception(
                 "Failed to send message to Telegram chat %s",
@@ -633,12 +655,17 @@ class TelegramAdapter(RetryableConnection):
         import base64  # noqa: PLC0415
 
         sent_any = False
+        send_caption_as_text = bool(caption) and len(caption) > _TELEGRAM_CAPTION_LIMIT
         for idx, b64 in enumerate(images):
             try:
                 raw = base64.b64decode(b64)
                 photo_io = io.BytesIO(raw)
                 photo_io.name = f"draw_{idx + 1}.png"
-                img_caption = caption if idx == 0 else None
+                img_caption = (
+                    caption
+                    if idx == 0 and not send_caption_as_text
+                    else None
+                )
                 await self._app.bot.send_photo(
                     chat_id=chat_id,
                     photo=photo_io,
@@ -651,4 +678,6 @@ class TelegramAdapter(RetryableConnection):
                 )
 
         if not sent_any:
+            await self._send_to_telegram(platform_user_id, caption)
+        elif send_caption_as_text:
             await self._send_to_telegram(platform_user_id, caption)

@@ -94,6 +94,27 @@ def normalize_inbound_text(text: str, *, adapter_id: str) -> str | None:
     return text[:MAX_INBOUND_TEXT_CHARS]
 
 
+def split_message(text: str, limit: int) -> list[str]:
+    """Split text into chunks, preferring newline/space boundaries."""
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    if not text:
+        return []
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > limit:
+        split_at = remaining.rfind("\n", 0, limit)
+        if split_at <= 0:
+            split_at = remaining.rfind(" ", 0, limit)
+        if split_at <= 0:
+            split_at = limit
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:].lstrip("\n ")
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
 async def judge_yes_no(prompt: str, *, fail_open: bool = False) -> bool:
     """Run the lightweight judge with a minimal no-thinking yes/no response."""
 

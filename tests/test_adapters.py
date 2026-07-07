@@ -1237,6 +1237,25 @@ class TestTelegramAdapter:
             text="hello",
         )
 
+    async def test_send_to_telegram_splits_long_content(self) -> None:
+        from cordbeat.adapters.telegram import TelegramAdapter
+
+        adapter = TelegramAdapter(AdapterConfig(options={"token": "test"}))
+        adapter._app = MagicMock()
+        adapter._app.bot.send_message = AsyncMock()
+        adapter._chat_map["user1"] = 12345
+        long_text = "x" * 5000
+
+        await adapter._send_to_telegram("user1", long_text)
+
+        assert adapter._app.bot.send_message.await_count == 2
+        sent = [
+            call.kwargs["text"]
+            for call in adapter._app.bot.send_message.await_args_list
+        ]
+        assert "".join(sent) == long_text
+        assert all(len(chunk) <= 4096 for chunk in sent)
+
     async def test_send_to_telegram_dm_fallback(self) -> None:
         from cordbeat.adapters.telegram import TelegramAdapter
 
@@ -1517,6 +1536,28 @@ class TestTelegramAdapter:
         assert first_kwargs["caption"] == "look"
         assert second_kwargs["caption"] is None
 
+    async def test_send_images_long_caption_sent_as_text(self) -> None:
+        import base64
+
+        from cordbeat.adapters.telegram import TelegramAdapter
+
+        adapter = TelegramAdapter(AdapterConfig(options={"token": "t"}))
+        adapter._app = MagicMock()
+        adapter._app.bot.send_photo = AsyncMock()
+        adapter._app.bot.send_message = AsyncMock()
+        adapter._chat_map["u1"] = 42
+        b64 = base64.b64encode(b"png-bytes").decode("ascii")
+        caption = "c" * 1200
+
+        await adapter._send_images_to_telegram("u1", caption, [b64])
+
+        adapter._app.bot.send_photo.assert_awaited_once()
+        assert adapter._app.bot.send_photo.call_args.kwargs["caption"] is None
+        adapter._app.bot.send_message.assert_awaited_once_with(
+            chat_id=42,
+            text=caption,
+        )
+
     async def test_send_images_all_fail_falls_back_to_text(self) -> None:
         import base64
 
@@ -1778,6 +1819,88 @@ class TestTelegramAdapter:
         assert payload["content"] == "/approve prop-9"
         assert payload["platform_user_id"] == "5"
         query.answer.assert_awaited_once()
+
+    async def test_callback_handler_rejects_non_owner_without_core_send(
+        self,
+    ) -> None:
+        from cordbeat.adapters.telegram import TelegramAdapter
+
+        adapter = TelegramAdapter(AdapterConfig(options={"token": "t"}))
+        _, handlers = await _start_telegram_and_capture(adapter)
+        adapter._ws = AsyncMock()
+        adapter._pending_skill_confirm_owners["prop-9"] = "5"
+
+        update = MagicMock()
+        query = update.callback_query
+        query.data = "skill_confirm:approve:prop-9"
+        query.answer = AsyncMock()
+        query.edit_message_reply_markup = AsyncMock()
+        query.message.reply_text = AsyncMock()
+        update.effective_user.id = 6
+
+        await handlers["callback"](update, MagicMock())
+
+        adapter._ws.send.assert_not_awaited()
+        query.answer.assert_awaited_once_with(
+            "This approval isn't yours",
+            show_alert=True,
+        )
+        query.edit_message_reply_markup.assert_not_awaited()
+        query.message.reply_text.assert_not_awaited()
+
+    async def test_callback_handler_clears_owner_even_if_edit_fails(self) -> None:
+        from cordbeat.adapters.telegram import TelegramAdapter
+
+        adapter = TelegramAdapter(AdapterConfig(options={"token": "t"}))
+        _, handlers = await _start_telegram_and_capture(adapter)
+        adapter._ws = AsyncMock()
+        adapter._pending_skill_confirm_owners["prop-9"] = "5"
+
+        update = MagicMock()
+        query = update.callback_query
+        query.data = "skill_confirm:approve:prop-9"
+        query.answer = AsyncMock()
+        query.edit_message_reply_markup = AsyncMock(
+            side_effect=RuntimeError("message too old")
+        )
+        query.message.reply_text = AsyncMock()
+        update.effective_user.id = 5
+
+        await handlers["callback"](update, MagicMock())
+
+        adapter._ws.send.assert_awaited_once()
+        assert "prop-9" not in adapter._pending_skill_confirm_owners
+
+    async def test_dispatch_skill_confirm_owner_cache_is_bounded(self) -> None:
+        from cordbeat.adapters.telegram import TelegramAdapter
+
+        adapter = TelegramAdapter(AdapterConfig(options={"token": "t"}))
+        adapter._app = MagicMock()
+        adapter._app.bot = MagicMock()
+        adapter._app.bot.send_message = AsyncMock()
+        adapter._chat_map["user1"] = 12345
+
+        tg_mock = MagicMock()
+        tg_mock.InlineKeyboardButton = MagicMock(side_effect=lambda text, **kw: text)
+        tg_mock.InlineKeyboardMarkup = MagicMock(return_value="keyboard")
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"telegram": tg_mock, "telegram.ext": MagicMock()},
+            ),
+            patch("cordbeat.adapters.telegram._PENDING_SKILL_CONFIRM_MAX", 3),
+        ):
+            for i in range(4):
+                data = {
+                    "content": "🔧 run?",
+                    "metadata": {"proposal_id": f"prop-{i}", "skill_name": "s"},
+                }
+                await adapter._dispatch_skill_confirm("user1", data)
+
+        assert len(adapter._pending_skill_confirm_owners) == 3
+        assert "prop-0" not in adapter._pending_skill_confirm_owners
+        assert "prop-3" in adapter._pending_skill_confirm_owners
 
     async def test_callback_handler_acknowledges_before_core_send_failure(self) -> None:
         from cordbeat.adapters.telegram import TelegramAdapter

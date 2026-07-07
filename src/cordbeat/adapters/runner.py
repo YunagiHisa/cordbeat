@@ -101,6 +101,7 @@ async def _run_adapter(adapter_name: str, config_path: str) -> None:
             adapter_cfg,
             stt_config=config.stt,
             tts_config=config.tts,
+            rvc_config=config.rvc,
             soul_name=soul_name,
         )
     elif adapter_name == "telegram":

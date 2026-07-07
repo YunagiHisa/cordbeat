@@ -804,7 +804,7 @@ class TestDiscordSkillConfirm:
             assert view.timeout is None
 
             inter = MagicMock()
-            inter.user.id = 99
+            inter.user.id = "u1"
             inter.message.embeds = [embed]
             inter.response.defer = AsyncMock()
             inter.edit_original_response = AsyncMock()
@@ -817,9 +817,61 @@ class TestDiscordSkillConfirm:
         assert "/approve p1" in sent
         assert "/reject p1" in sent
         payloads = [json.loads(c.args[0]) for c in adapter._ws.send.call_args_list]
-        assert {p["platform_user_id"] for p in payloads} == {"99"}
+        assert {p["platform_user_id"] for p in payloads} == {"u1"}
         assert inter.response.defer.await_count == 2
         assert inter.edit_original_response.await_count == 2
+
+    async def test_skill_confirm_rejects_non_owner_without_core_send(self) -> None:
+        adapter = self._adapter()
+        channel = MagicMock()
+        channel.send = AsyncMock()
+        adapter._bot = MagicMock()
+        adapter._bot.get_channel.return_value = channel
+        adapter._user_channels["owner"] = 123
+        adapter._ws = AsyncMock()
+        data = {
+            "content": "fallback",
+            "metadata": {"proposal_id": "p-owner", "skill_name": "draw"},
+        }
+        with patch.dict("sys.modules", {"discord": _discord_ui_mock()}):
+            await adapter._dispatch_skill_confirm("owner", data)
+            view = channel.send.call_args.kwargs["view"]
+            embed = channel.send.call_args.kwargs["embed"]
+
+            inter = MagicMock()
+            inter.user.id = "intruder"
+            inter.message.embeds = [embed]
+            inter.response.defer = AsyncMock()
+            inter.followup.send = AsyncMock()
+            inter.edit_original_response = AsyncMock()
+            await view.allow_once(inter, MagicMock())
+
+        adapter._ws.send.assert_not_awaited()
+        inter.followup.send.assert_awaited_once_with(
+            "This approval belongs to another user.",
+            ephemeral=True,
+        )
+        inter.edit_original_response.assert_not_awaited()
+
+    async def test_skill_confirm_cache_miss_uses_neutral_sent_copy(self) -> None:
+        adapter = self._adapter()
+        adapter._ws = AsyncMock()
+        discord = _discord_ui_mock()
+        view = adapter._make_skill_confirm_view(discord)
+        embed = discord.Embed(description="Approve `draw`?")
+        embed.set_footer(text="Proposal ID: p-miss")
+        inter = MagicMock()
+        inter.user.id = "u1"
+        inter.message.embeds = [embed]
+        inter.response.defer = AsyncMock()
+        inter.edit_original_response = AsyncMock()
+
+        await view.allow_once(inter, MagicMock())
+
+        adapter._ws.send.assert_awaited_once()
+        content = inter.edit_original_response.call_args.kwargs["content"]
+        assert "Sent approve request" in content
+        assert "see the bot's reply" in content
 
     async def test_button_acknowledges_before_core_send_failure(self) -> None:
         adapter = self._adapter()
@@ -848,7 +900,7 @@ class TestDiscordSkillConfirm:
             embed = channel.send.call_args.kwargs["embed"]
 
             inter = MagicMock()
-            inter.user.id = 55
+            inter.user.id = "u1"
             inter.message.embeds = [embed]
             inter.response.defer = AsyncMock()
             inter.edit_original_response = AsyncMock()

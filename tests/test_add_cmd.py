@@ -186,6 +186,22 @@ def test_run_add_adapter_discord(tmp_path: Path) -> None:
     assert "BOT-TOKEN-123" in env_path.read_text(encoding="utf-8")
 
 
+def test_run_add_adapter_slack_writes_real_option_keys(tmp_path: Path) -> None:
+    cfg_path = _make_config(tmp_path)
+
+    inputs = iter(["1", "4", "Y", "xoxb-123", "xapp-456"])
+    with (
+        patch("cordbeat.tools.add_cmd._ask", side_effect=lambda p, d="": next(inputs)),
+        patch("cordbeat.tools.add_cmd._is_importable", return_value=False),
+        patch("cordbeat.tools.add_cmd._install_packages", return_value=True),
+    ):
+        run_add(config_path=cfg_path)
+
+    env = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "CORDBEAT_ADAPTERS__SLACK__OPTIONS__BOT_TOKEN=xoxb-123" in env
+    assert "CORDBEAT_ADAPTERS__SLACK__OPTIONS__APP_TOKEN=xapp-456" in env
+
+
 def test_run_add_adapter_cli_warns(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

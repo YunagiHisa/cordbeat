@@ -333,12 +333,19 @@ class TestRunServiceCommandWindows:
             assert run_service_command("stop") == 0
             assert run_service_command("status") == 0
         verbs = [c.args[0][1] for c in mock_run.call_args_list]
-        assert verbs == ["/Run", "/End", "/Query"]
+        assert "/Run" in verbs
+        assert "/End" in verbs
+        assert "/Query" in verbs
+        task_names = [c.args[0][3] for c in mock_run.call_args_list]
+        assert "CordBeat" in task_names
+        assert "CordBeat-Discord" in task_names
 
     def test_uninstall_calls_schtasks_delete(self) -> None:
         with patch("cordbeat.tools.service.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             code = run_service_command("uninstall")
         assert code == 0
-        calls = [str(c) for c in mock_run.call_args_list]
-        assert any("Delete" in c for c in calls)
+        task_names = [c.args[0][3] for c in mock_run.call_args_list]
+        assert "CordBeat" in task_names
+        assert "CordBeat-Discord" in task_names
+        assert "CordBeat-Whatsapp" in task_names

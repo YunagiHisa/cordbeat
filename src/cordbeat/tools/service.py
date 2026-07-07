@@ -275,6 +275,17 @@ def _launchd_uninstall() -> None:
 # ── Windows Task Scheduler ────────────────────────────────────────────────────
 
 _TASK_NAME = "CordBeat"
+_WINDOWS_ADAPTER_TASKS = (
+    "CordBeat-Discord",
+    "CordBeat-Telegram",
+    "CordBeat-Slack",
+    "CordBeat-Line",
+    "CordBeat-Whatsapp",
+)
+
+
+def _windows_task_names() -> list[str]:
+    return [_TASK_NAME, *_WINDOWS_ADAPTER_TASKS]
 
 
 def _windows_install(adapters: list[str] | None = None) -> None:
@@ -334,21 +345,28 @@ def _windows_install(adapters: list[str] | None = None) -> None:
 
 def _windows_start() -> None:
     subprocess.run(["schtasks", "/Run", "/TN", _TASK_NAME], check=True)
+    for task_name in _WINDOWS_ADAPTER_TASKS:
+        subprocess.run(["schtasks", "/Run", "/TN", task_name], check=False)
     print("▶  CordBeat started.")
 
 
 def _windows_stop() -> None:
     subprocess.run(["schtasks", "/End", "/TN", _TASK_NAME], check=True)
+    for task_name in _WINDOWS_ADAPTER_TASKS:
+        subprocess.run(["schtasks", "/End", "/TN", task_name], check=False)
     print("⏹  CordBeat stopped.")
 
 
 def _windows_status() -> None:
-    subprocess.run(["schtasks", "/Query", "/TN", _TASK_NAME, "/FO", "LIST"])
+    for task_name in _windows_task_names():
+        subprocess.run(["schtasks", "/Query", "/TN", task_name, "/FO", "LIST"])
 
 
 def _windows_uninstall() -> None:
     subprocess.run(["schtasks", "/Delete", "/TN", _TASK_NAME, "/F"])
-    print("🗑  CordBeat task removed.")
+    for task_name in _WINDOWS_ADAPTER_TASKS:
+        subprocess.run(["schtasks", "/Delete", "/TN", task_name, "/F"], check=False)
+    print("🗑  CordBeat tasks removed.")
 
 
 # ── dispatch ──────────────────────────────────────────────────────────────────

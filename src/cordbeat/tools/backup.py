@@ -3,8 +3,9 @@
 Uses SQLite's online backup API
 (:py:meth:`sqlite3.Connection.backup`) so the live agent does **not**
 need to be stopped during backup. The backup file is a fully-formed
-SQLite database; restore is an atomic file replacement (must be done
-with the agent stopped).
+SQLite database; restore replaces the database file (must be done with the agent
+stopped) and moves stale SQLite sidecar files (``-journal``, ``-wal``,
+``-shm``) aside before copying the backup into place.
 
 Entry points (registered via ``[project.scripts]`` in ``pyproject.toml``):
 
@@ -28,6 +29,7 @@ from pathlib import Path
 from cordbeat.config import Config, cordbeat_home, load_config
 
 logger = logging.getLogger(__name__)
+_SQLITE_HEADER = b"SQLite format 3\x00"
 
 
 def _resolve_db_path(config_path: str | None) -> Path:
@@ -50,6 +52,29 @@ def _online_backup(src: Path, dst: Path) -> None:
             dst_conn.close()
     finally:
         src_conn.close()
+
+
+def _is_sqlite_database(path: Path) -> bool:
+    try:
+        with path.open("rb") as f:
+            return f.read(len(_SQLITE_HEADER)) == _SQLITE_HEADER
+    except OSError:
+        return False
+
+
+def _sqlite_sidecars(path: Path) -> list[Path]:
+    return [Path(str(path) + suffix) for suffix in ("-journal", "-wal", "-shm")]
+
+
+def _move_sqlite_sidecars_for_restore(path: Path) -> None:
+    for sidecar in _sqlite_sidecars(path):
+        if not sidecar.exists():
+            continue
+        backup = Path(str(sidecar) + ".pre-restore")
+        if backup.exists():
+            backup.unlink()
+        sidecar.replace(backup)
+        logger.info("Existing SQLite sidecar saved to %s", backup)
 
 
 def backup_main(argv: list[str] | None = None) -> int:
@@ -113,6 +138,9 @@ def restore_main(argv: list[str] | None = None) -> int:
     if not src.exists():
         logger.error("Backup file does not exist: %s", src)
         return 2
+    if not _is_sqlite_database(src):
+        logger.error("Backup file is not a SQLite database: %s", src)
+        return 2
 
     dst = _resolve_db_path(args.config)
     if dst.exists() and not args.yes:
@@ -131,6 +159,7 @@ def restore_main(argv: list[str] | None = None) -> int:
         rollback = dst.with_suffix(dst.suffix + ".pre-restore")
         shutil.copy2(dst, rollback)
         logger.info("Existing database saved to %s", rollback)
+    _move_sqlite_sidecars_for_restore(dst)
 
     shutil.copy2(src, dst)
     logger.info("Restored %s -> %s", src, dst)

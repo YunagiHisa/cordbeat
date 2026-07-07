@@ -255,6 +255,18 @@ class TestOpenAICompatBackend:
             "A Nara deer ✨ I'll draw it with a gentle atmosphere."
         )
 
+    def test_sanitize_reasoning_artifacts_keeps_normal_english_phrases(
+        self,
+    ) -> None:
+        raw = "I should mention that Tokyo is rainy today."
+        assert not looks_like_reasoning_text(raw)
+        assert sanitize_reasoning_artifacts(raw) == raw
+
+    def test_sanitize_reasoning_artifacts_keeps_markdown_heading_text(self) -> None:
+        raw = "**Check out this song!** It fits your mood."
+        assert not looks_like_reasoning_text(raw)
+        assert sanitize_reasoning_artifacts(raw) == raw
+
     async def test_generate_calls_chat_completions(self) -> None:
         cfg = AIBackendConfig(
             provider="openai",

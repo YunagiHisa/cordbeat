@@ -91,6 +91,36 @@ def test_restore_overwrites_destination(tmp_path):
     assert _read_marker(pre) == "old"
 
 
+def test_restore_moves_stale_sqlite_sidecars(tmp_path):
+    db = tmp_path / "live.db"
+    _seed_db(db, "old")
+    journal = Path(str(db) + "-journal")
+    journal.write_bytes(b"stale")
+    cfg = _write_config(tmp_path, db)
+    snap = tmp_path / "snap.db"
+    _seed_db(snap, "new")
+
+    rc = backup_cli.restore_main(["--config", str(cfg), "--yes", str(snap)])
+
+    assert rc == 0
+    assert _read_marker(db) == "new"
+    assert not journal.exists()
+    assert Path(str(journal) + ".pre-restore").read_bytes() == b"stale"
+
+
+def test_restore_rejects_non_sqlite_source_without_touching_destination(tmp_path):
+    db = tmp_path / "live.db"
+    _seed_db(db, "keep")
+    cfg = _write_config(tmp_path, db)
+    bad = tmp_path / "not-a-db.bin"
+    bad.write_text("not sqlite", encoding="utf-8")
+
+    rc = backup_cli.restore_main(["--config", str(cfg), "--yes", str(bad)])
+
+    assert rc == 2
+    assert _read_marker(db) == "keep"
+
+
 def test_restore_returns_nonzero_when_source_missing(tmp_path):
     cfg = _write_config(tmp_path, tmp_path / "live.db")
     rc = backup_cli.restore_main(

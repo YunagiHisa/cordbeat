@@ -611,6 +611,26 @@ class DiscordAdapter(RetryableConnection):
                         exc_info=True,
                     )
 
+            async def _send_ephemeral(self, interaction: Any, content: str) -> None:
+                try:
+                    followup = getattr(interaction, "followup", None)
+                    if followup is not None and hasattr(followup, "send"):
+                        await self._maybe_await(
+                            followup.send(content, ephemeral=True)
+                        )
+                    else:
+                        await self._maybe_await(
+                            interaction.response.send_message(
+                                content,
+                                ephemeral=True,
+                            )
+                        )
+                except Exception:
+                    logger.warning(
+                        "Failed to send Discord skill-confirm notice",
+                        exc_info=True,
+                    )
+
             async def _send_command(
                 self,
                 interaction: Any,
@@ -639,6 +659,16 @@ class DiscordAdapter(RetryableConnection):
                     return
                 command = f"/{action} {proposal_id}"
                 platform_user_id = str(getattr(interaction.user, "id", ""))
+                cached = adapter._pending_skill_confirms.get(proposal_id)
+                if (
+                    cached is not None
+                    and cached.get("platform_user_id") != platform_user_id
+                ):
+                    await self._send_ephemeral(
+                        interaction,
+                        "This approval belongs to another user.",
+                    )
+                    return
                 try:
                     adapter._mark_proposal_action_sent(command)
                     await adapter._ws.send(
@@ -654,6 +684,18 @@ class DiscordAdapter(RetryableConnection):
                         content="⚠️ Failed to send approval to CordBeat Core.",
                         deferred=deferred,
                     )
+                    return
+                if cached is None:
+                    verb = "approve" if action == "approve" else "deny"
+                    await self._finish(
+                        interaction,
+                        content=(
+                            f"📨 Sent {verb} request: `{skill_name}` — "
+                            "see the bot's reply for the result."
+                        ),
+                        deferred=deferred,
+                    )
+                    self.stop()
                     return
                 verb = "Approved once" if action == "approve" else "Denied"
                 icon = "✅" if action == "approve" else "❌"

@@ -167,6 +167,25 @@ class TestRunAdapter:
             await _run_adapter("discord", str(cfg))
         assert captured["soul_name"] == ""
 
+    async def test_discord_receives_rvc_config(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            "gateway:\n  host: 127.0.0.1\n  port: 8765\n"
+            "rvc:\n  enabled: true\n  model_path: voice.pth\n"
+            "adapters:\n  discord:\n    enabled: true\n",
+            encoding="utf-8",
+        )
+        mock_adapter = AsyncMock()
+        captured = {}
+        with patch(
+            "cordbeat.adapters.discord.DiscordAdapter",
+            side_effect=lambda *a, **kw: captured.update(kw) or mock_adapter,
+        ):
+            await _run_adapter("discord", str(cfg))
+
+        assert captured["rvc_config"].enabled is True
+        assert captured["rvc_config"].model_path.endswith("voice.pth")
+
     async def test_judge_backend_initialized_and_closed(self, tmp_path: Path) -> None:
         """An ai_decision config wires up and later closes the judge backend."""
         cfg = tmp_path / "config.yaml"

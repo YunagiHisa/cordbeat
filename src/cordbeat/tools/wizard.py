@@ -233,13 +233,41 @@ _ADAPTER_SPECS: list[tuple[str, str, list[str], str]] = [
     ("whatsapp", "WhatsApp", ["aiohttp>=3.9"], "aiohttp"),
 ]
 
-_ADAPTER_TOKEN_PROMPT: dict[str, str] = {
-    "discord": "Discord bot token",
-    "telegram": "Telegram bot token (from @BotFather)",
-    "slack": "Slack bot token (xoxb-...)",
-    "line": "LINE channel access token",
-    "whatsapp": "WhatsApp API token",
+_ADAPTER_CREDENTIALS: dict[str, list[tuple[str, str]]] = {
+    "discord": [("Discord bot token", "TOKEN")],
+    "telegram": [("Telegram bot token (from @BotFather)", "TOKEN")],
+    "slack": [
+        ("Slack bot token (xoxb-...)", "BOT_TOKEN"),
+        ("Slack app-level token (xapp-..., connections:write)", "APP_TOKEN"),
+    ],
+    "line": [
+        ("LINE channel access token", "CHANNEL_ACCESS_TOKEN"),
+        ("LINE channel secret", "CHANNEL_SECRET"),
+    ],
+    "whatsapp": [
+        ("WhatsApp access token", "ACCESS_TOKEN"),
+        ("WhatsApp phone number ID", "PHONE_NUMBER_ID"),
+        ("Webhook verify token (any string you choose)", "VERIFY_TOKEN"),
+        ("Meta app secret (webhook signature)", "APP_SECRET"),
+    ],
 }
+
+
+def _adapter_env_key(adapter_key: str, suffix: str) -> str:
+    return f"CORDBEAT_ADAPTERS__{adapter_key.upper()}__OPTIONS__{suffix}"
+
+
+def _adapter_env_secrets(
+    selected_adapters: dict[str, dict[str, str] | None],
+) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for adapter_key, credentials in selected_adapters.items():
+        if adapter_key == "cli" or not credentials:
+            continue
+        for suffix, value in credentials.items():
+            if value:
+                env[_adapter_env_key(adapter_key, suffix)] = value
+    return env
 
 
 def _is_importable(module: str) -> bool:
@@ -282,12 +310,12 @@ def _install_packages(packages: list[str]) -> bool:
     return result.returncode == 0
 
 
-def _select_adapters() -> dict[str, str | None]:
+def _select_adapters() -> dict[str, dict[str, str] | None]:
     """Prompt the user to choose one or more platform adapters.
 
     Uses arrow-key checkbox UI when questionary is available and stdout is a
     TTY; falls back to numbered text input otherwise.
-    Returns a dict mapping adapter key → token (or None for CLI/no token).
+    Returns a dict mapping adapter key → credential suffix/value pairs.
     """
     sns_specs = [
         (key, name, pkgs, probe)
@@ -343,7 +371,7 @@ def _select_adapters() -> dict[str, str | None]:
     if not selected_keys:
         return {"cli": None}
 
-    result: dict[str, str | None] = {"cli": None}
+    result: dict[str, dict[str, str] | None] = {"cli": None}
     sns_map = {key: (name, pkgs, probe) for key, name, pkgs, probe in sns_specs}
     for key in selected_keys:
         name, packages, probe = sns_map[key]
@@ -362,10 +390,13 @@ def _select_adapters() -> dict[str, str | None]:
                         f"    uv pip install {' '.join(packages)}"
                     )
 
-        # Ask for credentials
-        prompt = _ADAPTER_TOKEN_PROMPT.get(key, f"{name} token")
-        token = _ask(prompt)
-        result[key] = token or None
+        # Ask for credentials. Empty values are skipped and can be filled in .env.
+        credentials: dict[str, str] = {}
+        for prompt, suffix in _ADAPTER_CREDENTIALS.get(key, []):
+            value = _ask(f"{prompt} (leave empty to skip)", "")
+            if value:
+                credentials[suffix] = value
+        result[key] = credentials or None
 
     return result
 
@@ -399,7 +430,7 @@ def _build_config(
     base_url: str,
     model: str,
     api_key: str = "",
-    adapters: dict[str, str | None] | None = None,
+    adapters: dict[str, dict[str, str] | None] | None = None,
     auth_token: str | None = None,
 ) -> dict[str, Any]:
     """Build a config dict with paths anchored to *home*.
@@ -442,13 +473,10 @@ def _build_config(
     }
     if api_key:
         cfg["ai_backend"]["options"] = {"api_key": api_key}
-    for adapter_key, adapter_token in adapters.items():
+    for adapter_key in adapters:
         if adapter_key == "cli":
             continue  # CLI is always on by default above
-        adapter_cfg: dict[str, Any] = {"enabled": True}
-        if adapter_token:
-            adapter_cfg["options"] = {"token": adapter_token}
-        cfg["adapters"][adapter_key] = adapter_cfg
+        cfg["adapters"][adapter_key] = {"enabled": True}
     return cfg
 
 
@@ -470,7 +498,7 @@ def _render_config_yaml(
     provider: str,
     base_url: str,
     model: str,
-    adapters: dict[str, str | None],
+    adapters: dict[str, dict[str, str] | None],
 ) -> str:
     """Render the annotated config template with user choices applied.
 
@@ -737,11 +765,7 @@ def run_wizard(home: Path | None = None) -> tuple[Path, bool]:
     env_secrets: dict[str, str] = {}
     if auth_token:
         env_secrets["CORDBEAT_GATEWAY__AUTH_TOKEN"] = auth_token
-    for _adapter_key, _adapter_token in selected_adapters.items():
-        if _adapter_key != "cli" and _adapter_token:
-            env_secrets[
-                f"CORDBEAT_ADAPTERS__{_adapter_key.upper()}__OPTIONS__TOKEN"
-            ] = _adapter_token
+    env_secrets.update(_adapter_env_secrets(selected_adapters))
     if api_key:
         env_secrets["CORDBEAT_AI_BACKEND__OPTIONS__API_KEY"] = api_key
     if env_secrets:

@@ -7,13 +7,17 @@ import re
 from typing import Any
 
 _DEFAULT_REASONING_STRIP_TAGS = ("think", "thought")
-_REASONING_LEAK_RE = re.compile(
+_STRONG_REASONING_LEAK_RE = re.compile(
     r"(?is)"
     r"(^\s*/(?:emotion|memory|system)\b|"
-    r"\*\*?(analy[sz]e|check|formulate|refine|draft|self-correction)|"
+    r"(?:^|\n)\s*(?:\d+\.\s*)?\*\*?"
+    r"(?:analy[sz]e|check|formulate|refine|draft|self-correction)[^:\n]*:|"
     r"\b(mental draft|thinking process|self-correction|output matches response|"
     r"check constraints|check rules|tool usage|the prompt says|"
-    r"i (must|should|need to|will just)|respond naturally)\b)"
+    r"respond naturally)\b)"
+)
+_WEAK_REASONING_LEAK_RE = re.compile(
+    r"(?is)\b(i (must|should|need to|will just))\b"
 )
 _FINAL_TEXT_RE = re.compile(
     r"(?ims)(?:^|\n)\s*-\s*Text:\s*(.+?)(?:\n\s*-\s*Checks:|\Z)"
@@ -59,7 +63,9 @@ def strip_thinking_text(
 def looks_like_reasoning_text(text: str) -> bool:
     """Return True when text appears to be private reasoning/checklist output."""
 
-    return bool(_REASONING_LEAK_RE.search(text))
+    if _STRONG_REASONING_LEAK_RE.search(text):
+        return True
+    return len(_WEAK_REASONING_LEAK_RE.findall(text)) >= 2
 
 
 def sanitize_reasoning_artifacts(raw: str) -> str:

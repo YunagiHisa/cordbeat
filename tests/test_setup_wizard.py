@@ -419,7 +419,7 @@ class TestWriteEnvFile:
             patch("cordbeat.tools.wizard._probe_provider", return_value=True),
             patch(
                 "cordbeat.tools.wizard._select_adapters",
-                return_value={"discord": "real_discord_token_xyz"},
+                return_value={"discord": {"TOKEN": "real_discord_token_xyz"}},
             ),
         ):
             run_wizard(tmp_path)
@@ -430,6 +430,42 @@ class TestWriteEnvFile:
         assert "CORDBEAT_ADAPTERS__DISCORD__OPTIONS__TOKEN=real_discord_token_xyz" in (
             env
         )
+
+    def test_run_wizard_creates_env_file_with_adapter_specific_credentials(
+        self, tmp_path: Path
+    ) -> None:
+        inputs = iter(["Bot", "en", "n"])
+        with (
+            patch("cordbeat.tools.wizard._probe_ollama", return_value="llama3"),
+            patch("builtins.input", side_effect=inputs),
+            patch("cordbeat.tools.wizard._probe_provider", return_value=True),
+            patch(
+                "cordbeat.tools.wizard._select_adapters",
+                return_value={
+                    "slack": {"BOT_TOKEN": "xoxb-1", "APP_TOKEN": "xapp-1"},
+                    "line": {
+                        "CHANNEL_ACCESS_TOKEN": "line-token",
+                        "CHANNEL_SECRET": "line-secret",
+                    },
+                    "whatsapp": {
+                        "ACCESS_TOKEN": "wa-token",
+                        "PHONE_NUMBER_ID": "12345",
+                    },
+                },
+            ),
+        ):
+            run_wizard(tmp_path)
+
+        env = (tmp_path / ".env").read_text(encoding="utf-8")
+        assert "CORDBEAT_ADAPTERS__SLACK__OPTIONS__BOT_TOKEN=xoxb-1" in env
+        assert "CORDBEAT_ADAPTERS__SLACK__OPTIONS__APP_TOKEN=xapp-1" in env
+        assert (
+            "CORDBEAT_ADAPTERS__LINE__OPTIONS__CHANNEL_ACCESS_TOKEN=line-token"
+            in env
+        )
+        assert "CORDBEAT_ADAPTERS__LINE__OPTIONS__CHANNEL_SECRET=line-secret" in env
+        assert "CORDBEAT_ADAPTERS__WHATSAPP__OPTIONS__ACCESS_TOKEN=wa-token" in env
+        assert "CORDBEAT_ADAPTERS__WHATSAPP__OPTIONS__PHONE_NUMBER_ID=12345" in env
 
     def test_run_wizard_no_env_file_when_only_cli(self, tmp_path: Path) -> None:
         """run_wizard writes .env even for CLI-only (gateway auth_token is a secret)."""

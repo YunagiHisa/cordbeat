@@ -13,13 +13,14 @@ import yaml
 
 from cordbeat.config import cordbeat_home
 from cordbeat.tools.wizard import (
+    _ADAPTER_CREDENTIALS,
     _ADAPTER_SPECS,
-    _ADAPTER_TOKEN_PROMPT,
     _BOLD,
     _GREEN,
     _PINK,
     _RED,  # noqa: F401  (imported for re-export)
     _YELLOW,  # noqa: F401
+    _adapter_env_key,
     _ask,
     _c,
     _err,
@@ -126,8 +127,11 @@ def _add_adapter(config_path: Path) -> None:
                 )
 
     # Credentials
-    prompt = _ADAPTER_TOKEN_PROMPT.get(key, f"{name} token")
-    token = _ask(prompt)
+    credentials: dict[str, str] = {}
+    for prompt, suffix in _ADAPTER_CREDENTIALS.get(key, []):
+        value = _ask(f"{prompt} (leave empty to skip)", "")
+        if value:
+            credentials[suffix] = value
 
     # Update config.yaml
     if key not in adapters:
@@ -139,12 +143,12 @@ def _add_adapter(config_path: Path) -> None:
     _save_yaml(config_path, cfg)
     _ok(f"config.yaml updated — {name} enabled")
 
-    # Write token to .env (alongside config.yaml)
-    if token:
+    # Write credentials to .env (alongside config.yaml)
+    if credentials:
         env_path = config_path.parent / ".env"
-        env_key = f"CORDBEAT_ADAPTERS__{key.upper()}__OPTIONS__TOKEN"
-        _update_env_file(env_path, env_key, token)
-        _ok(f"Token written to {env_path}")
+        for suffix, value in credentials.items():
+            _update_env_file(env_path, _adapter_env_key(key, suffix), value)
+        _ok(f"Credentials written to {env_path}")
 
     start_cmd = f"cordbeat-{key}"
     print(f"\n  {_c('✓', _GREEN)} Start {name} with:  {_c(start_cmd, _BOLD)}\n")

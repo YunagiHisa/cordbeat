@@ -19,6 +19,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Setup, service, and restore fixes from source audit #7.** The wizard and
+  `cordbeat-add` now collect and write the credential keys each adapter actually
+  reads (Slack bot+app tokens, LINE token+secret, WhatsApp token/phone/verify/app
+  secret), the runner wires `rvc_config` so RVC voice conversion works in
+  production, Windows service uninstall/stop/start also manage per-adapter
+  scheduled tasks, restore validates the SQLite header and moves stale sidecar
+  files aside, and the reasoning-leak heuristic no longer discards legitimate
+  English replies on a single weak match.
 - **Adapter input and quiet-hours hardening from source audit #6.** Quiet-hours
   values are range-validated (0-23/0-59) and invalid persisted values disable
   quiet hours with a warning instead of breaking heartbeat ticks, inbound

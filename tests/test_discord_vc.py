@@ -1241,7 +1241,7 @@ class TestCreateTTSWithRVC:
 
         assert not isinstance(backend, RVCWrappedTTS)
 
-    def test_returns_plain_when_no_model_path(self) -> None:
+    def test_returns_plain_when_no_model_path(self, caplog: Any) -> None:
         from cordbeat.ai.tts import create_tts_with_rvc
 
         tts_cfg = TTSConfig(backend="edge_tts")
@@ -1250,6 +1250,7 @@ class TestCreateTTSWithRVC:
         from cordbeat.ai.tts import RVCWrappedTTS
 
         assert not isinstance(backend, RVCWrappedTTS)
+        assert "model_path is empty" in caplog.text
 
     def test_falls_back_on_rvc_init_error(self) -> None:
         from cordbeat.ai.tts import RVCWrappedTTS, create_tts_with_rvc

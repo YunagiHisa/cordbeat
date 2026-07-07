@@ -74,6 +74,31 @@ def _can_update_ai_skill(skills_dir: Path, name: str) -> bool:
     )
 
 
+def _load_proposal_metadata(proposal: dict[str, Any]) -> dict[str, Any] | None:
+    proposal_id = str(proposal.get("id", "<unknown>"))
+    try:
+        meta = json.loads(proposal.get("metadata") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        logger.warning("Proposal %s has invalid metadata JSON", proposal_id)
+        return None
+    if not isinstance(meta, dict):
+        logger.warning("Proposal %s metadata is not an object", proposal_id)
+        return None
+    return meta
+
+
+def _format_skill_result_summary(result: Any) -> str:
+    if isinstance(result, dict):
+        summary_value = result.get("result", result.get("output"))
+        if summary_value is not None:
+            return str(summary_value)[:500]
+        try:
+            return json.dumps(result, ensure_ascii=False, default=str)[:500]
+        except TypeError:
+            return str(result)[:500]
+    return str(result)[:500]
+
+
 def validate_proposed_skill(
     proposed: dict[str, Any],
     skills: SkillRegistry,
@@ -611,11 +636,17 @@ class ProposalExecutor:
         )
 
         for proposal in proposals:
-            meta = json.loads(proposal.get("metadata") or "{}")
-            proposal_type = meta.get("proposal_type", ProposalType.GENERAL)
             current_id = proposal["id"]
             if proposal_id is not None and current_id != proposal_id:
                 continue
+            meta = _load_proposal_metadata(proposal)
+            if meta is None:
+                await self._expire_proposal_safely(
+                    current_id,
+                    reason="invalid metadata",
+                )
+                continue
+            proposal_type = meta.get("proposal_type", ProposalType.GENERAL)
             try:
                 claimed = await self._memory.update_proposal_status(
                     current_id,
@@ -641,10 +672,39 @@ class ProposalExecutor:
                 await self._memory.update_proposal_status(
                     current_id, ProposalStatus.EXECUTED
                 )
-                await self._notify_result(
+                await self._notify_result_safely(
                     proposal,
                     "✅ Proposal acknowledged.",
                 )
+
+    async def _expire_proposal_safely(self, proposal_id: str, *, reason: str) -> bool:
+        try:
+            return await self._memory.update_proposal_status(
+                proposal_id,
+                ProposalStatus.EXPIRED,
+            )
+        except ValueError:
+            logger.warning(
+                "Could not expire proposal %s after %s",
+                proposal_id,
+                reason,
+                exc_info=True,
+            )
+            return False
+
+    async def _notify_result_safely(
+        self,
+        proposal: dict[str, Any],
+        message: str,
+    ) -> None:
+        try:
+            await self._notify_result(proposal, message)
+        except Exception:
+            logger.warning(
+                "Could not send proposal result notification for %s",
+                proposal.get("id"),
+                exc_info=True,
+            )
 
     async def _execute_skill_proposal(
         self,
@@ -673,10 +733,11 @@ class ProposalExecutor:
                 "Approved skill '%s' not found, marking expired",
                 skill_name,
             )
-            await self._memory.update_proposal_status(
-                proposal_id, ProposalStatus.EXPIRED
+            await self._expire_proposal_safely(
+                proposal_id,
+                reason=f"missing skill {skill_name}",
             )
-            await self._notify_result(
+            await self._notify_result_safely(
                 proposal,
                 f"⚠️ Skill '{skill_name}' not found — proposal expired.",
             )
@@ -696,24 +757,21 @@ class ProposalExecutor:
                 skill_name,
                 result,
             )
+            summary = _format_skill_result_summary(result)
             await self._memory.update_proposal_status(
                 proposal_id, ProposalStatus.EXECUTED
             )
-            summary_value = result.get("result", result.get("output"))
-            if summary_value is None:
-                summary = json.dumps(result, ensure_ascii=False)[:500]
-            else:
-                summary = str(summary_value)[:500]
-            await self._notify_result(
+            await self._notify_result_safely(
                 proposal,
                 f"✅ Skill '{skill_name}' executed successfully.\n{summary}",
             )
         except Exception:
             logger.exception("Approved skill '%s' failed", skill_name)
-            await self._memory.update_proposal_status(
-                proposal_id, ProposalStatus.EXPIRED
+            await self._expire_proposal_safely(
+                proposal_id,
+                reason=f"skill {skill_name} failed",
             )
-            await self._notify_result(
+            await self._notify_result_safely(
                 proposal,
                 f"❌ Skill '{skill_name}' failed — proposal expired.",
             )
@@ -734,10 +792,11 @@ class ProposalExecutor:
             )
             if result.get("error"):
                 detail = str(result.get("detail") or result["error"])
-                await self._memory.update_proposal_status(
-                    proposal_id, ProposalStatus.EXPIRED
+                await self._expire_proposal_safely(
+                    proposal_id,
+                    reason="skill file update returned error",
                 )
-                await self._notify_result(
+                await self._notify_result_safely(
                     proposal,
                     "❌ Skill file update failed"
                     f" ({result['error']}) — {detail[:500]}",
@@ -747,17 +806,18 @@ class ProposalExecutor:
             await self._memory.update_proposal_status(
                 proposal_id, ProposalStatus.EXECUTED
             )
-            await self._notify_result(
+            await self._notify_result_safely(
                 proposal,
                 "✅ Skill file updated successfully.\n"
                 f"{result['skill_name']}/{result['path']}",
             )
         except Exception:
             logger.exception("Approved skill file update failed")
-            await self._memory.update_proposal_status(
-                proposal_id, ProposalStatus.EXPIRED
+            await self._expire_proposal_safely(
+                proposal_id,
+                reason="skill file update failed",
             )
-            await self._notify_result(
+            await self._notify_result_safely(
                 proposal,
                 "❌ Skill file update failed — proposal expired.",
             )
@@ -782,7 +842,7 @@ class ProposalExecutor:
             await self._memory.update_proposal_status(
                 proposal_id, ProposalStatus.EXECUTED
             )
-            await self._notify_result(
+            await self._notify_result_safely(
                 proposal,
                 "✅ Skill settings updated successfully.\n"
                 f"{result['skill_name']}: ownership={result['ownership']}, "
@@ -792,10 +852,11 @@ class ProposalExecutor:
             )
         except Exception:
             logger.exception("Approved skill settings update failed")
-            await self._memory.update_proposal_status(
-                proposal_id, ProposalStatus.EXPIRED
+            await self._expire_proposal_safely(
+                proposal_id,
+                reason="skill settings update failed",
             )
-            await self._notify_result(
+            await self._notify_result_safely(
                 proposal,
                 "❌ Skill settings update failed — proposal expired.",
             )
@@ -818,17 +879,18 @@ class ProposalExecutor:
             await self._memory.update_proposal_status(
                 proposal_id, ProposalStatus.EXECUTED
             )
-            await self._notify_result(
+            await self._notify_result_safely(
                 proposal,
                 "✅ Skill file deleted successfully.\n"
                 f"{result['skill_name']}/{result['path']}",
             )
         except Exception:
             logger.exception("Approved skill file delete failed")
-            await self._memory.update_proposal_status(
-                proposal_id, ProposalStatus.EXPIRED
+            await self._expire_proposal_safely(
+                proposal_id,
+                reason="skill file delete failed",
             )
-            await self._notify_result(
+            await self._notify_result_safely(
                 proposal,
                 "❌ Skill file delete failed — proposal expired.",
             )
@@ -849,16 +911,17 @@ class ProposalExecutor:
             await self._memory.update_proposal_status(
                 proposal_id, ProposalStatus.EXECUTED
             )
-            await self._notify_result(
+            await self._notify_result_safely(
                 proposal,
                 f"✅ Skill '{result['skill_name']}' deleted successfully.",
             )
         except Exception:
             logger.exception("Approved skill delete failed")
-            await self._memory.update_proposal_status(
-                proposal_id, ProposalStatus.EXPIRED
+            await self._expire_proposal_safely(
+                proposal_id,
+                reason="skill delete failed",
             )
-            await self._notify_result(
+            await self._notify_result_safely(
                 proposal,
                 "❌ Skill delete failed — proposal expired.",
             )
@@ -890,16 +953,17 @@ class ProposalExecutor:
                 parts.append(f"added: {', '.join(trait_add)}")
             if trait_remove:
                 parts.append(f"removed: {', '.join(trait_remove)}")
-            await self._notify_result(
+            await self._notify_result_safely(
                 proposal,
                 f"✅ Personality updated — {'; '.join(parts)}.",
             )
         except Exception:
             logger.exception("Trait change failed")
-            await self._memory.update_proposal_status(
-                proposal_id, ProposalStatus.EXPIRED
+            await self._expire_proposal_safely(
+                proposal_id,
+                reason="trait change failed",
             )
-            await self._notify_result(
+            await self._notify_result_safely(
                 proposal,
                 "❌ Personality change failed — proposal expired.",
             )
@@ -921,7 +985,7 @@ class ProposalExecutor:
             await self._memory.update_proposal_status(
                 proposal_id, ProposalStatus.EXECUTED
             )
-            await self._notify_result(
+            await self._notify_result_safely(
                 proposal,
                 f"✅ New skill '{skill_name}' installed successfully.",
             )
@@ -930,14 +994,15 @@ class ProposalExecutor:
                 "Proposed skill '%s' installation failed",
                 skill_name,
             )
-            await self._memory.update_proposal_status(
-                proposal_id, ProposalStatus.EXPIRED
+            await self._expire_proposal_safely(
+                proposal_id,
+                reason=f"skill {skill_name} installation failed",
             )
             detail = str(exc).strip()
             if len(detail) > 500:
                 detail = detail[:497] + "..."
             detail_text = f" — {detail}" if detail else ""
-            await self._notify_result(
+            await self._notify_result_safely(
                 proposal,
                 f"❌ Skill '{skill_name}' installation failed{detail_text}.",
             )
@@ -948,7 +1013,9 @@ class ProposalExecutor:
         message: str,
     ) -> None:
         """Send execution result notification to the proposal owner."""
-        meta = json.loads(proposal.get("metadata") or "{}")
+        meta = _load_proposal_metadata(proposal)
+        if meta is None:
+            return
         adapter_id = meta.get("adapter_id")
         user_id = proposal.get("user_id")
 

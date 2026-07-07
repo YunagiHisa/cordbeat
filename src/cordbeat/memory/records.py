@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -11,6 +12,17 @@ from typing import Any
 import aiosqlite
 
 from .common import ensure_aware
+
+logger = logging.getLogger(__name__)
+
+_PROPOSAL_STATUS_SQL = (
+    "CASE "
+    "WHEN metadata IS NULL OR metadata = '' THEN 'pending' "
+    "WHEN json_valid(metadata) THEN "
+    "COALESCE(json_extract(metadata, '$.status'), 'pending') "
+    "ELSE '__invalid_json__' "
+    "END"
+)
 
 
 class RecordStore:
@@ -132,13 +144,15 @@ class RecordStore:
             for current, targets in self._VALID_TRANSITIONS.items()
             if status in targets
         ]
+        allowed_sources = list(valid_sources)
+        if status == "expired":
+            allowed_sources.append("__invalid_json__")
         if not valid_sources:
             # The target status has no predecessor in the state machine.
             # Treat this the same as any other disallowed transition so
             # existing callers still see ``Invalid proposal transition``.
             exists_cursor = await self._db.execute(
-                "SELECT "
-                "COALESCE(json_extract(metadata, '$.status'), 'pending') AS st "
+                f"SELECT {_PROPOSAL_STATUS_SQL} AS st "
                 "FROM certain_records "
                 "WHERE id = ? AND record_type = 'proposal'",
                 (proposal_id,),
@@ -152,22 +166,22 @@ class RecordStore:
                 f"(allowed: set())"
             )
 
-        placeholders = ",".join("?" for _ in valid_sources)
+        placeholders = ",".join("?" for _ in allowed_sources)
         # COALESCE so that rows whose metadata has no explicit status
         # (treated as 'pending') are also matched.
         sql = (
             "UPDATE certain_records "
-            "SET metadata = json_set("
-            "    COALESCE(metadata, '{}'),"
-            "    '$.status', ?"
-            ") "
+            "SET metadata = CASE "
+            "WHEN metadata IS NULL OR metadata = '' OR NOT json_valid(metadata) "
+            "THEN json_object('status', ?) "
+            "ELSE json_set(metadata, '$.status', ?) "
+            "END "
             "WHERE id = ? AND record_type = 'proposal' "
-            f"AND COALESCE(json_extract(metadata, '$.status'), 'pending') "
-            f"IN ({placeholders})"
+            f"AND {_PROPOSAL_STATUS_SQL} IN ({placeholders})"
         )
         cursor = await self._db.execute(
             sql,
-            (status, proposal_id, *valid_sources),
+            (status, status, proposal_id, *allowed_sources),
         )
         await self._db.commit()
         if cursor.rowcount and cursor.rowcount > 0:
@@ -176,8 +190,7 @@ class RecordStore:
         # No row affected: is it because the proposal is missing, or because
         # the current state disallows the transition?
         exists_cursor = await self._db.execute(
-            "SELECT "
-            "COALESCE(json_extract(metadata, '$.status'), 'pending') AS st "
+            f"SELECT {_PROPOSAL_STATUS_SQL} AS st "
             "FROM certain_records "
             "WHERE id = ? AND record_type = 'proposal'",
             (proposal_id,),
@@ -207,17 +220,21 @@ class RecordStore:
             cursor = await self._db.execute(
                 "SELECT * FROM certain_records "
                 "WHERE record_type = 'proposal' AND user_id = ? "
-                "AND json_extract(metadata, '$.status') = ? "
+                f"AND ({_PROPOSAL_STATUS_SQL} = ? "
+                "OR (? = 'approved' "
+                f"AND {_PROPOSAL_STATUS_SQL} = '__invalid_json__')) "
                 "ORDER BY created_at ASC",
-                (user_id, status),
+                (user_id, status, status),
             )
         else:
             cursor = await self._db.execute(
                 "SELECT * FROM certain_records "
                 "WHERE record_type = 'proposal' "
-                "AND json_extract(metadata, '$.status') = ? "
+                f"AND ({_PROPOSAL_STATUS_SQL} = ? "
+                "OR (? = 'approved' "
+                f"AND {_PROPOSAL_STATUS_SQL} = '__invalid_json__')) "
                 "ORDER BY created_at ASC",
-                (status,),
+                (status, status),
             )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
@@ -236,7 +253,20 @@ class RecordStore:
         rows = await cursor.fetchall()
         count = 0
         for row in rows:
-            meta = json.loads(row["metadata"]) if row["metadata"] else {}
+            try:
+                meta = json.loads(row["metadata"]) if row["metadata"] else {}
+            except (TypeError, json.JSONDecodeError):
+                logger.warning(
+                    "Skipping proposal %s with invalid metadata JSON",
+                    row["id"],
+                )
+                continue
+            if not isinstance(meta, dict):
+                logger.warning(
+                    "Skipping proposal %s with non-object metadata",
+                    row["id"],
+                )
+                continue
             if meta.get("status") == "pending":
                 meta["status"] = "expired"
                 await self._db.execute(

@@ -115,6 +115,27 @@ def _coerce_marker_pairs(value: Any) -> tuple[tuple[str, str], ...]:
     return tuple(pairs)
 
 
+def _flatten_content_for_retry(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        omitted_images = 0
+        for part in content:
+            if isinstance(part, dict):
+                part_type = part.get("type")
+                if part_type == "text":
+                    text_parts.append(str(part.get("text", "")))
+                elif part_type == "image_url":
+                    omitted_images += 1
+            else:
+                text_parts.append(str(part))
+        if omitted_images:
+            text_parts.append(f"[{omitted_images} image(s) omitted on retry]")
+        return "\n".join(part for part in text_parts if part)
+    return str(content or "")
+
+
 def _detect_image_mime(b64data: str) -> str:
     """Detect image MIME type from base64-encoded data magic bytes."""
     try:
@@ -992,7 +1013,9 @@ class OpenAICompatBackend(AIBackend):
                 retry_messages: list[dict[str, str]] = [
                     {
                         "role": str(item.get("role", "user")),
-                        "content": str(item.get("content", "")),
+                        "content": _flatten_content_for_retry(
+                            item.get("content", "")
+                        ),
                     }
                     for item in messages
                 ]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -1118,6 +1119,44 @@ class TestProposalStatusTransitions:
 
         meta = json.loads(proposal["metadata"])
         assert meta["status"] == "expired"
+
+    async def test_expire_old_proposals_skips_corrupt_metadata(
+        self,
+        memory: MemoryStore,
+    ) -> None:
+        """Corrupt proposal metadata does not stop other expirations."""
+        corrupt_id = await memory.add_certain_record(
+            "u1",
+            "Corrupt proposal",
+            record_type="proposal",
+            metadata={"status": "pending"},
+        )
+        valid_id = await memory.add_certain_record(
+            "u1",
+            "Valid proposal",
+            record_type="proposal",
+            metadata={"status": "pending"},
+        )
+        await memory._conn.execute(
+            "UPDATE certain_records SET metadata = ? WHERE id = ?",
+            ('{"status":"pending"', corrupt_id),
+        )
+        await memory._conn.execute(
+            "UPDATE certain_records SET created_at = '2020-01-01T00:00:00' "
+            "WHERE id IN (?, ?)",
+            (corrupt_id, valid_id),
+        )
+        await memory._conn.commit()
+
+        expired = await memory.expire_old_proposals(max_age_days=7)
+
+        assert expired == 1
+        corrupt = await memory.get_proposal(corrupt_id)
+        valid = await memory.get_proposal(valid_id)
+        assert corrupt is not None
+        assert valid is not None
+        assert corrupt["metadata"] == '{"status":"pending"'
+        assert json.loads(valid["metadata"])["status"] == "expired"
 
     async def test_expire_does_not_touch_approved(self, memory: MemoryStore) -> None:
         """Only pending proposals are expired, not approved ones."""

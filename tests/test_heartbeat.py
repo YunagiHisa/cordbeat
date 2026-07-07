@@ -2366,6 +2366,57 @@ class TestApprovedProposalExecution:
         meta = json.loads(proposal["metadata"])
         assert meta["status"] == ProposalStatus.EXECUTED
 
+    async def test_execute_approved_skips_corrupt_metadata_and_continues(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+    ) -> None:
+        execute_fn = MagicMock(return_value={"ok": True})
+        skill = Skill(
+            meta=SkillMeta(
+                name="valid_after_corrupt",
+                description="Test",
+                usage="test",
+                safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
+            ),
+            _test_callable=execute_fn,
+        )
+        skills._skills["valid_after_corrupt"] = skill
+
+        corrupt_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Corrupt proposal",
+            record_type="proposal",
+            metadata={"status": ProposalStatus.APPROVED},
+        )
+        await memory._conn.execute(
+            "UPDATE certain_records SET metadata = ? WHERE id = ?",
+            ('{"status":"approved"', corrupt_id),
+        )
+        valid_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Run valid_after_corrupt",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "valid_after_corrupt",
+                "skill_params": {},
+            },
+        )
+        await memory._conn.commit()
+
+        await heartbeat._proposals.execute_approved()
+
+        execute_fn.assert_called_once_with()
+        corrupt = await memory.get_proposal(corrupt_id)
+        valid = await memory.get_proposal(valid_id)
+        assert corrupt is not None
+        assert valid is not None
+        assert json.loads(corrupt["metadata"])["status"] == ProposalStatus.EXPIRED
+        assert json.loads(valid["metadata"])["status"] == ProposalStatus.EXECUTED
+
     async def test_execute_approved_claims_before_running_skill(
         self,
         heartbeat: HeartbeatLoop,
@@ -2629,6 +2680,141 @@ class TestApprovedProposalExecution:
         assert "CordBeat" in msg.content
         assert "https://example.com" in msg.content
         assert "interrupted conversation" in msg.content
+
+    async def test_approved_skill_string_result_is_notified(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        skill = Skill(
+            meta=SkillMeta(
+                name="string_result",
+                description="Test",
+                usage="test",
+                safety_level=SafetyLevel.SAFE,
+            ),
+            _test_callable=lambda **_kw: "plain output",
+        )
+        skills._skills["string_result"] = skill
+
+        proposal_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Run string_result",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "string_result",
+                "skill_params": {},
+                "adapter_id": "discord",
+            },
+        )
+
+        await heartbeat._proposals.execute_approved()
+
+        proposal = await memory.get_proposal(proposal_id)
+        assert proposal is not None
+        assert json.loads(proposal["metadata"])["status"] == ProposalStatus.EXECUTED
+        msg = mock_gateway.send_to_adapter.call_args.args[1]
+        assert "plain output" in msg.content
+
+    async def test_approved_skill_notification_failure_keeps_executed(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+        mock_gateway.send_to_adapter.side_effect = RuntimeError("send failed")
+
+        skill = Skill(
+            meta=SkillMeta(
+                name="notify_fails",
+                description="Test",
+                usage="test",
+                safety_level=SafetyLevel.SAFE,
+            ),
+            _test_callable=lambda **_kw: {"result": "done"},
+        )
+        skills._skills["notify_fails"] = skill
+
+        proposal_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Run notify_fails",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "notify_fails",
+                "skill_params": {},
+                "adapter_id": "discord",
+            },
+        )
+
+        await heartbeat._proposals.execute_approved()
+
+        proposal = await memory.get_proposal(proposal_id)
+        assert proposal is not None
+        assert json.loads(proposal["metadata"])["status"] == ProposalStatus.EXECUTED
+
+    async def test_approved_skill_expire_transition_failure_does_not_leak(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+    ) -> None:
+        async def fail_skill(**_kw: object) -> dict[str, str]:
+            raise RuntimeError("boom")
+
+        skill = Skill(
+            meta=SkillMeta(
+                name="expire_guard",
+                description="Test",
+                usage="test",
+                safety_level=SafetyLevel.SAFE,
+            ),
+            _test_callable=fail_skill,
+        )
+        skills._skills["expire_guard"] = skill
+
+        proposal_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Run expire_guard",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "expire_guard",
+                "skill_params": {},
+            },
+        )
+        original_update = memory.update_proposal_status
+
+        async def update_with_expire_failure(
+            pid: str,
+            status: str,
+        ) -> bool:
+            if status == ProposalStatus.EXPIRED:
+                raise ValueError("invalid transition")
+            return await original_update(pid, status)
+
+        with patch.object(
+            memory,
+            "update_proposal_status",
+            side_effect=update_with_expire_failure,
+        ):
+            await heartbeat._proposals.execute_approved()
+
+        proposal = await memory.get_proposal(proposal_id)
+        assert proposal is not None
+        assert json.loads(proposal["metadata"])["status"] == ProposalStatus.EXECUTING
 
     async def test_approved_missing_skill_marked_expired(
         self,

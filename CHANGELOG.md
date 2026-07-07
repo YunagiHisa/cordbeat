@@ -19,6 +19,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Proposal pipeline and AI-retry robustness from source audit #11.** A
+  proposal row with corrupt metadata JSON no longer blocks execution or
+  expiry of every other proposal (invalid rows are detected in SQL via
+  `json_valid`, surfaced, and expired), approved-skill results that are not
+  dictionaries are summarized safely instead of mis-reporting a successful
+  run as failed, result notifications and expiry transitions can no longer
+  cascade into the executor loop, and the OpenAI-compatible no-think retry
+  flattens vision message content to its text parts instead of embedding
+  base64 image data into the retry prompt.
 - **Draw truncation, Slack DM routing, and model datetime fixes from source
   audit #10.** Draw DSL normalization now closes REPEAT blocks that were cut
   open by the line cap instead of manufacturing a validation issue that

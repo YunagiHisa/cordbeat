@@ -687,6 +687,89 @@ class TestOpenAICompatBackend:
         result = await backend.generate_chat([{"role": "user", "content": "hi"}])
         assert result == "Final answer"
 
+    async def test_generate_chat_retry_flattens_vision_content_to_text(
+        self,
+    ) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={"compatibility_mode": "llama_cpp"},
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        first_response = MagicMock()
+        first_response.json.return_value = {
+            "choices": [
+                {"message": {"content": "3. **Formulate Response:**\n- Text: final"}}
+            ]
+        }
+        first_response.raise_for_status = MagicMock()
+
+        retry_response = MagicMock()
+        retry_response.json.return_value = {
+            "choices": [{"message": {"content": "final"}}]
+        }
+        retry_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(side_effect=[first_response, retry_response])
+
+        result = await backend.generate_chat(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this image"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/png;base64,SEVMTE8="
+                            },
+                        },
+                    ],
+                }
+            ]
+        )
+
+        assert result == "final"
+        retry_payload = backend._client.post.call_args_list[1][1]["json"]
+        retry_user_content = retry_payload["messages"][1]["content"]
+        assert retry_user_content == (
+            "Describe this image\n[1 image(s) omitted on retry]"
+        )
+        assert "image_url" not in retry_user_content
+        assert "SEVMTE8=" not in retry_user_content
+        assert "data:image" not in retry_user_content
+
+    async def test_generate_chat_retry_keeps_string_content(self) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={"compatibility_mode": "llama_cpp"},
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        first_response = MagicMock()
+        first_response.json.return_value = {
+            "choices": [
+                {"message": {"content": "3. **Formulate Response:**\n- Text: done"}}
+            ]
+        }
+        first_response.raise_for_status = MagicMock()
+
+        retry_response = MagicMock()
+        retry_response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}]
+        }
+        retry_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(side_effect=[first_response, retry_response])
+
+        result = await backend.generate_chat([{"role": "user", "content": "hello"}])
+
+        assert result == "done"
+        retry_payload = backend._client.post.call_args_list[1][1]["json"]
+        assert retry_payload["messages"][1]["content"] == "hello"
+
     async def test_unexpected_response_format(self) -> None:
         cfg = AIBackendConfig(provider="openai")
         backend = OpenAICompatBackend(cfg)

@@ -368,7 +368,13 @@ def build_react_continuation_prompt(
         else:
             safe_out = _escape_tool_response(r.output[:max_tool_output_chars])
             body = safe_out
-        parts.append(f'<tool_response name="{r.skill_name}">\n{body}\n</tool_response>')
+        safe_name = (
+            sanitize(str(r.skill_name), strict=True, max_len=60)
+            .replace('"', "")
+            .replace("<", "")
+            .replace(">", "")
+        )
+        parts.append(f'<tool_response name="{safe_name}">\n{body}\n</tool_response>')
     if final_iteration:
         instruction = (
             "This is the final tool step. Answer the user now using the tool "

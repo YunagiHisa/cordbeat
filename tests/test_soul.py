@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -56,6 +57,56 @@ class TestSoul:
         assert "name" in snap
         assert "immutable_rules" in snap
         assert isinstance(snap["traits"], list)
+
+    def test_invalid_persisted_emotion_falls_back(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        soul_dir = tmp_path / "soul"
+        soul_dir.mkdir()
+        (soul_dir / "soul.yaml").write_text(
+            "current_emotion:\n"
+            "  primary: happpy\n"
+            "  primary_intensity: high\n"
+            "  secondary: Joy\n"
+            "  secondary_intensity: loud\n",
+            encoding="utf-8",
+        )
+
+        with caplog.at_level(logging.WARNING, logger="cordbeat.agent.soul"):
+            soul = Soul(soul_dir)
+            emotion = soul.emotion
+            snap = soul.get_soul_snapshot()
+
+        assert emotion.primary == Emotion.CALM
+        assert emotion.primary_intensity == pytest.approx(0.5)
+        assert emotion.secondary is None
+        assert emotion.secondary_intensity == pytest.approx(0.0)
+        assert snap["emotion"] == {"primary": "calm", "intensity": 0.5}
+        assert "primary='happpy'" in caplog.text
+        assert "primary_intensity='high'" in caplog.text
+        assert "secondary='Joy'" in caplog.text
+        assert "secondary_intensity='loud'" in caplog.text
+
+    def test_valid_persisted_emotion_is_preserved(self, tmp_path: Path) -> None:
+        soul_dir = tmp_path / "soul"
+        soul_dir.mkdir()
+        (soul_dir / "soul.yaml").write_text(
+            "current_emotion:\n"
+            "  primary: joy\n"
+            "  primary_intensity: 0.8\n"
+            "  secondary: warmth\n"
+            "  secondary_intensity: 0.4\n",
+            encoding="utf-8",
+        )
+
+        emotion = Soul(soul_dir).emotion
+
+        assert emotion.primary == Emotion.JOY
+        assert emotion.primary_intensity == pytest.approx(0.8)
+        assert emotion.secondary == Emotion.WARMTH
+        assert emotion.secondary_intensity == pytest.approx(0.4)
 
     def test_immutable_rules_exist(self, tmp_path: Path) -> None:
         soul = Soul(tmp_path / "soul")

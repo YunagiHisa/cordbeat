@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import math
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
@@ -118,6 +119,42 @@ def _check_permission(field: str, caller: SoulCaller) -> None:
         raise SoulPermissionError(msg)
 
 
+def _coerce_emotion(
+    value: Any,
+    *,
+    field: str,
+    default: Emotion | None,
+) -> Emotion | None:
+    if value in (None, ""):
+        return default
+    try:
+        return Emotion(value)
+    except ValueError:
+        logger.warning(
+            "Invalid persisted soul emotion %s=%r; using %s",
+            field,
+            value,
+            default.value if default is not None else None,
+        )
+        return default
+
+
+def _coerce_intensity(value: Any, *, field: str, default: float) -> float:
+    try:
+        intensity = float(value)
+        if not math.isfinite(intensity):
+            raise ValueError
+        return intensity
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid persisted soul emotion %s=%r; using %.2f",
+            field,
+            value,
+            default,
+        )
+        return default
+
+
 class Soul:
     """Manages the agent's identity, personality, and emotional state."""
 
@@ -167,13 +204,28 @@ class Soul:
     @property
     def emotion(self) -> EmotionState:
         emo = self._soul.get("current_emotion", {})
-        secondary_raw = emo.get("secondary")
-        secondary = Emotion(secondary_raw) if secondary_raw else None
         return EmotionState(
-            primary=Emotion(emo.get("primary", Emotion.CALM.value)),
-            primary_intensity=float(emo.get("primary_intensity", 0.5)),
-            secondary=secondary,
-            secondary_intensity=float(emo.get("secondary_intensity", 0.0)),
+            primary=_coerce_emotion(
+                emo.get("primary", Emotion.CALM.value),
+                field="primary",
+                default=Emotion.CALM,
+            )
+            or Emotion.CALM,
+            primary_intensity=_coerce_intensity(
+                emo.get("primary_intensity", 0.5),
+                field="primary_intensity",
+                default=0.5,
+            ),
+            secondary=_coerce_emotion(
+                emo.get("secondary"),
+                field="secondary",
+                default=None,
+            ),
+            secondary_intensity=_coerce_intensity(
+                emo.get("secondary_intensity", 0.0),
+                field="secondary_intensity",
+                default=0.0,
+            ),
         )
 
     @property
@@ -205,13 +257,14 @@ class Soul:
         _check_permission("emotion", caller)
         intensity = max(0.0, min(1.0, intensity))
         emo = self._soul.setdefault("current_emotion", {})
+        current = self.emotion
 
-        old_primary = emo.get("primary", Emotion.CALM.value)
-        old_primary_intensity = float(emo.get("primary_intensity", 0.5))
+        old_primary = current.primary.value
+        old_primary_intensity = current.primary_intensity
 
         # Transition: old primary → secondary (unless overridden)
         if emotion.value != old_primary and secondary is None:
-            secondary = Emotion(old_primary)
+            secondary = current.primary
             secondary_intensity = old_primary_intensity * 0.5
 
         emo["primary"] = emotion.value
@@ -232,11 +285,12 @@ class Soul:
         Called by the heartbeat tick to simulate emotional cooldown.
         """
         emo = self._soul.get("current_emotion", {})
+        current = self.emotion
         changed = False
 
         # Decay primary intensity toward baseline
-        primary_intensity = float(emo.get("primary_intensity", 0.5))
-        if emo.get("primary", Emotion.CALM.value) != Emotion.CALM.value:
+        primary_intensity = current.primary_intensity
+        if current.primary != Emotion.CALM:
             new_intensity = primary_intensity - self._emotion_decay_rate
             if new_intensity <= self._emotion_baseline_intensity:
                 # Emotion faded enough — revert to calm
@@ -247,7 +301,7 @@ class Soul:
             changed = True
 
         # Decay secondary
-        sec_intensity = float(emo.get("secondary_intensity", 0.0))
+        sec_intensity = current.secondary_intensity
         if sec_intensity > 0:
             new_sec = sec_intensity - self._emotion_decay_rate
             if new_sec < self._emotion_secondary_clear_threshold:

@@ -19,6 +19,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Soul emotion resilience and prompt hygiene from source audit #13.** An
+  invalid persisted emotion value or intensity in soul.yaml (e.g. a
+  hand-edit typo) no longer crashes every message and heartbeat tick:
+  emotion state is coerced defensively with a warning and heals itself on
+  the next legitimate update. The ReAct tool-response name attribute is
+  sanitized so a model-authored skill name cannot forge tool-response
+  structure.
 - **Vector memory resilience from source audit #12.** A memory row with
   corrupt metadata JSON no longer breaks semantic/episodic recall or
   memory writes for that user: corrupt rows are skipped with a warning

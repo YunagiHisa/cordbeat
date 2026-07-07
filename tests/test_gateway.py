@@ -321,6 +321,30 @@ class TestGatewayServer:
         await server._handle_connection(mock_ws)
         mock_ws.close.assert_called_once_with(1008, "Missing adapter_id")
 
+    async def test_handle_connection_invalid_handshake_json(self) -> None:
+        config = GatewayConfig()
+        queue = MessageQueue()
+        server = GatewayServer(config, queue)
+
+        mock_ws = AsyncMock()
+        mock_ws.recv = AsyncMock(return_value="{not json")
+        mock_ws.close = AsyncMock()
+
+        await server._handle_connection(mock_ws)
+        mock_ws.close.assert_called_once_with(1008, "Invalid handshake")
+
+    async def test_handle_connection_non_object_handshake(self) -> None:
+        config = GatewayConfig()
+        queue = MessageQueue()
+        server = GatewayServer(config, queue)
+
+        mock_ws = AsyncMock()
+        mock_ws.recv = AsyncMock(return_value=json.dumps(["adapter_id"]))
+        mock_ws.close = AsyncMock()
+
+        await server._handle_connection(mock_ws)
+        mock_ws.close.assert_called_once_with(1008, "Invalid handshake")
+
     async def test_handle_connection_handshake_timeout(self) -> None:
         config = GatewayConfig()
         queue = MessageQueue()

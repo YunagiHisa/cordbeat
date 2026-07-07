@@ -195,7 +195,14 @@ async def _read_loop(
 
     bytes_read = 0
     while True:
-        line = await proc.stdout.readline()
+        try:
+            line = await proc.stdout.readline()
+        except (asyncio.LimitOverrunError, ValueError) as exc:
+            # StreamReader raises when a single line exceeds its limit;
+            # surface it as the typed sandbox error callers expect.
+            raise SkillSandboxError(
+                "Skill output line exceeded the stdout size limit"
+            ) from exc
         if not line:
             code = await proc.wait()
             raise SkillSandboxError(

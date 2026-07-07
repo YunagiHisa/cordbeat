@@ -2974,6 +2974,28 @@ class TestTraitChangeProposal:
         assert meta["trait_remove"] == []
         assert "playful" in meta["trait_preview"]
 
+    async def test_trait_proposal_reuses_pending_duplicate(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        soul: Soul,
+    ) -> None:
+        """An identical pending trait proposal is reused, not duplicated."""
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.PROPOSE_TRAIT_CHANGE,
+            content="I want to become more playful",
+            trait_add=["playful"],
+            trait_remove=["stoic"],
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        first_id = await heartbeat._proposals.store_trait_proposal(decision)
+        second_id = await heartbeat._proposals.store_trait_proposal(decision)
+
+        assert second_id == first_id
+        records = await memory.get_certain_records("u1", record_type="proposal")
+        assert len(records) == 1
+
     async def test_trait_proposal_does_not_apply(
         self,
         heartbeat: HeartbeatLoop,

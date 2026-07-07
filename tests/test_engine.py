@@ -2692,6 +2692,51 @@ class TestSoulCommands:
         reply = mock_gateway.send_to_adapter.call_args[0][1]
         assert "athena" in reply.content.lower()
 
+    async def test_name_command_truncates_long_name(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        soul: Soul,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/name caps the new name at 50 visible characters."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        await memory.link_platform("u1", "cli", "cli_user")
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/name " + "A" * 200,
+        )
+        await engine.handle_message(msg)
+
+        assert soul.name == "A" * 50
+
+    async def test_name_command_rejects_control_char_only_name(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        soul: Soul,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """/name with no visible characters is rejected."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        await memory.link_platform("u1", "cli", "cli_user")
+        original = soul.name
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="user1",
+            content="/name \x01\x02\x03",
+        )
+        await engine.handle_message(msg)
+
+        assert soul.name == original
+        reply = mock_gateway.send_to_adapter.call_args[0][1]
+        assert "invalid name" in reply.content.lower()
+
     async def test_name_command_rejects_non_admin(
         self,
         engine: CoreEngine,

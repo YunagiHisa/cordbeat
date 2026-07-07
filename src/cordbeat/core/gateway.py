@@ -336,7 +336,16 @@ class GatewayServer:
             raw = await asyncio.wait_for(
                 websocket.recv(), timeout=self._config.handshake_timeout
             )
-            data = json.loads(raw)
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                logger.warning("Rejected connection: invalid handshake JSON")
+                await websocket.close(1008, "Invalid handshake")
+                return
+            if not isinstance(data, dict):
+                logger.warning("Rejected connection: handshake is not an object")
+                await websocket.close(1008, "Invalid handshake")
+                return
             adapter_id = data.get("adapter_id")
             if not adapter_id:
                 await websocket.close(1008, "Missing adapter_id")

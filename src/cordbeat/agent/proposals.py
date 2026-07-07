@@ -181,6 +181,8 @@ def _metadata_matches_pending(
     skill_name: str | None = None,
     skill_params: dict[str, Any] | None = None,
     proposed_skill: dict[str, Any] | None = None,
+    trait_add: list[str] | None = None,
+    trait_remove: list[str] | None = None,
 ) -> bool:
     if metadata.get("proposal_type") != proposal_type:
         return False
@@ -196,6 +198,14 @@ def _metadata_matches_pending(
         metadata.get("proposed_skill") or {}
     ) != _stable_json(proposed_skill):
         return False
+    if trait_add is not None and sorted(
+        metadata.get("trait_add") or []
+    ) != sorted(trait_add):
+        return False
+    if trait_remove is not None and sorted(
+        metadata.get("trait_remove") or []
+    ) != sorted(trait_remove):
+        return False
     return True
 
 
@@ -207,6 +217,8 @@ async def find_duplicate_pending_proposal(
     skill_name: str | None = None,
     skill_params: dict[str, Any] | None = None,
     proposed_skill: dict[str, Any] | None = None,
+    trait_add: list[str] | None = None,
+    trait_remove: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Return an existing equivalent pending proposal, if one exists."""
     proposals = await memory.get_pending_proposals(
@@ -224,6 +236,8 @@ async def find_duplicate_pending_proposal(
             skill_name=skill_name,
             skill_params=skill_params,
             proposed_skill=proposed_skill,
+            trait_add=trait_add,
+            trait_remove=trait_remove,
         ):
             return proposal
     return None
@@ -449,6 +463,23 @@ class ProposalExecutor:
         content = decision.content or (
             f"Trait change proposal: add {add}, remove {remove}"
         )
+
+        duplicate = await find_duplicate_pending_proposal(
+            self._memory,
+            user_id=user_id,
+            proposal_type=ProposalType.TRAIT_CHANGE,
+            trait_add=add,
+            trait_remove=remove,
+        )
+        if duplicate is not None:
+            proposal_id = str(duplicate["id"])
+            logger.info(
+                "Reusing pending trait proposal id=%s add=%s remove=%s",
+                proposal_id,
+                add,
+                remove,
+            )
+            return proposal_id
 
         proposal_id = await self._memory.add_certain_record(
             user_id=user_id,

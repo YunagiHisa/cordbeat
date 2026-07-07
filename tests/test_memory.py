@@ -1261,6 +1261,31 @@ class TestProposalStatusTransitions:
         assert corrupt["metadata"] == '{"status":"pending"'
         assert json.loads(valid["metadata"])["status"] == "expired"
 
+    async def test_expire_old_proposals_includes_orphaned_executing(
+        self,
+        memory: MemoryStore,
+    ) -> None:
+        """A proposal stuck in EXECUTING (crash orphan) is eventually expired."""
+        pid = await memory.add_certain_record(
+            "u1",
+            "Orphaned proposal",
+            record_type="proposal",
+            metadata={"status": "executing"},
+        )
+        await memory._conn.execute(
+            "UPDATE certain_records SET created_at = '2020-01-01T00:00:00' "
+            "WHERE id = ?",
+            (pid,),
+        )
+        await memory._conn.commit()
+
+        expired = await memory.expire_old_proposals(max_age_days=7)
+        assert expired == 1
+
+        proposal = await memory.get_proposal(pid)
+        meta = json.loads(proposal["metadata"])
+        assert meta["status"] == "expired"
+
     async def test_expire_does_not_touch_approved(self, memory: MemoryStore) -> None:
         """Only pending proposals are expired, not approved ones."""
         pid = await memory.add_certain_record(

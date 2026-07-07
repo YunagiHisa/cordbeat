@@ -19,6 +19,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Audit backlog cleanup.** Proposals orphaned in EXECUTING by a crash are
+  now expired by the nightly sweep, an identical pending trait-change
+  proposal is reused instead of piling up duplicates, the Gateway closes
+  connections with invalid handshake JSON using a proper close code,
+  `/name` validates and caps the new character name at 50 visible
+  characters, and a skill whose single stdout line exceeds the sandbox
+  limit raises the typed sandbox error instead of a bare ValueError.
 - **Soul emotion resilience and prompt hygiene from source audit #13.** An
   invalid persisted emotion value or intensity in soul.yaml (e.g. a
   hand-edit typo) no longer crashes every message and heartbeat tick:

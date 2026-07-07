@@ -239,8 +239,13 @@ class RecordStore:
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
+    # Statuses eligible for age-based expiry. "executing" is included so a
+    # proposal orphaned by a crash mid-execution (claimed but never marked
+    # executed/expired) is eventually cleaned up instead of lingering forever.
+    _EXPIRABLE_STATUSES = frozenset({"pending", "executing"})
+
     async def expire_old_proposals(self, max_age_days: int = 7) -> int:
-        """Expire PENDING proposals older than max_age_days.
+        """Expire PENDING/EXECUTING proposals older than max_age_days.
 
         Returns the number of proposals expired.
         """
@@ -267,7 +272,7 @@ class RecordStore:
                     row["id"],
                 )
                 continue
-            if meta.get("status") == "pending":
+            if meta.get("status") in self._EXPIRABLE_STATUSES:
                 meta["status"] = "expired"
                 await self._db.execute(
                     "UPDATE certain_records SET metadata = ? WHERE id = ?",

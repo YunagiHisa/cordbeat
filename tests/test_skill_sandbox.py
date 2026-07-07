@@ -222,6 +222,17 @@ async def test_read_loop_enforces_stdout_size_limit() -> None:
         await _read_loop(proc, None, cfg)
 
 
+async def test_read_loop_wraps_line_overrun_as_sandbox_error() -> None:
+    class _OverrunStdout:
+        async def readline(self) -> bytes:
+            raise ValueError("Separator is not found, and chunk exceed the limit")
+
+    proc = _FakeProc()
+    proc.stdout = _OverrunStdout()  # type: ignore[assignment]
+    with pytest.raises(SkillSandboxError, match="stdout size limit"):
+        await _read_loop(proc, None, DEFAULT_CONFIG)
+
+
 async def test_read_loop_errors_when_subprocess_exits_without_result() -> None:
     proc = _FakeProc([], code=3)  # no lines -> EOF
     with pytest.raises(SkillSandboxError, match="exited without result"):

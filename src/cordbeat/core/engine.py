@@ -2990,9 +2990,19 @@ class CoreEngine:
             )
             return
 
-        self._soul.update_name(name, caller=SoulCaller.USER)
-        await self._send_reply(message, f"✅ Name updated to: {name}")
-        logger.info("SOUL name changed to '%s'", name)
+        # The name is expanded into every system prompt and used as an
+        # adapter keyword, so keep it short and free of control characters.
+        clean_name = sanitize(name, strict=True, max_len=50).strip()
+        if not clean_name:
+            await self._send_reply(
+                message,
+                "Invalid name. Use up to 50 visible characters.",
+            )
+            return
+
+        self._soul.update_name(clean_name, caller=SoulCaller.USER)
+        await self._send_reply(message, f"✅ Name updated to: {clean_name}")
+        logger.info("SOUL name changed to '%s'", clean_name)
 
     async def _cmd_quiet(self, message: GatewayMessage, arg: str) -> None:
         """Update HEARTBEAT quiet hours."""

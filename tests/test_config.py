@@ -16,9 +16,16 @@ from cordbeat.config import (
     _apply_env_overrides,
     _coerce_value,
     _load_dotenv,
+    gateway_ws_url,
     load_config,
     validate_config,
 )
+
+
+def test_gateway_ws_url_uses_loopback_for_wildcard_bind_host() -> None:
+    assert gateway_ws_url("0.0.0.0", 8765) == "ws://127.0.0.1:8765"
+    assert gateway_ws_url("::", 8765) == "ws://127.0.0.1:8765"
+    assert gateway_ws_url("example.test", 8765) == "ws://example.test:8765"
 
 
 class TestLoadConfig:
@@ -237,6 +244,38 @@ class TestApplyEnvOverrides:
         monkeypatch.setenv("CORDBEAT_ADAPTERS__DISCORD__OPTIONS__TOKEN", "secret")
         _apply_env_overrides(raw)
         assert raw["adapters"]["discord"]["options"]["token"] == "secret"
+
+    def test_adapter_specific_credentials(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        raw: dict = {
+            "adapters": {
+                "slack": {"options": {}},
+                "line": {"options": {}},
+                "whatsapp": {"options": {}},
+            }
+        }
+        monkeypatch.setenv("CORDBEAT_ADAPTERS__SLACK__OPTIONS__BOT_TOKEN", "xoxb")
+        monkeypatch.setenv("CORDBEAT_ADAPTERS__SLACK__OPTIONS__APP_TOKEN", "xapp")
+        monkeypatch.setenv(
+            "CORDBEAT_ADAPTERS__LINE__OPTIONS__CHANNEL_ACCESS_TOKEN", "line-token"
+        )
+        monkeypatch.setenv("CORDBEAT_ADAPTERS__LINE__OPTIONS__CHANNEL_SECRET", "sec")
+        monkeypatch.setenv("CORDBEAT_ADAPTERS__WHATSAPP__OPTIONS__ACCESS_TOKEN", "wa")
+        monkeypatch.setenv(
+            "CORDBEAT_ADAPTERS__WHATSAPP__OPTIONS__PHONE_NUMBER_ID", "123"
+        )
+
+        _apply_env_overrides(raw)
+
+        assert raw["adapters"]["slack"]["options"]["bot_token"] == "xoxb"
+        assert raw["adapters"]["slack"]["options"]["app_token"] == "xapp"
+        assert raw["adapters"]["line"]["options"]["channel_access_token"] == (
+            "line-token"
+        )
+        assert raw["adapters"]["line"]["options"]["channel_secret"] == "sec"
+        assert raw["adapters"]["whatsapp"]["options"]["access_token"] == "wa"
+        assert raw["adapters"]["whatsapp"]["options"]["phone_number_id"] == 123
 
     def test_creates_missing_sections(self, monkeypatch: pytest.MonkeyPatch) -> None:
         raw: dict = {}

@@ -270,6 +270,23 @@ def test_cli_main_resolves_config_and_runs() -> None:
     coro.close()
 
 
+def test_cli_main_rewrites_wildcard_gateway_host_for_client_connect() -> None:
+    fake_config = MagicMock()
+    fake_config.gateway.host = "0.0.0.0"
+    fake_config.gateway.port = 8765
+    fake_config.gateway.auth_token = "tok"
+
+    with (
+        patch("cordbeat.config.load_config", return_value=fake_config),
+        patch("cordbeat.adapters.cli.asyncio.run") as run_mock,
+    ):
+        cli_main(config_path="/tmp/cfg.yaml")
+
+    coro = run_mock.call_args[0][0]
+    assert coro.cr_frame.f_locals["ws_url"] == "ws://127.0.0.1:8765"
+    coro.close()
+
+
 def test_cli_main_swallows_keyboard_interrupt() -> None:
     """A Ctrl+C during the session is swallowed by cli_main."""
     fake_config = MagicMock()

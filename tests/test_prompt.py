@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import re
+
 from cordbeat.agent.react_types import ToolCallResult
 from cordbeat.ai.prompt import (
     MAX_USER_INPUT_LEN,
@@ -77,6 +80,30 @@ class TestReactContinuationPrompt:
 
         assert "</Tool_Response >" not in result
         assert "<\\/tool_response>" in result
+
+    def test_truncates_error_output_and_json_escapes_body(self) -> None:
+        result = build_react_continuation_prompt(
+            [
+                ToolCallResult(
+                    "fetch_url",
+                    {"url": "https://example.test"},
+                    'bad "quote"\n' + "x" * 100_000,
+                    is_error=True,
+                )
+            ],
+            max_tool_output_chars=64,
+        )
+
+        assert "x" * 1000 not in result
+        match = re.search(
+            r'<tool_response name="fetch_url">\n(.+?)\n</tool_response>',
+            result,
+            flags=re.DOTALL,
+        )
+        assert match is not None
+        body = json.loads(match.group(1))
+        assert body["error"].startswith('bad "quote"\n')
+        assert len(body["error"]) == 64
 
 
 class TestToolSystemPrompt:
@@ -175,6 +202,16 @@ class TestBuildSoulSystemPrompt:
         result = build_soul_system_prompt(snap)
         assert "talk like a friend" in result.lower()
         assert "butler-speak" in result
+
+    def test_invalid_timezone_value_falls_back_to_utc(self) -> None:
+        snap = {
+            "name": "TestBot",
+            "traits": ["curious"],
+            "emotion": {"primary": "calm", "intensity": 0.5},
+            "immutable_rules": [],
+        }
+        result = build_soul_system_prompt(snap, timezone_name="../etc")
+        assert "UTC" in result
 
     def test_familiarity_stages(self) -> None:
         """Relationship stage label tracks message count."""

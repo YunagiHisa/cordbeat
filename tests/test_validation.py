@@ -104,6 +104,11 @@ class TestUserSummaryValidation:
         r = validate_user_summary_update({"last_topic": "x" * 100})
         assert not r.valid
 
+    def test_rejects_non_string_topic(self) -> None:
+        r = validate_user_summary_update({"last_topic": 123})
+        assert not r.valid
+        assert "must be a string" in r.error_summary
+
 
 class TestSoulUpdateValidation:
     def test_immutable_rules_blocked(self) -> None:
@@ -125,6 +130,11 @@ class TestSoulUpdateValidation:
             }
         )
         assert not r.valid
+
+    def test_rejects_malformed_emotion(self) -> None:
+        r = validate_soul_update({"current_emotion": "happy"})
+        assert not r.valid
+        assert "must be an object" in r.error_summary
 
 
 class TestSkillSelectionValidation:
@@ -257,6 +267,25 @@ class TestValidatedAiJson:
         )
         assert result is fallback
         assert backend.generate_json.call_count == 3  # 1 + MAX_RETRIES
+
+    async def test_validator_type_error_retries_then_fallback(self) -> None:
+        backend = AsyncMock()
+        backend.generate_json = AsyncMock(return_value={"bad": "shape"})
+        fallback = {"action": "none", "next_heartbeat_minutes": 60}
+
+        def crashing_validator(data: dict[str, object]) -> object:
+            raise TypeError("malformed")
+
+        result = await validated_ai_json(
+            backend,
+            prompt="test",
+            system="sys",
+            validator=crashing_validator,
+            fallback=fallback,
+        )
+
+        assert result is fallback
+        assert backend.generate_json.call_count == 3
 
     async def test_raises_without_fallback(self) -> None:
         backend = AsyncMock()

@@ -759,6 +759,22 @@ class TestRecallHints:
         hints_other = await memory.get_recall_hints("u1", date_str="2020-01-01")
         assert len(hints_other) == 0
 
+    async def test_filter_skips_invalid_metadata(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.store_recall_hint(
+            user_id="u1",
+            hint_type="temporal",
+            content="Broken hint",
+        )
+        await memory._conn.execute(
+            "UPDATE certain_records SET metadata = ? WHERE record_type = ?",
+            ("{bad json", "recall_hint"),
+        )
+        await memory._conn.commit()
+
+        hints = await memory.get_recall_hints("u1", date_str="2026-01-01")
+        assert hints == []
+
     async def test_clear_old_hints(self, memory: MemoryStore) -> None:
         await memory.get_or_create_user("u1", "Alice")
         await memory.store_recall_hint(
@@ -805,6 +821,29 @@ class TestChainLinks:
         results = await memory.get_chain_links("u1", ["mem_A"])
         assert len(results) == 1
         assert "Python" in results[0]
+
+    async def test_skips_chain_links_with_invalid_metadata(
+        self, memory: MemoryStore
+    ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_A",
+            linked_content="Broken link",
+        )
+        await memory._conn.execute(
+            "UPDATE certain_records SET metadata = ? WHERE record_type = ?",
+            ("{bad json", "chain_link"),
+        )
+        await memory.store_chain_link(
+            user_id="u1",
+            source_memory_id="mem_A",
+            linked_content="Good link",
+        )
+        await memory._conn.commit()
+
+        results = await memory.get_chain_links("u1", ["mem_A"])
+        assert results == ["Good link"]
 
     async def test_no_match_returns_empty(self, memory: MemoryStore) -> None:
         await memory.get_or_create_user("u1", "Alice")

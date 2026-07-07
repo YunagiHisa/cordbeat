@@ -13,7 +13,7 @@ def resolve_timezone(value: str | tzinfo | None) -> tzinfo:
         return UTC
     try:
         return ZoneInfo(value)
-    except ZoneInfoNotFoundError:
+    except (ZoneInfoNotFoundError, ValueError):
         return UTC
 
 

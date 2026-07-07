@@ -24,6 +24,18 @@ def _is_loopback_host(host: str) -> bool:
         return False
 
 
+def gateway_connect_host(host: str) -> str:
+    """Return a client-connectable host for a configured gateway bind host."""
+    normalized = host.strip().lower().strip("[]")
+    if normalized in {"0.0.0.0", "::"}:
+        return "127.0.0.1"
+    return host
+
+
+def gateway_ws_url(host: str, port: int) -> str:
+    return f"ws://{gateway_connect_host(host)}:{port}"
+
+
 def cordbeat_home() -> Path:
     """Return the CordBeat home directory.
 

@@ -155,7 +155,15 @@ def validate_user_summary_update(data: dict[str, Any]) -> ValidationResult:
             )
 
     topic = data.get("last_topic", "")
-    if len(topic) > 50:
+    if not isinstance(topic, str):
+        errors.append(
+            ValidationError(
+                field="last_topic",
+                message="must be a string",
+                value=topic,
+            )
+        )
+    elif len(topic) > 50:
         errors.append(
             ValidationError(
                 field="last_topic",
@@ -165,7 +173,15 @@ def validate_user_summary_update(data: dict[str, Any]) -> ValidationResult:
         )
 
     tone = data.get("emotional_tone", "")
-    if len(tone) > 50:
+    if not isinstance(tone, str):
+        errors.append(
+            ValidationError(
+                field="emotional_tone",
+                message="must be a string",
+                value=tone,
+            )
+        )
+    elif len(tone) > 50:
         errors.append(
             ValidationError(
                 field="emotional_tone",
@@ -211,9 +227,21 @@ def validate_soul_update(data: dict[str, Any]) -> ValidationResult:
         )
 
     emotion = data.get("current_emotion", {})
-    if emotion:
+    if emotion and not isinstance(emotion, dict):
+        errors.append(
+            ValidationError(
+                field="current_emotion",
+                message="must be an object",
+                value=emotion,
+            )
+        )
+    elif emotion:
         intensity = emotion.get("primary_intensity")
-        if intensity is not None and (intensity < 0 or intensity > 1):
+        if intensity is not None and (
+            not isinstance(intensity, int | float)
+            or intensity < 0
+            or intensity > 1
+        ):
             errors.append(
                 ValidationError(
                     field="current_emotion.primary_intensity",
@@ -261,7 +289,16 @@ async def validated_ai_json(
             )
             continue
 
-        result: ValidationResult = validator(data, **validator_kwargs)
+        try:
+            result: ValidationResult = validator(data, **validator_kwargs)
+        except (TypeError, AttributeError, KeyError) as exc:
+            last_errors = f"Validation failed (malformed types): {exc}"
+            logger.warning(
+                "AI output validator crashed (attempt %d): %s",
+                attempt + 1,
+                exc,
+            )
+            continue
         if result.valid:
             return data
 

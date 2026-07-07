@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime
 from difflib import SequenceMatcher
@@ -183,7 +184,7 @@ def build_soul_system_prompt(
     # --- Current date/time ---
     try:
         tz: ZoneInfo | UTC = ZoneInfo(timezone_name)  # type: ignore[valid-type]
-    except ZoneInfoNotFoundError:
+    except (ZoneInfoNotFoundError, ValueError):
         tz = UTC
     now = datetime.now(tz=tz)
     datetime_str = now.strftime("%Y-%m-%d %H:%M %Z")  # e.g. "2026-05-04 09:30 JST"
@@ -362,8 +363,8 @@ def build_react_continuation_prompt(
     parts: list[str] = []
     for r in results:
         if r.is_error:
-            safe_err = _escape_tool_response(r.output)
-            body = f'{{"error": "{safe_err}"}}'
+            safe_err = _escape_tool_response(r.output[:max_tool_output_chars])
+            body = json.dumps({"error": safe_err}, ensure_ascii=False)
         else:
             safe_out = _escape_tool_response(r.output[:max_tool_output_chars])
             body = safe_out

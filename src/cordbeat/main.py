@@ -17,7 +17,7 @@ import yaml
 from cordbeat.agent.heartbeat import HeartbeatLoop
 from cordbeat.agent.soul import Soul
 from cordbeat.ai.backend import create_backend
-from cordbeat.config import cordbeat_home, load_config
+from cordbeat.config import cordbeat_home, gateway_ws_url, load_config
 from cordbeat.core.engine import CoreEngine
 from cordbeat.core.gateway import GatewayServer, MessageQueue
 from cordbeat.memory import MemoryStore
@@ -426,7 +426,7 @@ async def main_with_cli(config_path: str) -> None:
     # (load_config deduplicates secret warnings, so the second call inside
     # main() will not re-emit them.)
     _cfg = load_config(config_path)
-    ws_url = f"ws://{_cfg.gateway.host}:{_cfg.gateway.port}"
+    ws_url = gateway_ws_url(_cfg.gateway.host, _cfg.gateway.port)
     auth_token = _cfg.gateway.auth_token
 
     # Use an Event so main() signals us when the gateway is ready, avoiding
@@ -494,7 +494,7 @@ def cli_chat() -> None:
 
     config_path = _resolve_config_path()
     cfg = load_config(config_path)
-    ws_url = f"ws://{cfg.gateway.host}:{cfg.gateway.port}"
+    ws_url = gateway_ws_url(cfg.gateway.host, cfg.gateway.port)
 
     if not _probe_ws(ws_url):
         print("[CordBeat] Starting server in background...")

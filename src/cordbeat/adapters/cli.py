@@ -175,13 +175,13 @@ async def main(ws_url: str = "ws://localhost:8765", auth_token: str = "") -> Non
 
 
 if __name__ == "__main__":
-    from cordbeat.config import cordbeat_home, load_config
+    from cordbeat.config import cordbeat_home, gateway_ws_url, load_config
 
     _config = load_config(cordbeat_home() / "config.yaml")
     _ws_url = (
         sys.argv[1]
         if len(sys.argv) > 1
-        else f"ws://{_config.gateway.host}:{_config.gateway.port}"
+        else gateway_ws_url(_config.gateway.host, _config.gateway.port)
     )
     asyncio.run(main(_ws_url, auth_token=_config.gateway.auth_token))
 
@@ -193,7 +193,7 @@ def cli_main(config_path: str | None = None) -> None:
     config (e.g. cli_chat()).  When omitted, it falls back to sys.argv[1] or
     ``~/.cordbeat/config.yaml`` as before.
     """
-    from cordbeat.config import cordbeat_home, load_config
+    from cordbeat.config import cordbeat_home, gateway_ws_url, load_config
 
     if config_path is None:
         config_path = (
@@ -202,7 +202,7 @@ def cli_main(config_path: str | None = None) -> None:
             else str(cordbeat_home() / "config.yaml")
         )
     _config = load_config(config_path)
-    ws_url = f"ws://{_config.gateway.host}:{_config.gateway.port}"
+    ws_url = gateway_ws_url(_config.gateway.host, _config.gateway.port)
     try:
         asyncio.run(main(ws_url, auth_token=_config.gateway.auth_token))
     except KeyboardInterrupt:

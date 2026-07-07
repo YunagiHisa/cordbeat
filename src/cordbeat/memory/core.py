@@ -518,7 +518,14 @@ class MemoryStore:
             return all_hints
         result = []
         for hint in all_hints:
-            meta = json.loads(hint.get("metadata") or "{}")
+            try:
+                meta = json.loads(hint.get("metadata") or "{}")
+            except json.JSONDecodeError:
+                logger.debug(
+                    "Skipping recall hint with invalid metadata",
+                    exc_info=True,
+                )
+                continue
             if meta.get("date") == date_str:
                 result.append(hint)
         return result
@@ -590,7 +597,14 @@ class MemoryStore:
         for depth in range(max_depth):
             next_sources: set[str] = set()
             for link in all_links:
-                meta = json.loads(link.get("metadata") or "{}")
+                try:
+                    meta = json.loads(link.get("metadata") or "{}")
+                except json.JSONDecodeError:
+                    logger.debug(
+                        "Skipping chain link with invalid metadata",
+                        exc_info=True,
+                    )
+                    continue
                 if meta.get("source_memory_id") not in current_sources:
                     continue
                 content = link.get("content", "")

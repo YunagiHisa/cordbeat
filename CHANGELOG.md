@@ -19,6 +19,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **AI validation and prompt robustness from source audit #8.** ReAct tool-error
+  output is truncated and JSON-escaped like the success path, `validated_ai_json`
+  survives validator crashes by retrying, summary/soul validators reject
+  malformed types, invalid timezone strings fall back to UTC, corrupt recall-hint
+  metadata rows are skipped instead of failing recall, and CLI clients rewrite
+  wildcard gateway binds to a connectable loopback address.
 - **Setup, service, and restore fixes from source audit #7.** The wizard and
   `cordbeat-add` now collect and write the credential keys each adapter actually
   reads (Slack bot+app tokens, LINE token+secret, WhatsApp token/phone/verify/app

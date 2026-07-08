@@ -1292,6 +1292,7 @@ class HeartbeatLoop:
             result = await skill.execute(
                 params,
                 memory=self._memory,
+                acting_user_id=decision.target_user_id or None,
                 sandbox_overrides=sandbox_overrides,
             )
             logger.info(

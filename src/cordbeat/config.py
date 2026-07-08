@@ -302,6 +302,7 @@ class ReActConfig:
     max_iterations: int = 3
     max_actions_per_turn: int | None = None
     max_tool_output_chars: int = 4000
+    continuation_max_tokens: int = 4000
     expose_trace_to_user: bool = False
 
 

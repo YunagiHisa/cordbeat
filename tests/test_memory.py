@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -24,6 +25,45 @@ async def memory(tmp_path: Path) -> MemoryStore:
     await store.initialize()
     yield store
     await store.close()
+
+
+class TestMemoryInitialization:
+    async def test_foreign_key_check_warns_but_initializes(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        db_path = tmp_path / "fk.db"
+        store = MemoryStore(MemoryConfig(sqlite_path=str(db_path)))
+        await store.initialize()
+        await store._conn.execute(
+            "INSERT INTO conversation_media_observations "
+            "(message_id, summary, created_at) VALUES (?, ?, ?)",
+            (9999, "orphan", "2026-07-08T00:00:00+00:00"),
+        )
+        await store._conn.commit()
+        await store.close()
+
+        store2 = MemoryStore(MemoryConfig(sqlite_path=str(db_path)))
+        with caplog.at_level(logging.WARNING, logger="cordbeat.memory.core"):
+            await store2.initialize()
+        await store2.close()
+
+        assert "FK check: 1 orphan row(s)" in caplog.text
+        assert "conversation_media_observations=1" in caplog.text
+        assert "Foreign keys are not enforced" in caplog.text
+
+    async def test_foreign_key_check_clean_db_has_no_warning(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        store = MemoryStore(MemoryConfig(sqlite_path=str(tmp_path / "clean.db")))
+        with caplog.at_level(logging.WARNING, logger="cordbeat.memory.core"):
+            await store.initialize()
+        await store.close()
+
+        assert "FK check:" not in caplog.text
 
 
 class TestUserManagement:

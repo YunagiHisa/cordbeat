@@ -9,6 +9,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 SCHEMA = """
+-- Foreign keys document relationships but are not enforced by default:
+-- CordBeat leaves PRAGMA foreign_keys OFF for legacy database compatibility.
+-- Startup observes orphan rows via PRAGMA foreign_key_check in MemoryStore.
 CREATE TABLE IF NOT EXISTS users (
     user_id       TEXT PRIMARY KEY,
     display_name  TEXT NOT NULL,

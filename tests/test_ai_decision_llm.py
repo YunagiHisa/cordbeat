@@ -127,3 +127,5 @@ async def test_judge_yes_no_forces_no_think_and_rejects_non_exact_yes() -> None:
 
     assert not await judge_yes_no("Answer:")
     assert "/no_think" in fake.kwargs[0]["system"]
+    assert fake.kwargs[0]["temperature"] == 0.0
+    assert fake.kwargs[0]["max_tokens"] == 8

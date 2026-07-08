@@ -14,14 +14,14 @@ from cordbeat.tools.metrics import REGISTRY
 
 class FakeBackend(AIBackend):
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str, float, int]] = []
+        self.calls: list[tuple[str, str, float | None, int | None]] = []
 
     async def generate(
         self,
         prompt: str,
         system: str = "",
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         self.calls.append((prompt, system, temperature, max_tokens))
         return f"RESP[{len(self.calls)}]:{prompt}"
@@ -31,16 +31,16 @@ class FakeBackend(AIBackend):
         prompt: str,
         images: list[str],
         system: str = "",
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         return f"VISION:{prompt}"
 
     async def generate_chat(
         self,
         messages: list[dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         return "CHAT"
 
@@ -84,6 +84,15 @@ async def test_cache_hit_returns_same_value() -> None:
     assert a == b
     assert len(inner.calls) == 1
     assert CACHE_HITS.value({"backend": "test"}) == 1.0
+
+
+@pytest.mark.asyncio
+async def test_cache_normalizes_none_generation_defaults() -> None:
+    cb, inner = _make(max_temperature=1.0)
+    a = await cb.generate("hi", system="s")
+    b = await cb.generate("hi", system="s", temperature=0.7, max_tokens=1024)
+    assert a == b
+    assert len(inner.calls) == 1
 
 
 @pytest.mark.asyncio

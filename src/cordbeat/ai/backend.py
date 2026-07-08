@@ -46,13 +46,10 @@ _REASONING_EFFORT_VALUES = {"none", "minimal", "low", "medium", "high"}
 
 def _resolve_configured_max_tokens(
     configured_max_tokens: int | None,
-    requested_max_tokens: int,
+    requested_max_tokens: int | None,
 ) -> int:
-    if (
-        configured_max_tokens is not None
-        and requested_max_tokens == _API_DEFAULT_MAX_TOKENS
-    ):
-        return configured_max_tokens
+    if requested_max_tokens is None:
+        return configured_max_tokens or _API_DEFAULT_MAX_TOKENS
     return requested_max_tokens
 
 
@@ -164,8 +161,8 @@ class AIBackend(ABC):
         self,
         prompt: str,
         system: str = "",
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Generate a text completion."""
 
@@ -174,8 +171,8 @@ class AIBackend(ABC):
         prompt: str,
         images: list[str],
         system: str = "",
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Generate a completion with image inputs.
 
@@ -194,8 +191,8 @@ class AIBackend(ABC):
     async def generate_chat(
         self,
         messages: list[dict[str, Any]],
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Generate from a messages list (role/content pairs).
 
@@ -206,8 +203,8 @@ class AIBackend(ABC):
         self,
         messages: list[dict[str, Any]],
         images: list[str],
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Generate from chat history with images attached to the last user turn."""
 
@@ -220,8 +217,8 @@ class AIBackend(ABC):
         self,
         prompt: str,
         system: str = "",
-        temperature: float = 0.3,
-        max_tokens: int = 1024,
+        temperature: float | None = 0.3,
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
         """Generate and parse a JSON response."""
         import re
@@ -282,26 +279,38 @@ class OllamaBackend(AIBackend):
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    def _build_options(
+        self,
+        temperature: float | None,
+        max_tokens: int | None,
+    ) -> dict[str, Any]:
+        opts = dict(self._options)
+        if temperature is not None:
+            opts["temperature"] = temperature
+        else:
+            opts.setdefault("temperature", 0.7)
+        resolved_max_tokens = _resolve_configured_max_tokens(
+            self._default_max_tokens,
+            max_tokens,
+        )
+        if max_tokens is not None:
+            opts["num_predict"] = max_tokens
+        else:
+            opts.setdefault("num_predict", resolved_max_tokens)
+        return opts
+
     async def generate(
         self,
         prompt: str,
         system: str = "",
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
-        max_tokens = _resolve_configured_max_tokens(
-            self._default_max_tokens,
-            max_tokens,
-        )
         payload: dict[str, Any] = {
             "model": self._model,
             "prompt": prompt,
             "stream": False,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-                **self._options,
-            },
+            "options": self._build_options(temperature, max_tokens),
         }
         if system:
             payload["system"] = system
@@ -337,14 +346,10 @@ class OllamaBackend(AIBackend):
         prompt: str,
         images: list[str],
         system: str = "",
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Generate using Ollama's chat API with image support (e.g. llava)."""
-        max_tokens = _resolve_configured_max_tokens(
-            self._default_max_tokens,
-            max_tokens,
-        )
         messages: list[dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -357,11 +362,7 @@ class OllamaBackend(AIBackend):
             "model": self._model,
             "messages": messages,
             "stream": False,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-                **self._options,
-            },
+            "options": self._build_options(temperature, max_tokens),
         }
 
         labels = {"backend": "ollama", "model": self._model}
@@ -382,22 +383,14 @@ class OllamaBackend(AIBackend):
     async def generate_chat(
         self,
         messages: list[dict[str, Any]],
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
-        max_tokens = _resolve_configured_max_tokens(
-            self._default_max_tokens,
-            max_tokens,
-        )
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": messages,
             "stream": False,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-                **self._options,
-            },
+            "options": self._build_options(temperature, max_tokens),
         }
         labels = {"backend": "ollama", "model": self._model}
         try:
@@ -418,8 +411,8 @@ class OllamaBackend(AIBackend):
         self,
         messages: list[dict[str, Any]],
         images: list[str],
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         enriched = [dict(message) for message in messages]
         for message in reversed(enriched):
@@ -599,7 +592,7 @@ class OpenAICompatBackend(AIBackend):
             return self._voice_enable_thinking
         return self._enable_thinking
 
-    def _effective_max_tokens(self, requested_max_tokens: int) -> int:
+    def _effective_max_tokens(self, requested_max_tokens: int | None) -> int:
         resolved = _resolve_configured_max_tokens(
             self._default_max_tokens,
             requested_max_tokens,
@@ -703,10 +696,11 @@ class OpenAICompatBackend(AIBackend):
         self,
         prompt: str,
         system: str = "",
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         max_tokens = self._effective_max_tokens(max_tokens)
+        temperature = 0.7 if temperature is None else temperature
         messages: list[dict[str, str]] = []
         effective_thinking = self._effective_enable_thinking()
         effective_system = system
@@ -885,11 +879,12 @@ class OpenAICompatBackend(AIBackend):
         prompt: str,
         images: list[str],
         system: str = "",
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Generate using OpenAI vision API (content array with image_url blocks)."""
         max_tokens = self._effective_max_tokens(max_tokens)
+        temperature = 0.7 if temperature is None else temperature
         messages: list[dict[str, Any]] = []
         effective_thinking = self._effective_enable_thinking()
         effective_system = system
@@ -961,10 +956,11 @@ class OpenAICompatBackend(AIBackend):
     async def generate_chat(
         self,
         messages: list[dict[str, Any]],
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         max_tokens = self._effective_max_tokens(max_tokens)
+        temperature = 0.7 if temperature is None else temperature
         labels = {"backend": "openai_compat", "model": self._model}
         effective_thinking = self._effective_enable_thinking()
         has_no_think = any(
@@ -1038,8 +1034,8 @@ class OpenAICompatBackend(AIBackend):
         self,
         messages: list[dict[str, Any]],
         images: list[str],
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         enriched = [dict(message) for message in messages]
         for message in reversed(enriched):
@@ -1086,5 +1082,6 @@ def create_backend(config: AIBackendConfig) -> AIBackend:
             config=config.cache,
             model=config.model,
             backend_name=backend_name,
+            default_max_tokens=config.max_tokens,
         )
     return backend

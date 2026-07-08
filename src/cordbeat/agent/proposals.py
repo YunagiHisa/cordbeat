@@ -775,9 +775,16 @@ class ProposalExecutor:
             return
 
         try:
+            proposal_user_id = proposal.get("user_id")
+            acting_user_id = (
+                str(proposal_user_id)
+                if proposal_user_id and proposal_user_id != "__system__"
+                else None
+            )
             result = await skill.execute(
                 skill_params,
                 memory=self._memory,
+                acting_user_id=acting_user_id,
                 sandbox_overrides=sandbox_overrides_for_skill(
                     skill_name,
                     skill_params,

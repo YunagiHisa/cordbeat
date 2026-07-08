@@ -25,6 +25,8 @@ from cordbeat.tools.metrics import REGISTRY, inc_counter
 
 from .backend import AIBackend
 
+_API_DEFAULT_MAX_TOKENS = 1024
+
 logger = logging.getLogger(__name__)
 
 
@@ -63,12 +65,14 @@ class CachingBackend(AIBackend):
         config: LLMCacheConfig,
         model: str,
         backend_name: str,
+        default_max_tokens: int | None = None,
         time_func: Any = time.monotonic,
     ) -> None:
         self._inner = inner
         self._config = config
         self._model = model
         self._backend_name = backend_name
+        self._default_max_tokens = default_max_tokens
         self._time = time_func
         self._cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
 
@@ -86,20 +90,32 @@ class CachingBackend(AIBackend):
         self,
         prompt: str,
         system: str = "",
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
+        effective_temperature = 0.7 if temperature is None else temperature
+        effective_max_tokens = (
+            self._default_max_tokens or _API_DEFAULT_MAX_TOKENS
+            if max_tokens is None
+            else max_tokens
+        )
         if not self._config.enabled:
             return await self._inner.generate(prompt, system, temperature, max_tokens)
 
-        if temperature > self._config.max_temperature:
+        if effective_temperature > self._config.max_temperature:
             inc_counter(
                 CACHE_MISSES,
                 {"backend": self._backend_name, "reason": "high_temperature"},
             )
             return await self._inner.generate(prompt, system, temperature, max_tokens)
 
-        key = _hash_key(prompt, system, self._model, temperature, max_tokens)
+        key = _hash_key(
+            prompt,
+            system,
+            self._model,
+            effective_temperature,
+            effective_max_tokens,
+        )
         now = self._time()
         entry = self._cache.get(key)
         if entry is not None:
@@ -129,8 +145,8 @@ class CachingBackend(AIBackend):
         prompt: str,
         images: list[str],
         system: str = "",
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Vision calls are never cached (images would inflate the cache key)."""
         return await self._inner.generate_with_vision(
@@ -140,8 +156,8 @@ class CachingBackend(AIBackend):
     async def generate_chat(
         self,
         messages: list[dict[str, Any]],
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Multi-turn chat calls are not cached (complex key, low hit rate)."""
         return await self._inner.generate_chat(messages, temperature, max_tokens)

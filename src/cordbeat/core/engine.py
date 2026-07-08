@@ -1533,11 +1533,11 @@ class CoreEngine:
                     return await self._ai.generate_chat_with_vision(
                         messages,
                         images=result_images,
-                        max_tokens=self._react_config.max_tool_output_chars,
+                        max_tokens=self._react_config.continuation_max_tokens,
                     )
                 return await self._ai.generate_chat(
                     messages,
-                    max_tokens=self._react_config.max_tool_output_chars,
+                    max_tokens=self._react_config.continuation_max_tokens,
                 )
             except Exception as exc:
                 status_code = _retryable_http_status_code(exc)
@@ -2046,6 +2046,7 @@ class CoreEngine:
                     result = await skill.execute(
                         params,
                         memory=self._memory,
+                        acting_user_id=user_id,
                         sandbox_overrides=sandbox_overrides,
                     )
                     output, is_error = _serialize_skill_result(result)

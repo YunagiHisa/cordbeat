@@ -191,6 +191,7 @@ react:
   max_iterations: 3         # maximum tool-call/re-prompt cycles per message
   max_actions_per_turn: 3   # shared ActionBudget cap for tool actions per message
   max_tool_output_chars: 4000  # per-result output truncation limit fed back to AI
+  continuation_max_tokens: 4000  # token cap for follow-up ReAct responses
   expose_trace_to_user: false  # include redacted params in the final tool summary
 
 skills:

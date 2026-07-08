@@ -161,6 +161,124 @@ async def test_memory_call_awaits_async_method_and_normalizes_result() -> None:
     assert msg == {"type": "memory_result", "id": 4, "result": ["fact"]}
 
 
+async def test_memory_call_scopes_get_certain_records_to_acting_user() -> None:
+    class Memory:
+        async def get_certain_records(self, user_id: str) -> list[str]:
+            return [user_id]
+
+    proc = _FakeProc()
+    await _handle_memory_call(
+        proc,
+        Memory(),
+        {"id": 40, "method": "get_certain_records", "args": ["u2"]},
+        acting_user_id="u1",
+    )
+
+    (msg,) = proc.stdin.messages()
+    assert msg == {"type": "memory_result", "id": 40, "result": ["u1"]}
+
+
+async def test_memory_call_scopes_add_certain_record_and_truncates_content() -> None:
+    captured: dict[str, Any] = {}
+
+    class Memory:
+        async def add_certain_record(
+            self,
+            user_id: str,
+            content: str,
+            record_type: str = "log",
+        ) -> str:
+            captured.update(
+                user_id=user_id,
+                content=content,
+                record_type=record_type,
+            )
+            return "record-1"
+
+    proc = _FakeProc()
+    await _handle_memory_call(
+        proc,
+        Memory(),
+        {
+            "id": 41,
+            "method": "add_certain_record",
+            "args": ["u2", "x" * 16_005],
+            "kwargs": {"record_type": "diary"},
+        },
+        acting_user_id="u1",
+    )
+
+    (msg,) = proc.stdin.messages()
+    assert msg == {"type": "memory_result", "id": 41, "result": "record-1"}
+    assert captured["user_id"] == "u1"
+    assert len(captured["content"]) == 16_000
+    assert captured["record_type"] == "diary"
+
+
+async def test_memory_call_filters_get_proposal_by_acting_user() -> None:
+    class Memory:
+        async def get_proposal(self, proposal_id: str) -> dict[str, str]:
+            assert proposal_id == "p1"
+            return {"id": "p1", "user_id": "u2"}
+
+    proc = _FakeProc()
+    await _handle_memory_call(
+        proc,
+        Memory(),
+        {"id": 42, "method": "get_proposal", "args": ["p1"]},
+        acting_user_id="u1",
+    )
+
+    (msg,) = proc.stdin.messages()
+    assert msg == {"type": "memory_result", "id": 42, "result": None}
+
+
+async def test_memory_call_scopes_get_pending_proposals() -> None:
+    captured: dict[str, Any] = {}
+
+    class Memory:
+        async def get_pending_proposals(
+            self,
+            user_id: str | None = None,
+            status: str = "pending",
+        ) -> list[dict[str, str]]:
+            captured.update(user_id=user_id, status=status)
+            return []
+
+    proc = _FakeProc()
+    await _handle_memory_call(
+        proc,
+        Memory(),
+        {
+            "id": 43,
+            "method": "get_pending_proposals",
+            "kwargs": {"user_id": "u2", "status": "approved"},
+        },
+        acting_user_id="u1",
+    )
+
+    (msg,) = proc.stdin.messages()
+    assert msg == {"type": "memory_result", "id": 43, "result": []}
+    assert captured == {"user_id": "u1", "status": "approved"}
+
+
+async def test_memory_call_system_execution_remains_unscoped() -> None:
+    class Memory:
+        async def get_certain_records(self, user_id: str) -> list[str]:
+            return [user_id]
+
+    proc = _FakeProc()
+    await _handle_memory_call(
+        proc,
+        Memory(),
+        {"id": 44, "method": "get_certain_records", "args": ["u2"]},
+        acting_user_id=None,
+    )
+
+    (msg,) = proc.stdin.messages()
+    assert msg == {"type": "memory_result", "id": 44, "result": ["u2"]}
+
+
 async def test_memory_call_surfaces_method_exception() -> None:
     class BoomMemory:
         def get_proposal(self, *_a: Any, **_k: Any) -> Any:
@@ -197,6 +315,28 @@ async def test_read_loop_dispatches_memory_call_then_result() -> None:
     assert out == {"done": 1}
     # The parent answered the RPC before the result arrived.
     assert proc.stdin.messages()[0]["result"] == 7
+
+
+async def test_read_loop_enforces_memory_rpc_call_limit() -> None:
+    class Memory:
+        def get_pending_proposals(self) -> int:
+            return 7
+
+    lines = [
+        _line({"type": "memory_call", "id": i, "method": "get_pending_proposals"})
+        for i in range(1, 52)
+    ]
+    lines.append(_line({"type": "result", "result": {"done": 1}}))
+    proc = _FakeProc(lines)
+
+    out = await _read_loop(proc, Memory(), DEFAULT_CONFIG)
+
+    assert out == {"done": 1}
+    messages = proc.stdin.messages()
+    assert messages[49] == {"type": "memory_result", "id": 50, "result": 7}
+    assert messages[50]["type"] == "memory_error"
+    assert messages[50]["id"] == 51
+    assert "RPC call limit exceeded" in messages[50]["error"]
 
 
 async def test_read_loop_raises_permission_error() -> None:

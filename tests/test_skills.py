@@ -709,6 +709,34 @@ class TestSkillExecution:
         result = await skill.execute({})
         assert result == {"result": "text"}
 
+    async def test_sandboxed_skill_passes_acting_user_id(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured: dict[str, object] = {}
+
+        async def fake_run_skill_in_subprocess(**kwargs: object) -> dict[str, bool]:
+            captured.update(kwargs)
+            return {"ok": True}
+
+        monkeypatch.setattr(
+            "cordbeat.skills.registry.run_skill_in_subprocess",
+            fake_run_skill_in_subprocess,
+        )
+        code = "def execute(**kwargs):\n    return {'ok': True}\n"
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "sb_user", sandbox=True, main_code=code)
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("sb_user")
+        assert skill is not None
+
+        result = await skill.execute({}, memory=object(), acting_user_id="u1")
+
+        assert result == {"ok": True}
+        assert captured["acting_user_id"] == "u1"
+
     async def test_sandboxed_params_dict_signature(self, tmp_path: Path) -> None:
         """AI-generated execute(params) skills receive the params dict."""
         code = "def execute(params):\n    return {'bet': params.get('bet')}\n"

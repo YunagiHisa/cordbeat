@@ -39,6 +39,8 @@ class SandboxConfig:
 
 DEFAULT_CONFIG = SandboxConfig()
 _warned_windows_resource_limits = False
+_MAX_MEMORY_RPC_CALLS = 50
+_MAX_CERTAIN_RECORD_CONTENT_CHARS = 16_000
 
 
 async def _kill_tree(pid: int) -> None:
@@ -92,6 +94,7 @@ async def run_skill_in_subprocess(
     params: dict[str, Any],
     sandbox: dict[str, Any],
     memory: Any | None = None,
+    acting_user_id: str | None = None,
     config: SandboxConfig | None = None,
     python_executable: str | None = None,
 ) -> dict[str, Any]:
@@ -160,7 +163,7 @@ async def run_skill_in_subprocess(
         await proc.stdin.drain()
 
         result = await asyncio.wait_for(
-            _read_loop(proc, memory, cfg),
+            _read_loop(proc, memory, cfg, acting_user_id=acting_user_id),
             timeout=cfg.timeout_seconds,
         )
     except TimeoutError as exc:
@@ -189,11 +192,14 @@ async def _read_loop(
     proc: asyncio.subprocess.Process,
     memory: Any | None,
     cfg: SandboxConfig,
+    *,
+    acting_user_id: str | None = None,
 ) -> dict[str, Any]:
     assert proc.stdout is not None
     assert proc.stdin is not None
 
     bytes_read = 0
+    memory_rpc_calls = 0
     while True:
         try:
             line = await proc.stdout.readline()
@@ -230,7 +236,20 @@ async def _read_loop(
                 logger.debug("Skill traceback:\n%s", tb)
             raise SkillSandboxError(err)
         if mtype == "memory_call":
-            await _handle_memory_call(proc, memory, msg)
+            memory_rpc_calls += 1
+            if memory_rpc_calls > _MAX_MEMORY_RPC_CALLS:
+                await _send_memory_error(
+                    proc,
+                    msg.get("id"),
+                    "RPC call limit exceeded",
+                )
+                continue
+            await _handle_memory_call(
+                proc,
+                memory,
+                msg,
+                acting_user_id=acting_user_id,
+            )
             continue
         # Unknown — ignore.
 
@@ -247,12 +266,14 @@ async def _handle_memory_call(
     proc: asyncio.subprocess.Process,
     memory: Any | None,
     msg: dict[str, Any],
+    *,
+    acting_user_id: str | None = None,
 ) -> None:
     assert proc.stdin is not None
     msg_id = msg.get("id")
     method = msg.get("method", "")
-    args = msg.get("args") or []
-    kwargs = msg.get("kwargs") or {}
+    args = list(msg.get("args") or [])
+    kwargs = dict(msg.get("kwargs") or {})
 
     async def _send(out: dict[str, Any]) -> None:
         assert proc.stdin is not None
@@ -275,6 +296,12 @@ async def _handle_memory_call(
         )
         return
 
+    args, kwargs = _scope_memory_call(
+        method,
+        args,
+        kwargs,
+        acting_user_id=acting_user_id,
+    )
     fn = getattr(memory, method, None)
     if fn is None:
         await _send(
@@ -290,12 +317,91 @@ async def _handle_memory_call(
         result = fn(*args, **kwargs)
         if asyncio.iscoroutine(result):
             result = await result
+        if (
+            method == "get_proposal"
+            and acting_user_id is not None
+            and isinstance(result, dict)
+            and result.get("user_id") != acting_user_id
+        ):
+            result = None
     except Exception as exc:  # noqa: BLE001
         await _send({"type": "memory_error", "id": msg_id, "error": str(exc)})
         return
 
     # Normalize dataclasses / non-JSON types
     await _send({"type": "memory_result", "id": msg_id, "result": _jsonable(result)})
+
+
+async def _send_memory_error(
+    proc: asyncio.subprocess.Process,
+    msg_id: Any,
+    error: str,
+) -> None:
+    assert proc.stdin is not None
+    proc.stdin.write(
+        (json.dumps({"type": "memory_error", "id": msg_id, "error": error}) + "\n")
+        .encode("utf-8")
+    )
+    await proc.stdin.drain()
+
+
+def _scope_memory_call(
+    method: str,
+    args: list[Any],
+    kwargs: dict[str, Any],
+    *,
+    acting_user_id: str | None,
+) -> tuple[list[Any], dict[str, Any]]:
+    if method == "add_certain_record":
+        args, kwargs = _truncate_certain_record_content(args, kwargs)
+
+    if acting_user_id is None:
+        return args, kwargs
+
+    if method in {"get_certain_records", "add_certain_record"}:
+        if args:
+            args[0] = acting_user_id
+            kwargs.pop("user_id", None)
+        else:
+            kwargs["user_id"] = acting_user_id
+    elif method == "get_pending_proposals":
+        if args:
+            args[0] = acting_user_id
+            kwargs.pop("user_id", None)
+        else:
+            kwargs["user_id"] = acting_user_id
+
+    return args, kwargs
+
+
+def _truncate_certain_record_content(
+    args: list[Any],
+    kwargs: dict[str, Any],
+) -> tuple[list[Any], dict[str, Any]]:
+    if len(args) >= 2:
+        content = args[1]
+        if (
+            isinstance(content, str)
+            and len(content) > _MAX_CERTAIN_RECORD_CONTENT_CHARS
+        ):
+            logger.warning(
+                "Truncating skill memory add_certain_record content from "
+                "%d to %d chars",
+                len(content),
+                _MAX_CERTAIN_RECORD_CONTENT_CHARS,
+            )
+            args[1] = content[:_MAX_CERTAIN_RECORD_CONTENT_CHARS]
+    elif isinstance(kwargs.get("content"), str):
+        content = kwargs["content"]
+        if len(content) > _MAX_CERTAIN_RECORD_CONTENT_CHARS:
+            logger.warning(
+                "Truncating skill memory add_certain_record content from "
+                "%d to %d chars",
+                len(content),
+                _MAX_CERTAIN_RECORD_CONTENT_CHARS,
+            )
+            kwargs["content"] = content[:_MAX_CERTAIN_RECORD_CONTENT_CHARS]
+    return args, kwargs
 
 
 def _jsonable(obj: Any, seen: set[int] | None = None) -> Any:

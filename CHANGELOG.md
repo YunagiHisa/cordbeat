@@ -19,6 +19,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Decided audit backlog hardening.** Sandboxed memory RPCs are now scoped to
+  the acting user, with system execution left unscoped, a 50-call per-run cap,
+  and 16,000-character truncation for `add_certain_record` content. ReAct
+  continuation generation now uses its own `continuation_max_tokens` setting
+  instead of reusing the tool-output character limit. Memory initialization logs
+  `foreign_key_check` orphan counts without enforcing foreign keys. AI backend
+  generation parameters now distinguish omitted values from explicit ones, so
+  explicit low-temperature calls such as yes/no judges override configured
+  defaults while ordinary calls still use config or built-in defaults.
 - **Audit backlog cleanup.** Proposals orphaned in EXECUTING by a crash are
   now expired by the nightly sweep, an identical pending trait-change
   proposal is reused instead of piling up duplicates, the Gateway closes

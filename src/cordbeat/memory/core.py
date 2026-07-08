@@ -108,6 +108,7 @@ class MemoryStore:
         await conn.enable_load_extension(False)
 
         await apply_migrations(conn)
+        await self._log_foreign_key_check(conn)
         self.__conn = conn
 
         self.__users = UserStore(conn)
@@ -115,6 +116,41 @@ class MemoryStore:
         self.__conversations = ConversationStore(conn)
         self.__vectors = VectorMemory(conn, self._config)
         logger.info("Memory store initialized")
+
+    async def _log_foreign_key_check(self, conn: aiosqlite.Connection) -> None:
+        try:
+            cursor = await conn.execute("PRAGMA foreign_key_check")
+            rows = list(await cursor.fetchall())
+            await cursor.close()
+        except Exception:
+            logger.debug("FK check unavailable", exc_info=True)
+            return
+
+        if not rows:
+            logger.debug("FK check: clean")
+            return
+
+        counts: dict[str, int] = {}
+        for row in rows:
+            table = str(row["table"])
+            counts[table] = counts.get(table, 0) + 1
+        summary = ", ".join(
+            f"{table}={count}" for table, count in sorted(counts.items())
+        )
+        logger.warning(
+            "FK check: %d orphan row(s): %s. Foreign keys are not enforced; "
+            "see MIN8-1.",
+            len(rows),
+            summary,
+        )
+        for row in rows[:10]:
+            logger.debug(
+                "FK check detail: table=%s rowid=%s parent=%s fkid=%s",
+                row["table"],
+                row["rowid"],
+                row["parent"],
+                row["fkid"],
+            )
 
     async def close(self) -> None:
         if self.__conn:

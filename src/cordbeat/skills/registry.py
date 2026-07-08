@@ -77,6 +77,7 @@ class Skill:
         params: dict[str, Any],
         memory: Any = None,
         *,
+        acting_user_id: str | None = None,
         sandbox_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Execute the skill in an isolated subprocess.
@@ -99,7 +100,12 @@ class Skill:
             )
         try:
             async with time_block(SKILL_EXEC_LATENCY, labels):
-                result = await self._execute_inner(params, memory, sandbox_overrides)
+                result = await self._execute_inner(
+                    params,
+                    memory,
+                    acting_user_id,
+                    sandbox_overrides,
+                )
         except Exception:
             inc_counter(SKILL_EXEC_TOTAL, {**labels, "outcome": "error"})
             raise
@@ -110,6 +116,7 @@ class Skill:
         self,
         params: dict[str, Any],
         memory: Any,
+        acting_user_id: str | None,
         sandbox_overrides: dict[str, Any] | None,
     ) -> dict[str, Any]:
         sandbox_overrides = sandbox_overrides or {}
@@ -169,6 +176,7 @@ class Skill:
                 params=params,
                 sandbox=sandbox_params,
                 memory=memory,
+                acting_user_id=acting_user_id,
                 config=self._sandbox_config,
                 python_executable=python_executable,
             )

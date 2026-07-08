@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from cordbeat.agent.react_types import ToolCallResult
 from cordbeat.agent.soul import Soul
 from cordbeat.config import MemoryConfig, ReActConfig
 from cordbeat.core.engine import CoreEngine, _find_skill_tags
@@ -3652,11 +3653,13 @@ class TestReActLoop:
         react_enabled: bool = True,
         expose_trace_to_user: bool = False,
         vision_enabled: bool = False,
+        continuation_max_tokens: int = 4000,
     ) -> CoreEngine:
         react = ReActConfig(
             enabled=react_enabled,
             max_iterations=3,
             max_tool_output_chars=4000,
+            continuation_max_tokens=continuation_max_tokens,
             expose_trace_to_user=expose_trace_to_user,
         )
         skills = SkillRegistry(tmp_path / "react_skills")
@@ -3709,6 +3712,49 @@ class TestReActLoop:
             encoding="utf-8",
         )
         return skill_dir
+
+    async def test_react_continuation_uses_default_token_config(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_ai.generate_chat = AsyncMock(return_value="done")
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+
+        await eng._generate_react_continuation(
+            [{"role": "user", "content": "continue"}],
+            [ToolCallResult("web_search", {}, "result")],
+        )
+
+        assert mock_ai.generate_chat.await_args.kwargs["max_tokens"] == 4000
+
+    async def test_react_continuation_uses_configured_token_limit(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_ai.generate_chat = AsyncMock(return_value="done")
+        eng = self._make_engine(
+            mock_ai,
+            soul,
+            memory,
+            mock_gateway,
+            tmp_path,
+            continuation_max_tokens=512,
+        )
+
+        await eng._generate_react_continuation(
+            [{"role": "user", "content": "continue"}],
+            [ToolCallResult("web_search", {}, "result")],
+        )
+
+        assert mock_ai.generate_chat.await_args.kwargs["max_tokens"] == 512
 
     async def test_no_skill_tags_passthrough(
         self,

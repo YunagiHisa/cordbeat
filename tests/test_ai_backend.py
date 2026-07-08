@@ -1160,6 +1160,70 @@ class TestGenerateChat:
         assert result == "chat reply"
         assert "/api/chat" in backend._client.post.call_args[0][0]
 
+    async def test_ollama_explicit_generation_options_override_config(
+        self,
+    ) -> None:
+        backend = OllamaBackend(
+            AIBackendConfig(
+                provider="ollama",
+                model="m",
+                base_url="http://x",
+                options={"temperature": 0.9, "num_predict": 999},
+            )
+        )
+        resp = MagicMock()
+        resp.json.return_value = {"response": "ok"}
+        resp.raise_for_status = MagicMock()
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=resp)
+
+        await backend.generate("hi", temperature=0.0, max_tokens=2)
+
+        options = backend._client.post.call_args[1]["json"]["options"]
+        assert options["temperature"] == 0.0
+        assert options["num_predict"] == 2
+
+    async def test_ollama_unspecified_generation_options_use_config(
+        self,
+    ) -> None:
+        backend = OllamaBackend(
+            AIBackendConfig(
+                provider="ollama",
+                model="m",
+                base_url="http://x",
+                options={"temperature": 0.9, "num_predict": 999},
+            )
+        )
+        resp = MagicMock()
+        resp.json.return_value = {"response": "ok"}
+        resp.raise_for_status = MagicMock()
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=resp)
+
+        await backend.generate("hi")
+
+        options = backend._client.post.call_args[1]["json"]["options"]
+        assert options["temperature"] == 0.9
+        assert options["num_predict"] == 999
+
+    async def test_ollama_unspecified_generation_options_use_builtin_defaults(
+        self,
+    ) -> None:
+        backend = OllamaBackend(
+            AIBackendConfig(provider="ollama", model="m", base_url="http://x")
+        )
+        resp = MagicMock()
+        resp.json.return_value = {"response": "ok"}
+        resp.raise_for_status = MagicMock()
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=resp)
+
+        await backend.generate("hi")
+
+        options = backend._client.post.call_args[1]["json"]["options"]
+        assert options["temperature"] == 0.7
+        assert options["num_predict"] == 1024
+
     async def test_ollama_generate_chat_propagates_errors(self) -> None:
         backend = self._ollama()
         backend._client = AsyncMock()
@@ -1193,6 +1257,27 @@ class TestGenerateChat:
         result = await backend.generate_chat([{"role": "user", "content": "hi"}])
         assert result == "hello"
         assert "/chat/completions" in backend._client.post.call_args[0][0]
+
+    async def test_openai_generate_chat_temperature_defaults_to_existing_value(
+        self,
+    ) -> None:
+        backend = self._openai()
+        resp = MagicMock()
+        resp.json.return_value = {"choices": [{"message": {"content": "hello"}}]}
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=resp)
+        backend._raise_for_status_with_body = MagicMock()  # type: ignore[method-assign]
+
+        await backend.generate_chat([{"role": "user", "content": "hi"}])
+        default_payload = backend._client.post.call_args[1]["json"]
+        await backend.generate_chat(
+            [{"role": "user", "content": "hi"}],
+            temperature=0.2,
+        )
+        explicit_payload = backend._client.post.call_args[1]["json"]
+
+        assert default_payload["temperature"] == 0.7
+        assert explicit_payload["temperature"] == 0.2
 
     async def test_openai_generate_chat_unexpected_format_raises(self) -> None:
         backend = self._openai()

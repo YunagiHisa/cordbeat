@@ -2,8 +2,26 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
+
+
+def _is_safe_relative(path: str) -> bool:
+    windows = PureWindowsPath(path)
+    posix = PurePosixPath(path)
+    if (
+        windows.is_absolute()
+        or posix.is_absolute()
+        or windows.drive
+        or windows.root
+        or posix.root
+    ):
+        return False
+    parts = tuple(windows.parts) + tuple(posix.parts)
+    return bool(path.strip()) and not any(
+        part == ".." or part.startswith("~") for part in parts
+    )
+
 
 _TEXT_SUFFIXES = {
     ".cfg",
@@ -62,7 +80,10 @@ def execute(
     context: Any = None,
 ) -> dict[str, Any]:
     """Search files below *root* by glob, filename, and optional text content."""
-    base = Path(root).expanduser()
+    if not _is_safe_relative(str(root)):
+        return {"error": "root must be sandbox-relative"}
+
+    base = Path(root)
     if not base.exists():
         return {"error": f"Directory not found: {root}"}
     if not base.is_dir():

@@ -1355,28 +1355,12 @@ class TestTimerSkill:
 
 
 class TestFileReadSkill:
-    async def test_file_read_returns_content(self, tmp_path: Path) -> None:
-        """file_read skill reads a file and returns its content."""
-        skills_dir = tmp_path / "skills"
-        skills_dir.mkdir()
-        _copy_builtin_skill(skills_dir, "file_read")
-
-        registry = SkillRegistry(skills_dir)
-        registry.load_all()
-        skill = registry.get("file_read")
-        assert skill is not None
-
-        # Create a test file inside work_dir (sandbox)
-        test_file = tmp_path / "sandbox" / "data.txt"
-        test_file.parent.mkdir()
-        test_file.write_text("line1\nline2\nline3\n", encoding="utf-8")
-
-        # file_read is sandboxed with filesystem=true, so the sandbox will
-        # restrict open() to work_dir. We pass the path as a param.
-        # The sandbox work_dir is a tempdir created by the executor, so
-        # we need to place the file inside it. Instead, call in non-sandboxed
-        # mode by loading a version without sandbox for unit testing.
-        # Actually, file_read IS sandboxed — let's test the function directly.
+    async def test_file_read_returns_content(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """file_read reads a sandbox-relative file and returns its content."""
         import importlib.util
 
         spec = importlib.util.spec_from_file_location(
@@ -1387,12 +1371,21 @@ class TestFileReadSkill:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
-        result = mod.execute(path=str(test_file), max_lines=100)
+        monkeypatch.chdir(tmp_path)
+        test_file = tmp_path / "notes" / "data.txt"
+        test_file.parent.mkdir()
+        test_file.write_text("line1\nline2\nline3\n", encoding="utf-8")
+
+        result = mod.execute(path="notes/data.txt", max_lines=100)
         assert result["lines"] == 3
         assert result["truncated"] is False
         assert "line1" in result["content"]
 
-    async def test_file_read_truncation(self, tmp_path: Path) -> None:
+    async def test_file_read_truncation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """file_read truncates output when exceeding max_lines."""
         import importlib.util
 
@@ -1404,15 +1397,20 @@ class TestFileReadSkill:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
+        monkeypatch.chdir(tmp_path)
         test_file = tmp_path / "big.txt"
         test_file.write_text("\n".join(f"line{i}" for i in range(50)), encoding="utf-8")
 
-        result = mod.execute(path=str(test_file), max_lines=10)
+        result = mod.execute(path="big.txt", max_lines=10)
         assert result["lines"] == 10
         assert result["total_lines"] == 50
         assert result["truncated"] is True
 
-    async def test_file_read_missing_file(self, tmp_path: Path) -> None:
+    async def test_file_read_missing_file(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """file_read returns error for missing files."""
         import importlib.util
 
@@ -1424,8 +1422,36 @@ class TestFileReadSkill:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
-        result = mod.execute(path=str(tmp_path / "nonexistent.txt"))
+        monkeypatch.chdir(tmp_path)
+        result = mod.execute(path="nonexistent.txt")
         assert "error" in result
+
+    async def test_file_read_rejects_absolute_and_parent_paths(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """file_read accepts only sandbox-relative paths."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_read_reject",
+            str(_BUILTIN_SKILLS_DIR / "file_read" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        monkeypatch.chdir(tmp_path)
+        secret = tmp_path / "secret.txt"
+        secret.write_text("token", encoding="utf-8")
+
+        assert "error" in mod.execute(path=str(secret))
+        assert "error" in mod.execute(path="../secret.txt")
+        assert "error" in mod.execute(path="~/secret.txt")
+        assert "error" in mod.execute(path="/etc/passwd")
+        assert "error" in mod.execute(path="\\secret.txt")
+        assert "error" in mod.execute(path="C:/secret.txt")
 
     async def test_file_read_sandbox_enforced(self, tmp_path: Path) -> None:
         """file_read requires approval and keeps sandbox metadata."""
@@ -1444,34 +1470,68 @@ class TestFileReadSkill:
 
 class TestFileSearchSkill:
     async def test_file_search_finds_filename_and_content(self, tmp_path: Path) -> None:
-        """file_search scans an approved directory for names and text content."""
+        """file_search scans a sandbox-relative directory for names and content."""
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()
         _copy_builtin_skill(skills_dir, "file_search")
-        root = tmp_path / "project"
-        root.mkdir()
-        (root / "alpha.py").write_text("print('hello')\n", encoding="utf-8")
-        (root / "notes.txt").write_text("needle lives here\n", encoding="utf-8")
-        (root / "image.bin").write_bytes(b"\x00\x01needle")
+        sandbox_root = tmp_path / "sandbox"
+        project = sandbox_root / "project"
+        project.mkdir(parents=True)
+        (project / "alpha.py").write_text("print('hello')\n", encoding="utf-8")
+        (project / "notes.txt").write_text("needle lives here\n", encoding="utf-8")
+        (project / "image.bin").write_bytes(b"\x00\x01needle")
 
-        registry = SkillRegistry(skills_dir)
+        registry = SkillRegistry(
+            skills_dir,
+            sandbox_config=SandboxConfig(work_dir=sandbox_root),
+        )
         registry.load_all()
         skill = registry.get("file_search")
         assert skill is not None
 
+        params = {
+            "root": "project",
+            "query": "needle",
+            "name_glob": "*",
+            "max_results": 10,
+        }
         result = await skill.execute(
-            {
-                "root": str(root),
-                "query": "needle",
-                "name_glob": "*",
-                "max_results": 10,
-            }
+            params,
+            sandbox_overrides=sandbox_overrides_for_skill("file_search", params),
         )
 
         paths = {item["relative_path"] for item in result["matches"]}
         assert "notes.txt" in paths
         assert "image.bin" not in paths
         assert result["returned"] == 1
+
+    async def test_file_search_rejects_non_relative_root(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """file_search accepts only sandbox-relative roots."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_search_reject",
+            str(_BUILTIN_SKILLS_DIR / "file_search" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "notes.txt").write_text("needle lives here\n", encoding="utf-8")
+
+        assert "error" in mod.execute(root=str(tmp_path), query="needle")
+        assert "error" in mod.execute(root="..", query="needle")
+        assert "error" in mod.execute(root="~", query="needle")
+        assert "error" in mod.execute(root="/", query="needle")
+
+        ok = mod.execute(root=".", query="needle")
+        assert ok["returned"] == 1
+        assert ok["matches"][0]["relative_path"] == "notes.txt"
 
     async def test_file_search_omitted_root_uses_shared_sandbox(
         self, tmp_path: Path
@@ -1799,7 +1859,11 @@ class TestFileWriteSkill:
         assert meta.sandbox is True
         assert meta.filesystem is True
 
-    async def test_file_write_creates_file(self, tmp_path: Path) -> None:
+    async def test_file_write_creates_file(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """file_write creates a new file with specified content."""
         import importlib.util
 
@@ -1811,12 +1875,16 @@ class TestFileWriteSkill:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
-        out = tmp_path / "output.txt"
-        result = mod.execute(path=str(out), content="hello world")
+        monkeypatch.chdir(tmp_path)
+        result = mod.execute(path="output.txt", content="hello world")
         assert result["status"] == "ok"
-        assert out.read_text(encoding="utf-8") == "hello world"
+        assert (tmp_path / "output.txt").read_text(encoding="utf-8") == "hello world"
 
-    async def test_file_write_append_mode(self, tmp_path: Path) -> None:
+    async def test_file_write_append_mode(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """file_write appends to existing file in append mode."""
         import importlib.util
 
@@ -1828,9 +1896,10 @@ class TestFileWriteSkill:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
+        monkeypatch.chdir(tmp_path)
         out = tmp_path / "log.txt"
         out.write_text("first\n", encoding="utf-8")
-        result = mod.execute(path=str(out), content="second\n", mode="append")
+        result = mod.execute(path="log.txt", content="second\n", mode="append")
         assert result["status"] == "ok"
         assert out.read_text(encoding="utf-8") == "first\nsecond\n"
 
@@ -1846,10 +1915,14 @@ class TestFileWriteSkill:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
-        result = mod.execute(path="/tmp/x.txt", content="data", mode="delete")
+        result = mod.execute(path="x.txt", content="data", mode="delete")
         assert "error" in result
 
-    async def test_file_write_creates_parent_dirs(self, tmp_path: Path) -> None:
+    async def test_file_write_creates_parent_dirs(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """file_write creates parent directories automatically."""
         import importlib.util
 
@@ -1861,10 +1934,37 @@ class TestFileWriteSkill:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
-        out = tmp_path / "sub" / "dir" / "file.txt"
-        result = mod.execute(path=str(out), content="nested")
+        monkeypatch.chdir(tmp_path)
+        result = mod.execute(path="sub/dir/file.txt", content="nested")
         assert result["status"] == "ok"
+        out = tmp_path / "sub" / "dir" / "file.txt"
         assert out.read_text(encoding="utf-8") == "nested"
+
+    async def test_file_write_rejects_absolute_and_parent_paths(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """file_write accepts only sandbox-relative paths."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_write_reject",
+            str(_BUILTIN_SKILLS_DIR / "file_write" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        monkeypatch.chdir(tmp_path)
+        outside = tmp_path / "outside.txt"
+
+        assert "error" in mod.execute(path=str(outside), content="x")
+        assert "error" in mod.execute(path="../outside.txt", content="x")
+        assert "error" in mod.execute(path="~/outside.txt", content="x")
+        assert "error" in mod.execute(path="\\outside.txt", content="x")
+        assert "error" in mod.execute(path="C:/outside.txt", content="x")
+        assert not outside.exists()
 
 
 class TestFileDeleteSkill:

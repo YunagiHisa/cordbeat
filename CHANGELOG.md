@@ -19,6 +19,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Built-in file-skill path confinement from source audit #14.** `file_read`,
+  `file_write`, and `file_search` now reject absolute paths, drive letters,
+  `..` traversal, and `~` home expansion, matching `file_delete`/`file_mkdir`,
+  and all five file skills additionally reject rooted drive-relative paths
+  such as `\foo` (which resolve to the current drive's root on Windows).
+  These skills run with `filesystem: true` (bypassing the subprocess
+  filesystem guard) and previously could read or overwrite any host file —
+  including `~/.cordbeat/.env` and skill source — once approved.
 - **Decided audit backlog hardening.** Sandboxed memory RPCs are now scoped to
   the acting user, with system execution left unscoped, a 50-call per-run cap,
   and 16,000-character truncation for `add_certain_record` content. ReAct

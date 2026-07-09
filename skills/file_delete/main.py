@@ -9,7 +9,13 @@ from typing import Any
 def _is_safe_relative(path: str) -> bool:
     windows = PureWindowsPath(path)
     posix = PurePosixPath(path)
-    if windows.is_absolute() or posix.is_absolute() or windows.drive:
+    if (
+        windows.is_absolute()
+        or posix.is_absolute()
+        or windows.drive
+        or windows.root
+        or posix.root
+    ):
         return False
     parts = tuple(windows.parts) + tuple(posix.parts)
     return bool(path.strip()) and not any(

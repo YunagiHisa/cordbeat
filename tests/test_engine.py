@@ -3853,6 +3853,56 @@ class TestReActLoop:
         calls = mock_gateway.send_to_adapter.call_args_list
         contents = [c[0][1].content for c in calls]
         assert any("The answer is 42" in c for c in contents)
+        await eng.drain()
+        user_id = await memory.resolve_user("test", "user1")
+        assert user_id is not None
+        records = await memory.get_certain_records(
+            user_id,
+            record_type="conversation_skill_result",
+        )
+        assert len(records) == 1
+        assert "test_tool" in records[0]["content"]
+
+    async def test_verified_actions_are_injected_into_react_prompt(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "test", "user1")
+        await memory.add_certain_record(
+            "u1",
+            '{"skill_name": "web_search", "output": "found docs"}',
+            "conversation_skill_result",
+            {
+                "source": "conversation",
+                "skill_name": "web_search",
+                "outcome": "result",
+            },
+        )
+
+        await self._make_engine(
+            mock_ai,
+            soul,
+            memory,
+            mock_gateway,
+            tmp_path,
+        ).handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="What did you do?",
+            )
+        )
+
+        prompt = mock_ai.generate.await_args.kwargs["prompt"]
+        assert "[BEGIN VERIFIED ACTIONS" in prompt
+        assert "web_search" in prompt
+        assert "found docs" in prompt
 
     async def test_react_pre_text_strips_draw_tags(
         self,

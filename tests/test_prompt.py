@@ -147,6 +147,11 @@ class TestToolSystemPrompt:
         assert "No tools are available" in result
         assert "Do not claim" in result
 
+    def test_tool_prompt_includes_grounding_rule(self) -> None:
+        result = build_tool_system_prompt("- web_search: Search")
+        assert "Grounding rule" in result
+        assert "VERIFIED ACTIONS" in result
+
 
 class TestBuildSoulSystemPrompt:
     def test_includes_name_and_traits(self) -> None:
@@ -221,6 +226,17 @@ class TestBuildSoulSystemPrompt:
         assert "talk like a friend" in result.lower()
         assert "butler-speak" in result
 
+    def test_operational_honesty_references_verified_actions(self) -> None:
+        snap = {
+            "name": "TestBot",
+            "traits": ["curious"],
+            "emotion": {"primary": "calm", "intensity": 0.5},
+            "immutable_rules": [],
+        }
+        result = build_soul_system_prompt(snap)
+        assert "Operational honesty" in result
+        assert "VERIFIED ACTIONS" in result
+
     def test_invalid_timezone_value_falls_back_to_utc(self) -> None:
         snap = {
             "name": "TestBot",
@@ -274,6 +290,37 @@ class TestBuildContext:
         assert "[BEGIN USER CONTEXT]" in result
         assert "User: Alice" in result
         assert "[END USER CONTEXT]" in result
+
+    def test_verified_actions_are_included(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            verified_actions=[
+                {
+                    "created_at": "2026-07-09T10:12:00+00:00",
+                    "source": "conversation",
+                    "skill_name": "web_search",
+                    "outcome": "result",
+                    "detail": "found docs",
+                }
+            ],
+            include_verified_actions=True,
+        )
+        assert "[BEGIN VERIFIED ACTIONS" in result
+        assert "Any work not listed here has NOT been done." in result
+        assert "conversation web_search -> result: found docs" in result
+
+    def test_verified_actions_empty_ledger_lists_no_tools(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            include_verified_actions=True,
+        )
+        assert "[BEGIN VERIFIED ACTIONS" in result
+        assert "No tools have been executed recently." in result
+
+    def test_verified_actions_are_omitted_by_default(self) -> None:
+        """Callers that did not load the ledger must not emit a false empty one."""
+        result = build_context(user_display_name="Alice")
+        assert "VERIFIED ACTIONS" not in result
 
     def test_with_profile(self) -> None:
         result = build_context(

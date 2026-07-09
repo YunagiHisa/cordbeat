@@ -1589,6 +1589,16 @@ class TestLayer2Evaluate:
             "Do not over-contact about stale game rumors.",
             "heartbeat_concern",
         )
+        await memory.add_certain_record(
+            "u1",
+            '{"skill_name": "web_search", "output": "found release notes"}',
+            "conversation_skill_result",
+            {
+                "source": "conversation",
+                "skill_name": "web_search",
+                "outcome": "result",
+            },
+        )
         mock_ai.generate_json = AsyncMock(
             return_value={
                 "action": "none",
@@ -1606,7 +1616,17 @@ class TestLayer2Evaluate:
         prompt = mock_ai.generate_json.await_args.args[0]
         assert "Private HEARTBEAT continuity" in prompt
         assert "Already checked the Smash topic twice" in prompt
+        assert "Verified conversation tool actions" in prompt
+        assert "found release notes" in prompt
         assert "Use this to decay stale interests" in prompt
+        # The heartbeat does not load the full ledger for build_context, so it
+        # must not emit the ledger section (an empty one would falsely claim
+        # that no tools ran).
+        assert "[BEGIN VERIFIED ACTIONS" not in prompt
+        system = mock_ai.generate_json.await_args.kwargs["system"]
+        assert "Operational honesty" in system
+        assert "verified external actions" in system
+        assert "verified tool-action records" in system
 
 
 class TestTwoLayerIntegration:

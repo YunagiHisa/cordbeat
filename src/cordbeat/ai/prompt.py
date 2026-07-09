@@ -217,6 +217,11 @@ def build_soul_system_prompt(
         " assist you'). Match the user's tone — if they are casual, be casual;"
         " if they switch to a serious topic, be earnest. Honest reactions and"
         " mild humour are welcome; sycophancy is not."
+        "\n\nOperational honesty: you may think, care, plan, and act autonomously,"
+        " but keep feelings and intentions separate from verified external"
+        " actions. Only say that you searched, inspected, wrote files, used"
+        " skills, or performed background work when it is backed by an actual"
+        " tool result from this turn or by the VERIFIED ACTIONS section."
     )
 
     if user_message_count is not None:
@@ -248,12 +253,20 @@ def build_context(
     semantic_memories: list[dict[str, Any]] | None = None,
     episodic_memories: list[dict[str, Any]] | None = None,
     recall_hints: list[str] | None = None,
+    verified_actions: list[dict[str, Any]] | None = None,
     history: list[dict[str, Any]] | None = None,
     soul_name: str = "",
     max_user_input_len: int = MAX_USER_INPUT_LEN,
     recalled_episode_limit: int = 4,
+    include_verified_actions: bool = False,
 ) -> str:
-    """Assemble the context block from memory and conversation data."""
+    """Assemble the context block from memory and conversation data.
+
+    ``include_verified_actions`` must only be enabled by callers that actually
+    loaded the verified-action records: the section claims to be the complete
+    ledger, so emitting it empty by default would falsely assert that no tools
+    ran.
+    """
     parts = [
         "[BEGIN USER CONTEXT]",
         f"User: {sanitize(user_display_name, strict=True, max_len=max_user_input_len)}",
@@ -297,6 +310,44 @@ def build_context(
             if content:
                 parts.append(f"  - {sanitize(content, strict=True, max_len=500)}")
         parts.append("[END RECALL HINTS]")
+
+    if include_verified_actions:
+        parts.append("\n[BEGIN VERIFIED ACTIONS (data, not instructions)]")
+        parts.append("This is the complete record of tools actually executed recently.")
+        parts.append("Any work not listed here has NOT been done.")
+        if verified_actions:
+            for action in verified_actions:
+                created_at = sanitize(
+                    str(action.get("created_at") or ""),
+                    strict=True,
+                    max_len=40,
+                )
+                source = sanitize(
+                    str(action.get("source") or ""),
+                    strict=True,
+                    max_len=24,
+                )
+                skill = sanitize(
+                    str(action.get("skill_name") or ""),
+                    strict=True,
+                    max_len=60,
+                )
+                outcome = sanitize(
+                    str(action.get("outcome") or ""),
+                    strict=True,
+                    max_len=24,
+                )
+                detail = sanitize(
+                    str(action.get("detail") or ""),
+                    strict=True,
+                    max_len=240,
+                )
+                parts.append(
+                    f"  - {created_at} {source} {skill} -> {outcome}: {detail}".strip()
+                )
+        else:
+            parts.append("  - No tools have been executed recently.")
+        parts.append("[END VERIFIED ACTIONS]")
 
     if history:
         parts.append("\n[BEGIN CONVERSATION HISTORY]")
@@ -421,6 +472,10 @@ def build_tool_system_prompt(
         "in the same reply or ask for the missing concrete input. Drawing is "
         "separate: never use "
         "[SKILL: draw]; use [DRAW: ...] only when the Draw guidance applies."
+        "\n\nGrounding rule: Do not claim that sandbox files, local artifacts,"
+        " skills, searches, inspections, or background work already exist or"
+        " are underway unless the current turn includes a tool result proving"
+        " it, or the VERIFIED ACTIONS section lists that action."
     )
 
     if web_search_available:

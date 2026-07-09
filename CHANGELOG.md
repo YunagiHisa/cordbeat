@@ -19,6 +19,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Grounding v2 for verified tool-action honesty.** Conversation ReAct tool
+  outcomes are now recorded as bounded verified-action ledger entries and
+  recent conversation plus heartbeat tool results are injected into chat
+  context as data, while shared-voice context stays free of those private
+  records and callers that do not load the ledger emit no ledger section at
+  all. System, tool, and heartbeat prompts now separate intentions from
+  verified external actions, and the memory-extraction prompt instructs the
+  extractor not to store AI claims about hidden progress, files, or completed
+  tasks unless the user independently confirmed them.
 - **Built-in file-skill path confinement from source audit #14.** `file_read`,
   `file_write`, and `file_search` now reject absolute paths, drive letters,
   `..` traversal, and `~` home expansion, matching `file_delete`/`file_mkdir`,

@@ -175,6 +175,32 @@ class TestExtractAndStoreMemories:
         assert len(results) > 0
 
     @pytest.mark.anyio
+    async def test_extraction_prompt_forbids_unconfirmed_ai_work_claims(
+        self,
+        extractor: MemoryExtractor,
+        mock_ai: AsyncMock,
+        memory: MemoryStore,
+    ) -> None:
+        """The extractor LLM is instructed not to pin unverified AI claims."""
+        mock_ai.generate = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "topic": "",
+                    "emotional_tone": "neutral",
+                    "facts": [],
+                    "episode_summary": "",
+                }
+            )
+        )
+        await memory.get_or_create_user("u1", "Bob")
+
+        await extractor.extract_and_store_memories("u1", "Bob", "hi", "hello")
+
+        prompt = mock_ai.generate.await_args.kwargs["prompt"]
+        assert "Do not store AI claims about hidden progress" in prompt
+        assert "unless the user independently confirmed" in prompt
+
+    @pytest.mark.anyio
     async def test_updates_user_topic_and_tone(
         self,
         extractor: MemoryExtractor,

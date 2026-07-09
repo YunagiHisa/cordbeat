@@ -63,6 +63,9 @@ Only include facts that are clearly stated or strongly implied.
 Do not store the AI's wording, promises, tool usage, failed actions, or response \
 strategy as an episode. An ordinary request followed by an ordinary answer is \
 not a memorable episode.
+Do not store AI claims about hidden progress, files, sandbox work, tool \
+results, or completed tasks unless the user independently confirmed the real \
+artifact.
 Do NOT fabricate or assume information.
 Respond in valid JSON only.
 """

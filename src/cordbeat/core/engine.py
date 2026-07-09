@@ -129,6 +129,16 @@ _SKILL_MAINTENANCE_TOOL_DESCRIPTIONS = "\n".join(
 _HTTP_URL_RE = re.compile(r"https?://[^\s<>\]\)\"']+", re.IGNORECASE)
 _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 _TRANSIENT_HTTP_RETRY_DELAYS_SECONDS = (1.0, 2.0)
+_CONVERSATION_SKILL_RESULT_RECORD = "conversation_skill_result"
+_CONVERSATION_SKILL_ERROR_RECORD = "conversation_skill_error"
+_VERIFIED_ACTION_RECORD_TYPES = (
+    _CONVERSATION_SKILL_RESULT_RECORD,
+    _CONVERSATION_SKILL_ERROR_RECORD,
+    "heartbeat_skill_result",
+    "heartbeat_skill_error",
+)
+_MAX_VERIFIED_ACTIONS = 8
+_MAX_RECORDED_CONVERSATION_SKILL_RESULTS = 5
 
 
 @dataclass(frozen=True)
@@ -1233,6 +1243,10 @@ class CoreEngine:
             except Exception:
                 logger.debug("Recall hints lookup failed for user %s", user_id)
 
+        verified_actions: list[dict[str, Any]] = []
+        if not shared_voice:
+            verified_actions = await self._load_verified_actions(user_id)
+
         context = build_context(
             user_display_name=(
                 "participants in a shared voice channel"
@@ -1243,10 +1257,12 @@ class CoreEngine:
             semantic_memories=semantic_memories or None,
             episodic_memories=episodic_memories or None,
             recall_hints=hints or None,
+            verified_actions=verified_actions,
             history=history or None,
             soul_name=soul_snap["name"],
             max_user_input_len=self._memory_config.max_user_input_len,
             recalled_episode_limit=self._memory_config.recalled_episode_context_limit,
+            include_verified_actions=not shared_voice,
         )
 
         safe_content = sanitize(
@@ -1490,6 +1506,64 @@ class CoreEngine:
                 )
         except Exception:
             logger.exception("Background post-processing failed for user %s", user_id)
+
+    async def _load_verified_actions(self, user_id: str) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for record_type in _VERIFIED_ACTION_RECORD_TYPES:
+            try:
+                records.extend(
+                    await self._memory.get_certain_records(
+                        user_id,
+                        record_type=record_type,
+                        limit=5,
+                    )
+                )
+            except Exception:
+                logger.debug(
+                    "Verified action lookup failed type=%s user=%s",
+                    record_type,
+                    user_id,
+                    exc_info=True,
+                )
+        records.sort(
+            key=lambda record: str(record.get("created_at") or ""),
+            reverse=True,
+        )
+        actions: list[dict[str, Any]] = []
+        for record in records[:_MAX_VERIFIED_ACTIONS]:
+            metadata = self._parse_record_metadata(record)
+            actions.append(
+                {
+                    "created_at": record.get("created_at", ""),
+                    "source": metadata.get("source")
+                    or (
+                        "conversation"
+                        if str(record.get("record_type", "")).startswith(
+                            "conversation_"
+                        )
+                        else "heartbeat"
+                    ),
+                    "skill_name": metadata.get("skill_name", ""),
+                    "outcome": metadata.get("outcome")
+                    or str(record.get("record_type", "")).removesuffix("_skill"),
+                    "detail": record.get("content", ""),
+                }
+            )
+        return actions
+
+    @staticmethod
+    def _parse_record_metadata(record: dict[str, Any]) -> dict[str, Any]:
+        raw = record.get("metadata")
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str) and raw.strip():
+            try:
+                data = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                return {}
+            if isinstance(data, dict):
+                return data
+        return {}
 
     async def _summarize_media_artifact(self, artifact: MediaArtifact) -> str:
         """Create a short, non-instructional visual observation for history."""
@@ -2167,6 +2241,7 @@ class CoreEngine:
                     "The tool completed, but I could not summarize its results. "
                     "Please try a more specific request."
                 )
+        self._schedule_conversation_skill_result_records(user_id, trace)
         await self._send_tool_summary(message, trace, shared_voice=shared_voice)
         return cleaned_final, collected_media
 
@@ -2196,6 +2271,71 @@ class CoreEngine:
             await self._gateway.send_to_adapter(message.adapter_id, status)
         except Exception:
             logger.warning("Failed to send tool summary to %s", message.adapter_id)
+
+    def _schedule_conversation_skill_result_records(
+        self,
+        user_id: str,
+        trace: ToolTrace,
+    ) -> None:
+        if not trace.calls:
+            return
+        task = asyncio.create_task(
+            self._record_conversation_skill_results(user_id, trace.calls)
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _record_conversation_skill_results(
+        self,
+        user_id: str,
+        calls: list[ToolCallResult],
+    ) -> None:
+        for call in calls[:_MAX_RECORDED_CONVERSATION_SKILL_RESULTS]:
+            record_type = (
+                _CONVERSATION_SKILL_ERROR_RECORD
+                if call.is_error
+                else _CONVERSATION_SKILL_RESULT_RECORD
+            )
+            outcome = "error" if call.is_error else "result"
+            params_summary = sanitize(
+                json.dumps(call.params, ensure_ascii=False, default=str),
+                strict=True,
+                max_len=200,
+            )
+            output_summary = sanitize(
+                call.output,
+                strict=True,
+                max_len=200,
+            )
+            payload = {
+                "skill_name": call.skill_name,
+                "params": params_summary,
+                "ok": not call.is_error,
+                "error": call.is_error,
+                "output": output_summary,
+            }
+            try:
+                content = json.dumps(payload, ensure_ascii=False, default=str)
+            except (TypeError, ValueError):
+                content = str(payload)
+            metadata = {
+                "source": "conversation",
+                "skill_name": call.skill_name,
+                "outcome": outcome,
+            }
+            try:
+                await self._memory.add_certain_record(
+                    user_id,
+                    sanitize(content, max_len=self._memory_config.max_user_input_len),
+                    record_type,
+                    metadata,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to record conversation skill outcome skill=%s type=%s",
+                    call.skill_name,
+                    record_type,
+                )
 
     async def _request_skill_confirmation(
         self,

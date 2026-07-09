@@ -154,6 +154,11 @@ continue an old task. Do not revive a completed topic, ask for feedback about
 an old result, or claim that you just performed an action. Choose action=message
 only when the message is clearly relevant and useful now. If uncertain, choose
 action=none.
+Operational honesty: You may care, wonder, plan, and choose actions on your own,
+but keep intentions separate from verified external actions. Do not claim that
+you searched, inspected, wrote files, used skills, or completed background work
+unless it appears in the verified tool-action records or is the action you are
+choosing now.
 Apply interest decay: when recent private notes show the same topic was already
 checked repeatedly and there is no new evidence, lower its urgency or choose
 action=none.
@@ -211,6 +216,8 @@ _HEARTBEAT_USER_SENT_RECORD = "heartbeat_user_sent"
 _HEARTBEAT_DESTINATION_SENT_RECORD = "heartbeat_destination_sent"
 _HEARTBEAT_SKILL_RESULT_RECORD = "heartbeat_skill_result"
 _HEARTBEAT_SKILL_ERROR_RECORD = "heartbeat_skill_error"
+_CONVERSATION_SKILL_RESULT_RECORD = "conversation_skill_result"
+_CONVERSATION_SKILL_ERROR_RECORD = "conversation_skill_error"
 _HEARTBEAT_SKILL_APPROVAL_RECORD = "heartbeat_skill_approval_requested"
 _HEARTBEAT_REFLECTION_RECORD = "heartbeat_reflection"
 _HEARTBEAT_CONCERN_RECORD = "heartbeat_concern"
@@ -656,6 +663,10 @@ class HeartbeatLoop:
         for title, record_type in (
             ("Recent private reflections", _HEARTBEAT_REFLECTION_RECORD),
             ("Open heartbeat concerns", _HEARTBEAT_CONCERN_RECORD),
+            ("Verified tool actions", _HEARTBEAT_SKILL_RESULT_RECORD),
+            ("Verified tool errors", _HEARTBEAT_SKILL_ERROR_RECORD),
+            ("Verified conversation tool actions", _CONVERSATION_SKILL_RESULT_RECORD),
+            ("Verified conversation tool errors", _CONVERSATION_SKILL_ERROR_RECORD),
         ):
             try:
                 records = await self._memory.get_certain_records(

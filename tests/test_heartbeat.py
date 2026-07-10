@@ -1571,6 +1571,52 @@ class TestLayer2Evaluate:
         assert decision.target_user_id == "u1"
         assert decision.target_adapter_id == "telegram"
 
+    async def test_evaluate_scopes_history_to_last_seen_guild_channel(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Guild-targeted heartbeat context must not include DM history."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.add_message(
+            "u1",
+            "user",
+            "private DM detail about a medical appointment",
+            "discord",
+            "dm-1",
+            True,
+        )
+        await memory.add_message(
+            "u1",
+            "user",
+            "public guild topic about release planning",
+            "discord",
+            "guild-1",
+            False,
+        )
+        await memory.record_last_seen_channel("u1", "discord", "guild-1", False)
+        mock_ai.generate_json = AsyncMock(
+            return_value={
+                "action": "none",
+                "content": "",
+                "next_heartbeat_minutes": 60,
+            }
+        )
+
+        await heartbeat._layer2_evaluate(
+            UserSummary(
+                user_id="u1",
+                display_name="Alice",
+                last_platform="discord",
+            ),
+            "routine check",
+        )
+
+        prompt = mock_ai.generate_json.await_args.args[0]
+        assert "public guild topic about release planning" in prompt
+        assert "private DM detail about a medical appointment" not in prompt
+
     async def test_evaluate_includes_private_continuity_context(
         self,
         heartbeat: HeartbeatLoop,

@@ -19,6 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Heartbeat channel-scope privacy.** Layer-2 heartbeat evaluation now scopes
+  recent conversation history to the user's last-seen adapter/channel/DM target
+  when that routing metadata is available, preventing DM history from being
+  fed into guild-targeted proactive decisions.
 - **Low-risk dependency CVE updates.** Bumped `aiohttp`, `starlette`,
   `urllib3`, `idna`, and `msgpack` in `uv.lock` to address the approved
   low-risk vulnerability backlog while leaving `torch` and `pynacl` pinned for

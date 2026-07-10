@@ -528,12 +528,33 @@ class HeartbeatLoop:
     ) -> HeartbeatDecision:
         """Detailed evaluation with full context for a single user."""
         soul_snap = self._soul.get_soul_snapshot()
+        target_adapter_id = user.preferred_platform or user.last_platform or "unknown"
+
+        history_channel_id: str | None = None
+        history_is_dm: bool | None = None
+        history_adapter_id: str | None = None
+        if target_adapter_id != "unknown":
+            try:
+                last_seen = await self._memory.get_last_seen_channel(
+                    user.user_id, target_adapter_id
+                )
+            except Exception:
+                logger.exception(
+                    "get_last_seen_channel failed for heartbeat context"
+                )
+                last_seen = None
+            if last_seen is not None:
+                history_channel_id, history_is_dm = last_seen
+                history_adapter_id = target_adapter_id
 
         # Load detailed context
         profile = await self._memory.get_core_profile(user.user_id)
         history = await self._memory.get_recent_messages(
             user.user_id,
             limit=self._memory_config.conversation_history_limit,
+            channel_id=history_channel_id,
+            is_dm=history_is_dm,
+            adapter_id=history_adapter_id,
         )
         semantic = await self._memory.search_semantic(
             user.user_id,
@@ -577,9 +598,7 @@ class HeartbeatLoop:
                 )
             ),
             target_user_id=user.user_id,
-            target_adapter_id=(
-                user.preferred_platform or user.last_platform or "unknown"
-            ),
+            target_adapter_id=target_adapter_id,
         )
 
         max_len = self._memory_config.max_user_input_len
@@ -620,7 +639,7 @@ class HeartbeatLoop:
             # platform user ID (e.g. Discord snowflake) instead of the internal UUID.
             target_user_id=user.user_id,
             target_adapter_id=decision_data.get(
-                "target_adapter_id", user.last_platform
+                "target_adapter_id", target_adapter_id
             ),
             next_heartbeat_minutes=int(
                 decision_data.get(

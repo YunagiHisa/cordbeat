@@ -254,7 +254,7 @@ def _coerce_integer(value: Any) -> int:
 def _coerce_number(value: Any) -> float:
     if isinstance(value, bool):
         raise TypeError
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return float(value)
     if isinstance(value, str):
         return float(value)

@@ -19,6 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Low-risk dependency CVE updates.** Bumped `aiohttp`, `starlette`,
+  `urllib3`, `idna`, and `msgpack` in `uv.lock` to address the approved
+  low-risk vulnerability backlog while leaving `torch` and `pynacl` pinned for
+  user-reviewed voice/RVC compatibility.
 - **Grounding v2 for verified tool-action honesty.** Conversation ReAct tool
   outcomes are now recorded as bounded verified-action ledger entries and
   recent conversation plus heartbeat tool results are injected into chat

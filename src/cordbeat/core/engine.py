@@ -539,7 +539,7 @@ def _extract_http_urls(value: Any) -> set[str]:
     elif isinstance(value, dict):
         for item in value.values():
             urls.update(_extract_http_urls(item))
-    elif isinstance(value, (list, tuple)):
+    elif isinstance(value, list | tuple):
         for item in value:
             urls.update(_extract_http_urls(item))
     return urls
@@ -590,7 +590,7 @@ def _extract_user_nested_url_prefixes(value: Any) -> set[str]:
     elif isinstance(value, dict):
         for item in value.values():
             prefixes.update(_extract_user_nested_url_prefixes(item))
-    elif isinstance(value, (list, tuple)):
+    elif isinstance(value, list | tuple):
         for item in value:
             prefixes.update(_extract_user_nested_url_prefixes(item))
     return prefixes

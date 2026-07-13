@@ -995,6 +995,37 @@ class OpenAICompatBackend(AIBackend):
         try:
             message = data["choices"][0]["message"]
             content = message.get("content") or ""
+            reasoning_content = self._extract_reasoning_content(message)
+            if not content and reasoning_content:
+                if self._supports_no_think_retry():
+                    no_think_messages: list[dict[str, str]] = [
+                        {
+                            "role": str(item.get("role", "user")),
+                            "content": _flatten_content_for_retry(
+                                item.get("content", "")
+                            ),
+                        }
+                        for item in messages
+                    ]
+                    retry_mt = max(max_tokens * 2, 8192)
+                    return await self._retry_without_thinking(
+                        messages=no_think_messages,
+                        temperature=temperature,
+                        max_tokens=retry_mt,
+                        labels=labels,
+                        reason=(
+                            "openai_compat chat: content=null but "
+                            f"reasoning_content={len(reasoning_content)} chars. "
+                            "Model spent the whole token budget on thinking."
+                        ),
+                    )
+                logger.warning(
+                    "openai_compat chat: content=null but reasoning_content=%d "
+                    "chars; compatibility_mode=%s does not support no-think retry",
+                    len(reasoning_content),
+                    self._compatibility_mode(),
+                )
+                return ""
             raw_content = str(content)
             stripped = self._strip_reasoning_text(raw_content)
             if looks_like_reasoning_text(stripped):

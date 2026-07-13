@@ -4228,6 +4228,43 @@ class TestReActLoop:
         continuation = mock_ai.generate_chat.await_args.args[0][-2]["content"]
         assert "URL is not allowed" in continuation
 
+    async def test_fetch_url_allows_url_from_replied_to_message(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        eng = self._make_engine(mock_ai, soul, memory, mock_gateway, tmp_path)
+        skill = self._make_safe_skill("replied page")
+        skill.execute = AsyncMock(  # type: ignore[method-assign]
+            return_value={"text": "replied page"}
+        )
+        eng._skills._skills["fetch_url"] = skill
+        url = "https://example.com/replied-article"
+        mock_ai.generate = AsyncMock(return_value=f"[SKILL: fetch_url | url={url}]")
+        mock_ai.generate_chat = AsyncMock(return_value="Fetched.")
+
+        await eng.handle_message(
+            GatewayMessage(
+                type=MessageType.MESSAGE,
+                adapter_id="test",
+                platform_user_id="user1",
+                content="What do you think?",
+                metadata={
+                    "reply_context": {
+                        "author": "Alice",
+                        "content": url,
+                        "message_id": "42",
+                    }
+                },
+            )
+        )
+
+        skill.execute.assert_awaited_once()  # type: ignore[attr-defined]
+        assert skill.execute.await_args.args[0]["url"] == url
+
     async def test_fetch_url_allows_exact_user_supplied_jina_reader_url(
         self,
         mock_ai: AsyncMock,

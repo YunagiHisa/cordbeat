@@ -1665,6 +1665,19 @@ class CoreEngine:
         collected_media: list[MediaArtifact] = []
         allowed_web_urls = _extract_http_urls(message.content)
         user_nested_url_prefixes = _extract_user_nested_url_prefixes(message.content)
+        # Replying to a platform message is an explicit user selection of that
+        # message as context.  The model sees its quoted content in user_prompt,
+        # so URLs from the same reply context must also be eligible for web
+        # tools; otherwise fetch_url is rejected before execution even though
+        # the user directly asked about the replied-to link.
+        reply_context = message.metadata.get("reply_context")
+        if isinstance(reply_context, dict):
+            reply_content = reply_context.get("content")
+            if isinstance(reply_content, str):
+                allowed_web_urls.update(_extract_http_urls(reply_content))
+                user_nested_url_prefixes.update(
+                    _extract_user_nested_url_prefixes(reply_content)
+                )
         shared_voice = bool(message.metadata.get("shared_voice"))
 
         for iteration in range(self._react_config.max_iterations):

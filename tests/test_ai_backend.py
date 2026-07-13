@@ -853,6 +853,48 @@ class TestOpenAICompatBackend:
         result = await backend.generate("test")
         assert result == ""
 
+    async def test_generate_chat_retries_reasoning_content_only_response(
+        self,
+    ) -> None:
+        cfg = AIBackendConfig(
+            provider="openai_compat",
+            options={"compatibility_mode": "llama_cpp"},
+        )
+        backend = OpenAICompatBackend(cfg)
+
+        first_response = MagicMock()
+        first_response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "reasoning_content": "x" * 3000,
+                    }
+                }
+            ]
+        }
+        first_response.raise_for_status = MagicMock()
+
+        retry_response = MagicMock()
+        retry_response.json.return_value = {
+            "choices": [{"message": {"content": "final answer"}}]
+        }
+        retry_response.raise_for_status = MagicMock()
+
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(side_effect=[first_response, retry_response])
+
+        result = await backend.generate_chat(
+            [{"role": "user", "content": "summarize the tool result"}],
+            max_tokens=1024,
+        )
+
+        assert result == "final answer"
+        retry_payload = backend._client.post.call_args_list[1][1]["json"]
+        assert retry_payload["max_tokens"] >= 8192
+        assert retry_payload["enable_thinking"] is False
+        assert "/no_think" in retry_payload["messages"][0]["content"]
+
     async def test_enable_thinking_false_sent_in_payload(self) -> None:
         """enable_thinking: false should be included in the API payload."""
         cfg = AIBackendConfig(

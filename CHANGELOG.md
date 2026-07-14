@@ -28,6 +28,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Draw DSL coordinate and color normalization.** RECT and ELLIPSE must use
+  forward corner coordinates (`x2 > x1`, `y2 > y1`), rejecting the
+  width/height-style boxes small models emit, and six-digit hex colors at
+  fixed argument positions are repaired with the missing `#` instead of
+  failing validation. Prompt guidance spells out both rules.
+- **Version metadata consistency.** `cordbeat.__version__` now matches the
+  `pyproject.toml` package version instead of a stale `0.1.0`.
 - **Remaining audit cleanup.** `file_read` now streams bounded text prefixes,
   vision responses strip reasoning blocks, Telegram skill confirmations use
   plain text, and Discord VC speech keeps one latest pending reply instead of

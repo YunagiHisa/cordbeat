@@ -7,6 +7,7 @@ import os
 import shutil
 import socket
 import sys
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -71,6 +72,47 @@ class TestSkillRegistry:
         assert len(registry.available_skills) == 2
         assert "greet" in registry.available_skills
         assert "search" in registry.available_skills
+
+    def test_reload_keeps_previous_snapshot_visible_until_swap(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "existing")
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        existing = registry.get("existing")
+        assert existing is not None
+        _create_skill(skills_dir, "new_skill")
+
+        loading_new = threading.Event()
+        continue_reload = threading.Event()
+        original_load_skill = registry._load_skill
+
+        def delayed_load(
+            skill_path: Path,
+            destination: dict[str, Skill] | None = None,
+        ) -> None:
+            if skill_path.name == "new_skill":
+                loading_new.set()
+                assert continue_reload.wait(timeout=2)
+            original_load_skill(skill_path, destination)
+
+        monkeypatch.setattr(registry, "_load_skill", delayed_load)
+        reload_thread = threading.Thread(target=registry.load_all)
+        reload_thread.start()
+        assert loading_new.wait(timeout=2)
+
+        try:
+            assert registry.get("existing") is existing
+            assert set(registry.available_skills) == {"existing"}
+        finally:
+            continue_reload.set()
+            reload_thread.join(timeout=2)
+
+        assert not reload_thread.is_alive()
+        assert set(registry.available_skills) == {"existing", "new_skill"}
 
     def test_skill_ownership_defaults_from_author(self, tmp_path: Path) -> None:
         skills_dir = tmp_path / "skills"

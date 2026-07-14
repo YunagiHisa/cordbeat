@@ -23,32 +23,30 @@ class UserStore:
         user_id: str,
         display_name: str,
     ) -> UserSummary:
+        await self._db.execute(
+            "INSERT OR IGNORE INTO users (user_id, display_name) VALUES (?, ?)",
+            (user_id, display_name),
+        )
+        await self._db.commit()
         cursor = await self._db.execute(
             "SELECT * FROM users WHERE user_id = ?",
             (user_id,),
         )
         row = await cursor.fetchone()
-        if row:
-            return UserSummary(
-                user_id=row["user_id"],
-                display_name=row["display_name"],
-                last_talked_at=ensure_aware(
-                    datetime.fromisoformat(row["last_talked_at"])
-                )
-                if row["last_talked_at"]
-                else None,
-                last_platform=row["last_platform"],
-                last_topic=row["last_topic"] or "",
-                emotional_tone=row["emotional_tone"] or "",
-                attention_score=row["attention_score"] or 0.5,
-                preferred_platform=row["preferred_platform"],
-            )
-        await self._db.execute(
-            "INSERT INTO users (user_id, display_name) VALUES (?, ?)",
-            (user_id, display_name),
+        if row is None:
+            raise MemorySubsystemError(f"User {user_id} was not persisted.")
+        return UserSummary(
+            user_id=row["user_id"],
+            display_name=row["display_name"],
+            last_talked_at=ensure_aware(datetime.fromisoformat(row["last_talked_at"]))
+            if row["last_talked_at"]
+            else None,
+            last_platform=row["last_platform"],
+            last_topic=row["last_topic"] or "",
+            emotional_tone=row["emotional_tone"] or "",
+            attention_score=row["attention_score"] or 0.5,
+            preferred_platform=row["preferred_platform"],
         )
-        await self._db.commit()
-        return UserSummary(user_id=user_id, display_name=display_name)
 
     async def increment_total_messages(self, user_id: str) -> None:
         """Atomically bump the lifetime message counter for *user_id*."""
@@ -114,19 +112,22 @@ class UserStore:
         *,
         allow_repoint: bool = False,
     ) -> None:
-        existing = await self.resolve_user(adapter_id, platform_user_id)
-        if existing is not None and existing != user_id and not allow_repoint:
-            raise MemorySubsystemError(
-                f"Platform identity {adapter_id}/{platform_user_id} is already "
-                f"linked to another user."
-            )
-        await self._db.execute(
-            "INSERT OR REPLACE INTO platform_links "
+        insert_mode = "REPLACE" if allow_repoint else "IGNORE"
+        cursor = await self._db.execute(
+            f"INSERT OR {insert_mode} INTO platform_links "
             "(user_id, adapter_id, platform_user_id, linked_at) "
             "VALUES (?, ?, ?, ?)",
             (user_id, adapter_id, platform_user_id, datetime.now(tz=UTC).isoformat()),
         )
         await self._db.commit()
+        if allow_repoint or cursor.rowcount > 0:
+            return
+        existing = await self.resolve_user(adapter_id, platform_user_id)
+        if existing != user_id:
+            raise MemorySubsystemError(
+                f"Platform identity {adapter_id}/{platform_user_id} is already "
+                f"linked to another user."
+            )
 
     async def link_platform_if_absent(
         self,

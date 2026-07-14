@@ -19,6 +19,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Async reloads, identity races, and adapter recovery (audits #6/#8/#10/#11).**
+  Skill registry reloads now build complete snapshots off-thread before an atomic
+  swap, including proposed-skill file writes and all runtime reload paths. User
+  creation and platform linking use conflict-safe inserts instead of
+  check-then-act sequences. Signal polling exponentially backs off to 60 seconds
+  during outages, resets after recovery, and suppresses repeated exception logs.
+  Soul persistence documents the intentional synchronous, atomic write retained
+  for its few-kilobyte snapshots and synchronous public mutation API.
 - **Operational tooling fixes (audits #7/#8).** `cordbeat-doctor show-config`
   masks any key containing token/secret/key/password, so adapter-specific
   credentials (Slack `app_token`, LINE `channel_secret`, WhatsApp

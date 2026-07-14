@@ -485,7 +485,11 @@ class Soul:
             self._save_notes()
 
     def _save_soul(self) -> None:
-        # Atomic write: a crash mid-write must never corrupt soul.yaml.
+        """Persist the small soul snapshot with an intentional synchronous write.
+
+        Soul's public mutation API is synchronous. Keeping this few-kilobyte write
+        atomic avoids fire-and-forget ordering races without making that API async.
+        """
         soul_path = self._soul_dir / "soul.yaml"
         tmp_path = soul_path.with_suffix(".yaml.tmp")
         with tmp_path.open("w", encoding="utf-8") as f:
@@ -498,6 +502,7 @@ class Soul:
         tmp_path.replace(soul_path)
 
     def _save_notes(self) -> None:
+        """Persist the small notes snapshot synchronously and atomically."""
         notes_path = self._soul_dir / "soul_notes.md"
         tmp_path = notes_path.with_suffix(".md.tmp")
         tmp_path.write_text(self._notes, encoding="utf-8")

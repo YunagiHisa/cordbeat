@@ -2302,6 +2302,27 @@ class TestWhatsAppAdapter:
 
 
 class TestSignalAdapter:
+    async def test_poll_backoff_grows_and_resets_after_success(self) -> None:
+        from cordbeat.adapters.signal import SignalAdapter
+
+        config = AdapterConfig(options={"poll_interval": 2})
+        adapter = SignalAdapter(config)
+        adapter._running = True
+        adapter._rpc = AsyncMock(
+            side_effect=[RuntimeError("down"), RuntimeError("still down"), []]
+        )
+        delays: list[float] = []
+
+        async def record_sleep(delay: float) -> None:
+            delays.append(delay)
+            if len(delays) == 3:
+                adapter._running = False
+
+        with patch("cordbeat.adapters.signal.asyncio.sleep", side_effect=record_sleep):
+            await adapter._poll_loop()
+
+        assert delays == [4.0, 8.0, 2.0]
+
     async def test_forward_to_core_marks_dm_scope(self) -> None:
         from cordbeat.adapters.signal import SignalAdapter
 

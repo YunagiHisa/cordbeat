@@ -1829,7 +1829,7 @@ class CoreEngine:
                         content=params.get("content"),
                     )
                     if not result.get("error"):
-                        self._skills.load_all()
+                        await asyncio.to_thread(self._skills.load_all)
                     output, is_error = _serialize_skill_result(result)
                     results.append(
                         ToolCallResult(
@@ -1894,7 +1894,7 @@ class CoreEngine:
                         path=params.get("path"),
                         recursive=params.get("recursive", False),
                     )
-                    self._skills.load_all()
+                    await asyncio.to_thread(self._skills.load_all)
                     output, is_error = _serialize_skill_result(result)
                     results.append(
                         ToolCallResult(
@@ -1944,7 +1944,7 @@ class CoreEngine:
                         self._skills.skills_dir,
                         skill_name=params.get("skill_name"),
                     )
-                    self._skills.load_all()
+                    await asyncio.to_thread(self._skills.load_all)
                     output, is_error = _serialize_skill_result(result)
                     results.append(
                         ToolCallResult(

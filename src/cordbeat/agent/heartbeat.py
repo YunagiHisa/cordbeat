@@ -1422,7 +1422,7 @@ class HeartbeatLoop:
                     payload=result,
                 )
                 return
-            self._skills.load_all()
+            await asyncio.to_thread(self._skills.load_all)
             logger.info(
                 "HEARTBEAT virtual skill executed skill=%s target_user=%s "
                 "params=%s result=%s",
@@ -1478,7 +1478,7 @@ class HeartbeatLoop:
                 path=params.get("path"),
                 recursive=params.get("recursive", False),
             )
-            self._skills.load_all()
+            await asyncio.to_thread(self._skills.load_all)
             logger.info(
                 "HEARTBEAT virtual skill executed skill=%s target_user=%s "
                 "params=%s result=%s",
@@ -1520,7 +1520,7 @@ class HeartbeatLoop:
                 self._skills.skills_dir,
                 skill_name=params.get("skill_name"),
             )
-            self._skills.load_all()
+            await asyncio.to_thread(self._skills.load_all)
             logger.info(
                 "HEARTBEAT virtual skill executed skill=%s target_user=%s "
                 "params=%s result=%s",

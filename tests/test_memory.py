@@ -77,6 +77,20 @@ class TestUserManagement:
         user = await memory.get_or_create_user("u1", "Ignored")
         assert user.display_name == "Test"
 
+    async def test_get_or_create_user_is_safe_under_concurrency(
+        self,
+        memory: MemoryStore,
+    ) -> None:
+        first, second = await asyncio.gather(
+            memory.get_or_create_user("u1", "First"),
+            memory.get_or_create_user("u1", "Second"),
+        )
+
+        assert first.user_id == second.user_id == "u1"
+        assert first.display_name == second.display_name
+        users = await memory.get_all_user_summaries()
+        assert [user.user_id for user in users] == ["u1"]
+
     async def test_update_summary(self, memory: MemoryStore) -> None:
         user = await memory.get_or_create_user("u1", "Test")
         user.last_topic = "AI discussion"
@@ -580,6 +594,34 @@ class TestResolvePlatformUser:
             await memory.link_platform("u2", "discord", "discord_123")
 
         assert await memory.resolve_user("discord", "discord_123") == "u1"
+
+    async def test_link_platform_is_idempotent_for_same_user(
+        self,
+        memory: MemoryStore,
+    ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        assert await memory.resolve_user("discord", "discord_123") == "u1"
+
+    async def test_link_platform_can_repoint_when_allowed(
+        self,
+        memory: MemoryStore,
+    ) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.get_or_create_user("u2", "Bob")
+        await memory.link_platform("u1", "discord", "discord_123")
+
+        await memory.link_platform(
+            "u2",
+            "discord",
+            "discord_123",
+            allow_repoint=True,
+        )
+
+        assert await memory.resolve_user("discord", "discord_123") == "u2"
 
     async def test_link_platform_if_absent_does_not_repoint(
         self, memory: MemoryStore

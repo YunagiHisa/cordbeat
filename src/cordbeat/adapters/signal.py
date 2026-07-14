@@ -123,6 +123,8 @@ class SignalAdapter(RetryableConnection):
         return resp.json().get("result")
 
     async def _poll_loop(self) -> None:
+        failures = 0
+        last_warning_at = 0.0
         while self._running:
             try:
                 result = await self._rpc(
@@ -136,9 +138,18 @@ class SignalAdapter(RetryableConnection):
                     source = (envelope.get("envelope", {}) or {}).get("source") or ""
                     if text and source:
                         await self._forward_to_core(user_id=source, text=text)
+                failures = 0
             except Exception:
-                logger.exception("Signal poll error")
-            await asyncio.sleep(self._poll_interval)
+                failures += 1
+                loop_time = asyncio.get_running_loop().time()
+                if failures == 1:
+                    logger.exception("Signal poll error")
+                    last_warning_at = loop_time
+                elif loop_time - last_warning_at >= 30.0:
+                    logger.warning("Signal poll error continues", exc_info=True)
+                    last_warning_at = loop_time
+            delay = min(self._poll_interval * 2**failures, 60.0)
+            await asyncio.sleep(delay)
 
     async def _forward_to_core(self, *, user_id: str, text: str) -> None:
         if not user_id:

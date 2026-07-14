@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -652,11 +653,13 @@ class ProposalExecutor:
         else:
             full_code = code + "\n"
 
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        (skill_dir / "skill.yaml").write_text(yaml_content, encoding="utf-8")
-        (skill_dir / "main.py").write_text(full_code, encoding="utf-8")
+        def write_skill_files() -> None:
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "skill.yaml").write_text(yaml_content, encoding="utf-8")
+            (skill_dir / "main.py").write_text(full_code, encoding="utf-8")
 
-        self._skills.load_all()
+        await asyncio.to_thread(write_skill_files)
+        await asyncio.to_thread(self._skills.load_all)
         logger.info("Installed proposed skill: %s", name)
 
     def _can_update_skill(self, name: str) -> bool:
@@ -843,7 +846,7 @@ class ProposalExecutor:
                     f" ({result['error']}) — {detail[:500]}",
                 )
                 return
-            self._skills.load_all()
+            await asyncio.to_thread(self._skills.load_all)
             await self._memory.update_proposal_status(
                 proposal_id, ProposalStatus.EXECUTED
             )
@@ -879,7 +882,7 @@ class ProposalExecutor:
                     "requires_approval_to_modify"
                 ),
             )
-            self._skills.load_all()
+            await asyncio.to_thread(self._skills.load_all)
             await self._memory.update_proposal_status(
                 proposal_id, ProposalStatus.EXECUTED
             )
@@ -916,7 +919,7 @@ class ProposalExecutor:
                 recursive=skill_params.get("recursive", False),
                 approved=True,
             )
-            self._skills.load_all()
+            await asyncio.to_thread(self._skills.load_all)
             await self._memory.update_proposal_status(
                 proposal_id, ProposalStatus.EXECUTED
             )
@@ -948,7 +951,7 @@ class ProposalExecutor:
                 skill_name=skill_params.get("skill_name"),
                 approved=True,
             )
-            self._skills.load_all()
+            await asyncio.to_thread(self._skills.load_all)
             await self._memory.update_proposal_status(
                 proposal_id, ProposalStatus.EXECUTED
             )

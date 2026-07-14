@@ -319,10 +319,11 @@ class SkillRegistry:
         return {name for name, skill in self._skills.items() if skill.meta.enabled}
 
     def load_all(self) -> None:
-        """Scan the skills directory and load all valid skills."""
-        self._skills.clear()
+        """Scan the skills directory and atomically publish a fresh snapshot."""
+        loaded_skills: dict[str, Skill] = {}
         if not self._skills_dir.exists():
             logger.warning("Skills directory not found: %s", self._skills_dir)
+            self._skills = loaded_skills
             return
 
         for skill_path in self._skills_dir.iterdir():
@@ -334,11 +335,20 @@ class SkillRegistry:
                 logger.debug("Skipping %s (missing skill.yaml or main.py)", skill_path)
                 continue
             try:
-                self._load_skill(skill_path)
+                self._load_skill(skill_path, loaded_skills)
             except Exception:
                 logger.exception("Failed to load skill from %s", skill_path)
 
-    def _load_skill(self, skill_path: Path) -> None:
+        # Concurrent reloads may finish in either order. Each publishes a complete
+        # snapshot with one atomic assignment, so the last completed reload wins.
+        self._skills = loaded_skills
+
+    def _load_skill(
+        self,
+        skill_path: Path,
+        destination: dict[str, Skill] | None = None,
+    ) -> None:
+        loaded_skills = self._skills if destination is None else destination
         yaml_path = skill_path / "skill.yaml"
         main_path = skill_path / "main.py"
 
@@ -425,7 +435,7 @@ class SkillRegistry:
             allow_subprocess=meta.safety_level == SafetyLevel.DANGEROUS,
         )
 
-        if meta.name in self._skills:
+        if meta.name in loaded_skills:
             logger.error(
                 "Duplicate skill name %r from %s ignored; keeping first loaded skill",
                 meta.name,
@@ -433,7 +443,7 @@ class SkillRegistry:
             )
             return
 
-        self._skills[meta.name] = Skill(
+        loaded_skills[meta.name] = Skill(
             meta=meta,
             skill_dir=skill_path,
             sandbox_config=self._sandbox_config,

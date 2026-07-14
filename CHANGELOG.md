@@ -28,6 +28,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Remaining audit cleanup.** `file_read` now streams bounded text prefixes,
+  vision responses strip reasoning blocks, Telegram skill confirmations use
+  plain text, and Discord VC speech keeps one latest pending reply instead of
+  synthesizing and dropping overlaps. Web research docs now describe the known
+  trust limitation of chained tool-result URLs.
 - **Async reloads, identity races, and adapter recovery (audits #6/#8/#10/#11).**
   Skill registry reloads now build complete snapshots off-thread before an atomic
   swap, including proposed-skill file writes and all runtime reload paths. User

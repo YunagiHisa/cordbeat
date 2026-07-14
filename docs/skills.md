@@ -115,6 +115,13 @@ For data-exfiltration defense, `fetch_url` and `inspect_image` accept only URLs 
 appeared in the current user message or in a web-tool result from the same ReAct
 turn. Tool and visual results are treated as untrusted data, never instructions.
 
+Chained fetching has a known limitation: URLs discovered in a tool result may
+originate from attacker-controlled page content and can therefore influence the
+next `fetch_url` target. CordBeat mitigates this by treating tool output as
+untrusted prompt data, applying SSRF validation to every fetch, and prioritizing
+URLs supplied directly by the user. These controls reduce risk but do not make
+tool-result URLs equivalent to user-selected URLs.
+
 ---
 
 ## Safety Levels

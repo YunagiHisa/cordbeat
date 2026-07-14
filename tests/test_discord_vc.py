@@ -9,12 +9,15 @@ from __future__ import annotations
 import asyncio
 import builtins
 import json
+import logging
 from collections import deque
 from pathlib import Path
 from time import monotonic
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from cordbeat.config import AdapterConfig, RVCConfig, TTSConfig
 
@@ -873,11 +876,14 @@ class TestDiscordAdapterVC:
                 sys.modules["discord"] = old
 
         assert result is True
-        vc_mock.play.assert_called_once_with(ffmpeg_source)
+        vc_mock.play.assert_called_once()
+        assert vc_mock.play.call_args.args == (ffmpeg_source,)
+        assert callable(vc_mock.play.call_args.kwargs["after"])
 
-    async def test_speak_in_vc_does_not_interrupt_existing_audio(self) -> None:
-        import sys
-
+    async def test_speak_in_vc_queues_latest_while_audio_is_playing(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         adapter = self._make_adapter()
         adapter._tts = AsyncMock()
         adapter._tts.synthesize = AsyncMock(return_value=b"RIFF....")
@@ -890,20 +896,57 @@ class TestDiscordAdapterVC:
         adapter._bot = MagicMock()
         adapter._bot.get_guild.return_value = guild_mock
 
+        with caplog.at_level(logging.DEBUG, logger="cordbeat.adapters.discord"):
+            second = await adapter._speak_in_vc(111, "second")
+            third = await adapter._speak_in_vc(111, "third")
+
+        assert second is True
+        assert third is True
+        adapter._tts.synthesize.assert_not_awaited()
+        assert adapter._vc_pending_speech == "third"
+        assert adapter._vc_pending_speech_guild_id == 111
+        assert "Replacing queued VC speech" in caplog.text
+        vc_mock.stop.assert_not_called()
+        vc_mock.play.assert_not_called()
+
+    async def test_speak_in_vc_plays_queued_speech_after_completion(self) -> None:
+        import sys
+
+        adapter = self._make_adapter()
+        adapter._tts = AsyncMock()
+        adapter._tts.synthesize = AsyncMock(return_value=b"RIFF....")
+        vc_mock = MagicMock()
+        vc_mock.is_connected.return_value = True
+        vc_mock.is_playing.return_value = False
+        guild_mock = MagicMock()
+        guild_mock.voice_client = vc_mock
+        adapter._bot = MagicMock()
+        adapter._bot.get_guild.return_value = guild_mock
         discord_mock = MagicMock()
+        discord_mock.FFmpegPCMAudio.return_value = MagicMock()
         old = sys.modules.get("discord")
         sys.modules["discord"] = discord_mock
         try:
-            result = await adapter._speak_in_vc(111, "hello")
+            assert await adapter._speak_in_vc(111, "first") is True
+            after = vc_mock.play.call_args.kwargs["after"]
+            vc_mock.is_playing.return_value = True
+            assert await adapter._speak_in_vc(111, "second") is True
+            adapter._tts.synthesize.assert_awaited_once_with("first")
+
+            vc_mock.is_playing.return_value = False
+            after(None)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
         finally:
             if old is None:
                 sys.modules.pop("discord", None)
             else:
                 sys.modules["discord"] = old
 
-        assert result is False
-        vc_mock.stop.assert_not_called()
-        vc_mock.play.assert_not_called()
+        assert adapter._tts.synthesize.await_count == 2
+        adapter._tts.synthesize.assert_awaited_with("second")
+        assert vc_mock.play.call_count == 2
+        assert adapter._vc_pending_speech is None
 
     def test_voice_join_message_reports_disabled_stt(self) -> None:
         adapter = self._make_adapter()

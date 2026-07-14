@@ -998,7 +998,9 @@ class OpenAICompatBackend(AIBackend):
             raise
         inc_counter(LLM_GENERATE_TOTAL, {"backend": "openai_compat", "outcome": "ok"})
         try:
-            result = str(data["choices"][0]["message"]["content"])
+            result = self._strip_reasoning_text(
+                str(data["choices"][0]["message"]["content"])
+            )
             logger.debug(
                 "openai_compat vision response: %d chars: %.300s",
                 len(result),

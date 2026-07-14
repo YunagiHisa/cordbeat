@@ -1355,6 +1355,22 @@ class TestGenerateChat:
         assert result == "hello"
         assert "/chat/completions" in backend._client.post.call_args[0][0]
 
+    async def test_openai_vision_strips_thinking_prefix(self) -> None:
+        backend = self._openai()
+        resp = MagicMock()
+        resp.json.return_value = {
+            "choices": [
+                {"message": {"content": "<think>hidden plan</think>Visible result"}}
+            ]
+        }
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=resp)
+        backend._raise_for_status_with_body = MagicMock()  # type: ignore[method-assign]
+
+        result = await backend.generate_with_vision("describe", ["b64img"])
+
+        assert result == "Visible result"
+
     async def test_openai_generate_chat_temperature_defaults_to_existing_value(
         self,
     ) -> None:

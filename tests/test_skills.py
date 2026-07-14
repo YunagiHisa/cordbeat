@@ -1487,6 +1487,7 @@ class TestFileReadSkill:
 
         result = mod.execute(path="notes/data.txt", max_lines=100)
         assert result["lines"] == 3
+        assert result["total_lines"] == 3
         assert result["truncated"] is False
         assert "line1" in result["content"]
 
@@ -1512,8 +1513,35 @@ class TestFileReadSkill:
 
         result = mod.execute(path="big.txt", max_lines=10)
         assert result["lines"] == 10
-        assert result["total_lines"] == 50
+        assert result["total_lines"] == 11
         assert result["truncated"] is True
+
+    async def test_file_read_stops_at_byte_limit(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "test_file_read_bytes",
+            str(_BUILTIN_SKILLS_DIR / "file_read" / "main.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        monkeypatch.setattr(mod, "_MAX_READ_BYTES", 12)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "wide.txt").write_text(
+            "abcdefghij\nsecond line\n",
+            encoding="utf-8",
+        )
+
+        result = mod.execute(path="wide.txt", max_lines=100)
+
+        assert result["truncated"] is True
+        assert len(result["content"].encode("utf-8")) <= 12
+        assert result["total_lines"] == 2
 
     async def test_file_read_missing_file(
         self,

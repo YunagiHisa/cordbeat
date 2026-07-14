@@ -150,6 +150,11 @@ class DiscordAdapter(RetryableConnection):
         self._vc_room_context: dict[int, deque[str]] = {}
         self._vc_followup_until: dict[int, float] = {}
         self._vc_session_ids: dict[int, str] = {}
+        self._vc_pending_speech: str | None = None
+        self._vc_pending_speech_guild_id: int | None = None
+        # Strong reference so the replay task cannot be garbage-collected
+        # mid-flight; only one pending replay exists at a time.
+        self._vc_pending_speech_task: asyncio.Task[bool] | None = None
         self._vc_participation_judge_lock = asyncio.Lock()
         raw_activation_mode = str(
             config.options.get("vc_activation_mode", "hybrid")
@@ -1419,6 +1424,9 @@ class DiscordAdapter(RetryableConnection):
         vc = guild.voice_client
         if not vc or not vc.is_connected():
             return False
+        if vc.is_playing():
+            self._queue_pending_vc_speech(guild_id, text)
+            return True
 
         started_at = monotonic()
         try:
@@ -1437,21 +1445,58 @@ class DiscordAdapter(RetryableConnection):
         if not audio:
             return False
 
+        if vc.is_playing():
+            self._queue_pending_vc_speech(guild_id, text)
+            return True
+
         try:
             import discord
 
             source = discord.FFmpegPCMAudio(io.BytesIO(audio), pipe=True)
-            if vc.is_playing():
-                logger.warning(
-                    "VC is already playing audio for guild=%d; dropping overlap",
+            loop = asyncio.get_running_loop()
+
+            def after_playback(error: Exception | None) -> None:
+                loop.call_soon_threadsafe(
+                    self._on_vc_playback_finished,
                     guild_id,
+                    error,
                 )
-                return False
-            vc.play(source)
+
+            vc.play(source, after=after_playback)
             return True
         except Exception:
             logger.exception("Failed to play TTS audio in VC guild %d", guild_id)
             return False
+
+    def _queue_pending_vc_speech(self, guild_id: int, text: str) -> None:
+        if self._vc_pending_speech is not None:
+            logger.debug(
+                "Replacing queued VC speech guild=%s with latest guild=%d",
+                self._vc_pending_speech_guild_id,
+                guild_id,
+            )
+        self._vc_pending_speech = text
+        self._vc_pending_speech_guild_id = guild_id
+
+    def _on_vc_playback_finished(
+        self,
+        guild_id: int,
+        error: Exception | None,
+    ) -> None:
+        """Run on the event loop after discord.py's playback callback."""
+        if error is not None:
+            logger.warning("VC playback failed for guild=%d: %s", guild_id, error)
+        if (
+            self._vc_pending_speech is None
+            or self._vc_pending_speech_guild_id != guild_id
+        ):
+            return
+        text = self._vc_pending_speech
+        self._vc_pending_speech = None
+        self._vc_pending_speech_guild_id = None
+        self._vc_pending_speech_task = asyncio.create_task(
+            self._speak_in_vc(guild_id, text)
+        )
 
     def _voice_join_message(self, channel_name: str) -> str:
         if self._stt is None:
@@ -1586,6 +1631,9 @@ class DiscordAdapter(RetryableConnection):
         self._vc_followup_until.pop(guild_id, None)
         self._vc_session_ids.pop(guild_id, None)
         self._vc_muted.discard(guild_id)
+        if self._vc_pending_speech_guild_id == guild_id:
+            self._vc_pending_speech = None
+            self._vc_pending_speech_guild_id = None
 
     async def _handle_mute(self, interaction: Any) -> None:
         """Slash command: toggle voice mute."""

@@ -435,12 +435,12 @@ class TelegramAdapter(RetryableConnection):
                 params_text = "\n".join(
                     f"  • {k}: {v}" for k, v in skill_params.items()
                 )
-                params_text = f"\n\n*Parameters:*\n{params_text}"
+                params_text = f"\n\nParameters:\n{params_text}"
 
             text = (
-                f"🔧 *Skill Execution Required*\n"
-                f"Skill: `{skill_name}`{params_text}\n\n"
-                f"Allow `{skill_name}` to run?"
+                "🔧 Skill Execution Required\n"
+                f"Skill: {skill_name}{params_text}\n\n"
+                f"Allow {skill_name} to run?"
             )
 
             keyboard = InlineKeyboardMarkup(
@@ -464,7 +464,6 @@ class TelegramAdapter(RetryableConnection):
             await self._app.bot.send_message(
                 chat_id=chat_id,
                 text=text,
-                parse_mode="Markdown",
                 reply_markup=keyboard,
             )
             if proposal_id:

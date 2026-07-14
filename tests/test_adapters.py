@@ -1308,7 +1308,7 @@ class TestTelegramAdapter:
             "metadata": {
                 "proposal_id": "abc-123",
                 "skill_name": "shell_exec",
-                "skill_params": {"command": "ls -la"},
+                "skill_params": {"path_name": "value_with_underscores"},
             },
         }
 
@@ -1322,6 +1322,8 @@ class TestTelegramAdapter:
         call_kwargs = adapter._app.bot.send_message.call_args.kwargs
         assert call_kwargs["chat_id"] == 12345
         assert "shell_exec" in call_kwargs["text"]
+        assert "path_name: value_with_underscores" in call_kwargs["text"]
+        assert "parse_mode" not in call_kwargs
         assert call_kwargs["reply_markup"] == "keyboard"
 
     async def test_dispatch_skill_confirm_fallback_no_chat_map(self) -> None:

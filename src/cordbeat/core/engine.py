@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from cordbeat.agent.action_budget import ActionBudget
@@ -23,7 +23,12 @@ from cordbeat.agent.proposals import (
 )
 from cordbeat.agent.react_types import MediaArtifact, ToolCallResult, ToolTrace
 from cordbeat.agent.soul import Soul
-from cordbeat.ai.backend import AIBackend, voice_context_scope
+from cordbeat.ai.backend import (
+    AIBackend,
+    ThinkingMode,
+    skill_thinking_scope,
+    voice_context_scope,
+)
 from cordbeat.ai.extraction import MemoryExtractor
 from cordbeat.ai.prompt import (
     build_context,
@@ -2685,12 +2690,22 @@ class CoreEngine:
             retry_reason=retry_reason,
         )
         try:
-            raw = await self._ai.generate(
-                prompt=prompt,
-                system=system,
-                temperature=0.2,
-                max_tokens=3000,
+            draw_skill = self._skills.get("draw")
+            raw_thinking_mode = (
+                draw_skill.meta.thinking_mode if draw_skill is not None else "auto"
             )
+            thinking_mode = (
+                cast(ThinkingMode, raw_thinking_mode)
+                if raw_thinking_mode in {"auto", "off", "force_on"}
+                else "auto"
+            )
+            with skill_thinking_scope(thinking_mode):
+                raw = await self._ai.generate(
+                    prompt=prompt,
+                    system=system,
+                    temperature=0.2,
+                    max_tokens=3000,
+                )
             return raw.strip()
         except Exception:
             logger.exception(

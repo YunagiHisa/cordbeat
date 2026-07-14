@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from cordbeat.ai.backend import is_internal_context
 from cordbeat.ai.compression import ConversationCompressor
 
 
@@ -46,7 +47,7 @@ async def test_compress_in_memory_above_threshold() -> None:
     # Subsequent entries are the more recent originals
     assert result[1] == history[5]
     ai.generate.assert_awaited_once()
-    assert ai.generate.await_args.kwargs["system"].startswith("/no_think\n")
+    assert "/no_think" not in ai.generate.await_args.kwargs["system"]
 
 
 @pytest.mark.asyncio
@@ -68,6 +69,23 @@ async def test_compress_chunk_to_text() -> None:
     history = _make_history(5)
     result = await compressor.compress_chunk_to_text(history)
     assert result == "Earlier: summary text."
+
+
+@pytest.mark.asyncio
+async def test_compression_runs_backend_call_in_internal_scope() -> None:
+    ai = AsyncMock()
+
+    async def observe_scope(**_kwargs: object) -> str:
+        assert is_internal_context() is True
+        return "Earlier: summary text."
+
+    ai.generate = AsyncMock(side_effect=observe_scope)
+    compressor = ConversationCompressor(ai)
+
+    result = await compressor.compress_chunk_to_text(_make_history(5))
+
+    assert result == "Earlier: summary text."
+    assert is_internal_context() is False
 
 
 @pytest.mark.asyncio

@@ -185,6 +185,7 @@ class SkillMeta:
     ownership: str = "user"
     mutable_by_ai: bool = False
     requires_approval_to_modify: bool = True
+    thinking_mode: str = "auto"
 
 
 @dataclass

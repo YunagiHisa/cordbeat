@@ -9,7 +9,7 @@ import json
 import logging
 import re
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -63,6 +63,17 @@ _voice_context: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "cordbeat_voice_context",
     default=False,
 )
+_internal_context: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "cordbeat_internal_context",
+    default=False,
+)
+ThinkingMode = Literal["auto", "off", "force_on"]
+_skill_thinking_context: contextvars.ContextVar[ThinkingMode | None] = (
+    contextvars.ContextVar(
+        "cordbeat_skill_thinking_context",
+        default=None,
+    )
+)
 
 
 @contextlib.contextmanager
@@ -78,6 +89,36 @@ def voice_context_scope(is_voice: bool) -> Any:
 def is_voice_context() -> bool:
     """Return True if the current asyncio task is in a voice-context scope."""
     return _voice_context.get()
+
+
+@contextlib.contextmanager
+def internal_context_scope(active: bool = True) -> Any:
+    """Mark backend calls in this block as internal processing."""
+    token = _internal_context.set(bool(active))
+    try:
+        yield
+    finally:
+        _internal_context.reset(token)
+
+
+def is_internal_context() -> bool:
+    """Return True while the current task is doing internal processing."""
+    return _internal_context.get()
+
+
+@contextlib.contextmanager
+def skill_thinking_scope(mode: ThinkingMode) -> Any:
+    """Apply a skill's thinking preference to backend calls in this block."""
+    token = _skill_thinking_context.set(mode)
+    try:
+        yield
+    finally:
+        _skill_thinking_context.reset(token)
+
+
+def current_skill_thinking_mode() -> ThinkingMode | None:
+    """Return the active skill thinking preference, if any."""
+    return _skill_thinking_context.get()
 
 
 def _coerce_string_tuple(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -452,6 +493,11 @@ class OpenAICompatBackend(AIBackend):
         # ``is_voice_context()`` is true so VC / voice-message replies stay
         # within real-time latency budgets.  None = use ``_enable_thinking``.
         self._voice_enable_thinking: bool | None = options.get("voice_enable_thinking")
+        # Optional override for non-user-facing analysis such as extraction,
+        # compression, sleep consolidation, and heartbeat reasoning.
+        self._internal_enable_thinking: bool | None = options.get(
+            "internal_enable_thinking"
+        )
         voice_max_tokens = options.get("voice_max_tokens")
         self._voice_max_tokens = (
             int(voice_max_tokens)
@@ -587,10 +633,20 @@ class OpenAICompatBackend(AIBackend):
         return "\n---\n".join(parts)
 
     def _effective_enable_thinking(self) -> bool | None:
-        """Return ``enable_thinking`` accounting for voice-context override."""
+        """Resolve skill, voice, internal, and base thinking preferences."""
+        skill_mode = current_skill_thinking_mode()
+        if skill_mode == "force_on":
+            return True
+        configured: bool | None
         if is_voice_context() and self._voice_enable_thinking is not None:
-            return self._voice_enable_thinking
-        return self._enable_thinking
+            configured = self._voice_enable_thinking
+        elif is_internal_context() and self._internal_enable_thinking is not None:
+            configured = self._internal_enable_thinking
+        else:
+            configured = self._enable_thinking
+        if configured is False or skill_mode == "off":
+            return False
+        return configured
 
     def _effective_max_tokens(self, requested_max_tokens: int | None) -> int:
         resolved = _resolve_configured_max_tokens(

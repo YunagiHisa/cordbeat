@@ -392,6 +392,20 @@ class SkillRegistry:
             if isinstance(value, int) and value >= 0:
                 rate_limit_per_minute = value
 
+        thinking_mode_raw = raw.get("thinking_mode", "auto")
+        thinking_mode = (
+            thinking_mode_raw.strip().lower()
+            if isinstance(thinking_mode_raw, str)
+            else ""
+        )
+        if thinking_mode not in {"auto", "off", "force_on"}:
+            logger.warning(
+                "Invalid thinking_mode=%r for skill %s; using auto",
+                thinking_mode_raw,
+                skill_path.name,
+            )
+            thinking_mode = "auto"
+
         meta = SkillMeta(
             name=skill_path.name,
             description=raw.get("description", ""),
@@ -409,6 +423,7 @@ class SkillRegistry:
             requires_approval_to_modify=(
                 raw.get("requires_approval_to_modify") is not False
             ),
+            thinking_mode=thinking_mode,
         )
 
         if meta.safety_level == SafetyLevel.DANGEROUS and "enabled" not in raw:

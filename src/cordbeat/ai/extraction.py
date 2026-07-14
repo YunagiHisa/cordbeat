@@ -11,7 +11,7 @@ from cordbeat.config import MemoryConfig
 from cordbeat.memory.core import MemoryStore
 from cordbeat.models import Emotion, MemoryEntry, MemoryLayer, SoulCaller
 
-from .backend import AIBackend
+from .backend import AIBackend, internal_context_scope
 from .reasoning import parse_json_object
 
 logger = logging.getLogger(__name__)
@@ -145,10 +145,11 @@ class MemoryExtractor:
             ai_response=ai_response[:500],
         )
         try:
-            raw = await self._ai.generate(
-                prompt=prompt,
-                system="/no_think\nRespond in valid JSON only.",
-            )
+            with internal_context_scope():
+                raw = await self._ai.generate(
+                    prompt=prompt,
+                    system="Respond in valid JSON only.",
+                )
             data = parse_json_object(raw)
             emotion = Emotion(data["emotion"])
             intensity = float(data["intensity"])
@@ -189,11 +190,12 @@ class MemoryExtractor:
             ai_response=ai_response[:500],
         )
         try:
-            raw = await self._ai.generate(
-                prompt=prompt,
-                system="/no_think\nRespond in valid JSON only.",
-                temperature=self._memory_config.extraction_temperature,
-            )
+            with internal_context_scope():
+                raw = await self._ai.generate(
+                    prompt=prompt,
+                    system="Respond in valid JSON only.",
+                    temperature=self._memory_config.extraction_temperature,
+                )
             data = parse_json_object(raw)
         except Exception as exc:
             # Memories silently not being stored breaks relationship growth;

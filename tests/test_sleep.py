@@ -25,7 +25,7 @@ async def test_promote_episodic_memories_accepts_fenced_json() -> None:
     await sleep._promote_episodic_memories("user-1")
 
     ai_call = ai.generate.await_args.kwargs
-    assert ai_call["system"].startswith("/no_think\n")
+    assert "/no_think" not in ai_call["system"]
     assert "The user said they enjoy hiking." not in ai_call["system"]
     assert "The user said they enjoy hiking." in ai_call["prompt"]
     entry = memory.add_semantic_memory.await_args.args[0]
@@ -122,7 +122,7 @@ async def test_write_diary_disables_thinking() -> None:
 
     await sleep._write_diary(user, {"name": "CordBeat"})
 
-    assert ai.generate.await_args.kwargs["system"].startswith("/no_think\n")
+    assert "/no_think" not in ai.generate.await_args.kwargs["system"]
 
 
 def _compress_sleep(memory: MagicMock, ai: MagicMock) -> SleepPhase:

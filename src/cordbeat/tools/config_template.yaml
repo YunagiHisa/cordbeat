@@ -58,6 +58,9 @@ ai_backend:
   #                          # <think> only for voice messages (VC / audio).
   #   voice_max_tokens: 512  # OPTIONAL shorter output budget for voice replies.
   #                          # Falls back to enable_thinking when unset.
+  #   internal_enable_thinking: true  # OPTIONAL for extraction, compression,
+  #                          # sleep consolidation, and heartbeat reasoning.
+  #                          # Falls back to enable_thinking when unset.
   #   reasoning_content_keys: ["reasoning_content"]  # debug-log these fields only
   #   log_reasoning_content: false                   # opt in for DEBUG logs only
   #   reasoning_strip_tags: ["think"]                # strip <tag>...</tag> leaks

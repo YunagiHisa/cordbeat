@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from cordbeat.agent.soul import Soul
+from cordbeat.ai.backend import is_internal_context
 from cordbeat.ai.extraction import MemoryExtractor
 from cordbeat.ai.reasoning import parse_json_object
 from cordbeat.config import MemoryConfig
@@ -51,6 +52,22 @@ def test_parse_json_object_accepts_fenced_model_output() -> None:
 
 class TestInferAndUpdateEmotion:
     @pytest.mark.anyio
+    async def test_runs_backend_call_in_internal_scope(
+        self,
+        extractor: MemoryExtractor,
+        mock_ai: AsyncMock,
+    ) -> None:
+        async def observe_scope(**_kwargs: object) -> str:
+            assert is_internal_context() is True
+            return '{"emotion": "calm", "intensity": 0.2}'
+
+        mock_ai.generate = AsyncMock(side_effect=observe_scope)
+
+        await extractor.infer_and_update_emotion("u1", "Hello", "Hi")
+
+        assert is_internal_context() is False
+
+    @pytest.mark.anyio
     async def test_updates_emotion(
         self, extractor: MemoryExtractor, mock_ai: AsyncMock, soul: Soul
     ) -> None:
@@ -60,7 +77,7 @@ class TestInferAndUpdateEmotion:
         await extractor.infer_and_update_emotion("u1", "Great news!", "Wonderful!")
         snap = soul.get_soul_snapshot()
         assert snap["emotion"]["primary"] == "joy"
-        assert "/no_think" in mock_ai.generate.await_args.kwargs["system"]
+        assert "/no_think" not in mock_ai.generate.await_args.kwargs["system"]
 
     @pytest.mark.anyio
     async def test_accepts_fenced_json(
@@ -128,6 +145,7 @@ class TestExtractAndStoreMemories:
         )
         results = await memory.search_semantic("u1", "Python", n_results=5)
         assert len(results) > 0
+        assert "/no_think" not in mock_ai.generate.await_args.kwargs["system"]
 
     @pytest.mark.anyio
     async def test_accepts_fenced_json(

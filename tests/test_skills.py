@@ -39,6 +39,7 @@ def _create_skill(
     network: bool = False,
     filesystem: bool = False,
     shared_voice: bool = False,
+    thinking_mode: str | None = None,
     main_code: str | None = None,
 ) -> None:
     """Helper to create a minimal skill in the filesystem."""
@@ -55,6 +56,8 @@ def _create_skill(
     )
     if enabled is not None:
         yaml_content += f"enabled: {str(enabled).lower()}\n"
+    if thinking_mode is not None:
+        yaml_content += f"thinking_mode: {thinking_mode}\n"
     (skill_dir / "skill.yaml").write_text(yaml_content, encoding="utf-8")
 
     code = main_code or "def execute(**kwargs):\n    return {'result': 'ok'}\n"
@@ -72,6 +75,38 @@ class TestSkillRegistry:
         assert len(registry.available_skills) == 2
         assert "greet" in registry.available_skills
         assert "search" in registry.available_skills
+
+    def test_thinking_mode_defaults_to_auto(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "default_mode")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+
+        assert registry.available_skills["default_mode"].thinking_mode == "auto"
+
+    def test_thinking_mode_loads_force_on(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "reasoning", thinking_mode="force_on")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+
+        assert registry.available_skills["reasoning"].thinking_mode == "force_on"
+
+    def test_invalid_thinking_mode_falls_back_to_auto(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        skills_dir = tmp_path / "skills"
+        _create_skill(skills_dir, "invalid_mode", thinking_mode="always")
+
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+
+        assert registry.available_skills["invalid_mode"].thinking_mode == "auto"
+        assert "Invalid thinking_mode" in caplog.text
 
     def test_reload_keeps_previous_snapshot_visible_until_swap(
         self,

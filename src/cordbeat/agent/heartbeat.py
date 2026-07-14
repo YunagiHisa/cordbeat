@@ -10,7 +10,7 @@ import zoneinfo
 from datetime import UTC, datetime, time, tzinfo
 from typing import Any
 
-from cordbeat.ai.backend import AIBackend
+from cordbeat.ai.backend import AIBackend, internal_context_scope
 from cordbeat.ai.prompt import (
     build_context,
     format_skill_params_for_display,
@@ -204,7 +204,6 @@ You MUST respond in valid JSON:
 """
 
 _SELF_REVIEW_SYSTEM_PROMPT = """\
-/no_think
 You are {name}, privately reviewing recent HEARTBEAT notes.
 Write 2-4 concise sentences about repeated topics, stale concerns, over-contact
 risk, and what you should keep in mind for upcoming heartbeats.
@@ -525,13 +524,16 @@ class HeartbeatLoop:
             "next_heartbeat_minutes": self._config.default_interval_minutes,
         }
 
-        return await validated_ai_json(
-            self._ai,
-            prompt=global_ctx,
-            system=system,
-            validator=validate_heartbeat_triage,
-            fallback=fallback,
-        )
+        # Heartbeat reasoning is intentionally classified as internal processing:
+        # it benefits from accuracy without adding latency to a user-facing reply.
+        with internal_context_scope():
+            return await validated_ai_json(
+                self._ai,
+                prompt=global_ctx,
+                system=system,
+                validator=validate_heartbeat_triage,
+                fallback=fallback,
+            )
 
     # ── Layer 2: Per-user evaluation ──────────────────────────────────
 
@@ -628,13 +630,14 @@ class HeartbeatLoop:
             "next_heartbeat_minutes": self._config.default_interval_minutes,
         }
 
-        decision_data = await validated_ai_json(
-            self._ai,
-            prompt=prompt,
-            system=system,
-            validator=validate_heartbeat_decision,
-            fallback=fallback,
-        )
+        with internal_context_scope():
+            decision_data = await validated_ai_json(
+                self._ai,
+                prompt=prompt,
+                system=system,
+                validator=validate_heartbeat_decision,
+                fallback=fallback,
+            )
 
         return HeartbeatDecision(
             action=HeartbeatAction(decision_data.get("action", "none")),
@@ -845,12 +848,13 @@ class HeartbeatLoop:
             if not review_context:
                 return
             soul_snap = self._soul.get_soul_snapshot()
-            review = await self._ai.generate(
-                prompt=review_context,
-                system=_SELF_REVIEW_SYSTEM_PROMPT.format(name=soul_snap["name"]),
-                temperature=0.2,
-                max_tokens=300,
-            )
+            with internal_context_scope():
+                review = await self._ai.generate(
+                    prompt=review_context,
+                    system=_SELF_REVIEW_SYSTEM_PROMPT.format(name=soul_snap["name"]),
+                    temperature=0.2,
+                    max_tokens=300,
+                )
             content = sanitize(
                 review.strip(),
                 max_len=self._memory_config.max_user_input_len,

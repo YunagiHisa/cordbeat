@@ -1500,6 +1500,33 @@ class TestLayer1Triage:
 
 
 class TestLayer2Evaluate:
+    async def test_decision_runs_backend_call_in_internal_scope(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        from cordbeat.ai.backend import is_internal_context
+
+        await memory.get_or_create_user("u1", "Alice")
+
+        async def observe_scope(*_args: object, **_kwargs: object) -> dict[str, object]:
+            assert is_internal_context() is True
+            return {
+                "action": "none",
+                "content": "",
+                "next_heartbeat_minutes": 60,
+            }
+
+        mock_ai.generate_json = AsyncMock(side_effect=observe_scope)
+
+        await heartbeat._layer2_evaluate(
+            UserSummary(user_id="u1", display_name="Alice"),
+            "routine check",
+        )
+
+        assert is_internal_context() is False
+
     async def test_evaluate_returns_decision(
         self,
         heartbeat: HeartbeatLoop,

@@ -60,6 +60,9 @@ ai_backend:
   #                          # text but eats the entire token budget on short
   #                          # voice replies, producing empty TTS output.
   #                          # Falls back to enable_thinking when unset.
+  #   internal_enable_thinking: true  # OPTIONAL for extraction, compression,
+  #                          # sleep consolidation, and heartbeat reasoning.
+  #                          # Falls back to enable_thinking when unset.
   #   reasoning_content_keys: ["reasoning_content"]  # debug-log these fields only
   #   log_reasoning_content: true                    # DEBUG logs only
   #   reasoning_strip_tags: ["think"]                # strip <tag>...</tag> leaks

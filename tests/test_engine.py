@@ -3589,12 +3589,52 @@ class TestAutoDraw:
         call_kwargs = mock_ai.generate.await_args.kwargs
         assert call_kwargs["temperature"] == 0.2
         assert call_kwargs["max_tokens"] == 3000
-        assert "/no_think" in call_kwargs["system"]
+        assert "/no_think" not in call_kwargs["system"]
         assert "Silently plan the composition" in call_kwargs["system"]
         assert "intermediate renderer specification" in call_kwargs["system"]
         assert "never exceed 200 total" in call_kwargs["system"]
         assert "BEZIER" in call_kwargs["system"]
         assert "REPEAT" in call_kwargs["system"]
+
+    async def test_generate_draw_dsl_uses_skill_thinking_mode(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        from unittest.mock import MagicMock
+
+        from cordbeat.ai.backend import current_skill_thinking_mode
+
+        observed_modes: list[str | None] = []
+
+        async def observe_scope(**_kwargs: object) -> str:
+            observed_modes.append(current_skill_thinking_mode())
+            return "SIZE 400 400\nCANVAS white\nOUTPUT"
+
+        mock_ai.generate = AsyncMock(side_effect=observe_scope)
+        draw_skill = MagicMock()
+        draw_skill.meta = SkillMeta(
+            name="draw",
+            description="Draw",
+            usage="",
+            thinking_mode="force_on",
+        )
+        registry = MagicMock()
+        registry.get = lambda name: draw_skill if name == "draw" else None
+        eng = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=registry,
+            gateway=mock_gateway,
+        )
+
+        await eng._generate_draw_dsl("a white canvas")
+
+        assert observed_modes == ["force_on"]
+        assert current_skill_thinking_mode() is None
 
     async def test_generate_draw_dsl_ai_failure_returns_empty(
         self,

@@ -11,7 +11,10 @@ from cordbeat.ai.backend import (
     OllamaBackend,
     OpenAICompatBackend,
     create_backend,
+    internal_context_scope,
+    skill_thinking_scope,
     strip_thinking_text,
+    voice_context_scope,
 )
 from cordbeat.ai.reasoning import (
     looks_like_reasoning_text,
@@ -43,6 +46,55 @@ class TestCreateBackend:
         cfg = AIBackendConfig(provider="llama_cpp")
         with pytest.raises(ValueError, match="Unknown AI backend provider"):
             create_backend(cfg)
+
+
+@pytest.mark.parametrize(
+    (
+        "base",
+        "skill_mode",
+        "internal_override",
+        "voice_override",
+        "internal_active",
+        "voice_active",
+        "expected",
+    ),
+    [
+        (False, "auto", None, None, False, False, False),
+        (False, "off", None, None, False, False, False),
+        (False, "force_on", None, None, False, False, True),
+        (True, "auto", None, None, False, False, True),
+        (True, "off", None, None, False, False, False),
+        (True, "force_on", None, None, False, False, True),
+        (None, "auto", None, None, False, False, None),
+        (None, "force_on", None, None, False, False, True),
+        (None, "off", None, None, False, False, False),
+        (False, "auto", True, None, True, False, True),
+        (True, "auto", False, True, True, True, True),
+        (True, "auto", False, None, True, True, False),
+        (True, "off", True, True, True, True, False),
+        (False, "force_on", False, False, True, True, True),
+    ],
+)
+def test_thinking_resolution_table(
+    base: bool | None,
+    skill_mode: str,
+    internal_override: bool | None,
+    voice_override: bool | None,
+    internal_active: bool,
+    voice_active: bool,
+    expected: bool | None,
+) -> None:
+    backend = OpenAICompatBackend.__new__(OpenAICompatBackend)
+    backend._enable_thinking = base
+    backend._internal_enable_thinking = internal_override
+    backend._voice_enable_thinking = voice_override
+
+    with (
+        internal_context_scope(internal_active),
+        voice_context_scope(voice_active),
+        skill_thinking_scope(skill_mode),  # type: ignore[arg-type]
+    ):
+        assert backend._effective_enable_thinking() is expected
 
 
 # ── generate_json ─────────────────────────────────────────────────────

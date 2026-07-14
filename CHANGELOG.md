@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Per-category thinking control.** OpenAI-compatible backends can override
+  thinking for internal extraction, compression, sleep, and heartbeat work,
+  while skills can select `auto`, `off`, or `force_on`. Draw DSL generation now
+  forces thinking without changing chat or voice latency defaults.
 - **Availability-aware web research and visual inspection.** System guidance now
   encourages fresh multi-source research only when the relevant skills are
   enabled. `fetch_url` returns bounded image candidates, and the new

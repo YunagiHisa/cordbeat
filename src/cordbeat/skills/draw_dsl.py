@@ -206,7 +206,6 @@ def build_generation_request(
             "the stated failure without deleting requested essential detail."
         )
     system = (
-        "/no_think\n"
         "You are a drawing DSL generator. "
         "Given an intermediate renderer specification, output ONLY valid Draw DSL"
         " commands — no prose, no markdown fences.\n"

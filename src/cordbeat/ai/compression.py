@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from cordbeat.ai.backend import internal_context_scope
 from cordbeat.ai.prompt import sanitize
 from cordbeat.ai.reasoning import sanitize_reasoning_artifacts
 
@@ -24,7 +25,6 @@ _MAX_SUMMARY_MESSAGE_CHARS = 500
 _MAX_SUMMARY_INPUT_CHARS = 20_000
 
 _COMPRESS_SYSTEM_PROMPT = """\
-/no_think
 You are summarizing an older portion of a conversation between a user and an
 AI assistant. Create a concise summary that preserves the key information:
 topics discussed, decisions made, user preferences or facts mentioned, and the
@@ -130,12 +130,13 @@ class ConversationCompressor:
         )
 
         try:
-            summary = await self._ai.generate(
-                prompt=prompt,
-                system=_COMPRESS_SYSTEM_PROMPT,
-                temperature=self._temperature,
-                max_tokens=self._max_tokens,
-            )
+            with internal_context_scope():
+                summary = await self._ai.generate(
+                    prompt=prompt,
+                    system=_COMPRESS_SYSTEM_PROMPT,
+                    temperature=self._temperature,
+                    max_tokens=self._max_tokens,
+                )
             return sanitize_reasoning_artifacts(summary).strip() or None
         except Exception:
             logger.exception("Conversation compression LLM call failed")

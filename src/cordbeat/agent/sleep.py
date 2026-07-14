@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 
-from cordbeat.ai.backend import AIBackend
+from cordbeat.ai.backend import AIBackend, internal_context_scope
 from cordbeat.ai.compression import ConversationCompressor
 from cordbeat.ai.prompt import sanitize
 from cordbeat.ai.reasoning import parse_json_object, sanitize_reasoning_artifacts
@@ -35,7 +35,6 @@ _MAX_DIARY_MESSAGE_CHARS = 500
 _MAX_DIARY_INPUT_CHARS = 20_000
 
 _DIARY_SYSTEM_PROMPT = """\
-/no_think
 You are {name}, reviewing today's conversations to write a diary entry.
 Write a brief, reflective diary entry summarizing what happened today.
 Note key topics, emotional moments, and anything worth remembering.
@@ -44,7 +43,6 @@ Respond with ONLY the diary text, no JSON.
 """
 
 _PROMOTION_SYSTEM_PROMPT = """\
-/no_think
 You are reviewing today's episodic memories to extract general facts.
 For each episode, decide if it contains a general fact or preference about
 the user that should be remembered long-term (e.g., "likes Python",
@@ -245,12 +243,13 @@ class SleepPhase:
                 f"{conversation}"
             )
 
-            diary_text = await self._ai.generate(
-                prompt=prompt,
-                system=system,
-                temperature=self._memory_config.diary_temperature,
-                max_tokens=self._memory_config.diary_max_tokens,
-            )
+            with internal_context_scope():
+                diary_text = await self._ai.generate(
+                    prompt=prompt,
+                    system=system,
+                    temperature=self._memory_config.diary_temperature,
+                    max_tokens=self._memory_config.diary_max_tokens,
+                )
 
             await self._memory.add_certain_record(
                 user_id=user.user_id,
@@ -284,11 +283,12 @@ class SleepPhase:
                 "Extract generalizable facts from these episodes."
             )
 
-            raw = await self._ai.generate(
-                prompt=prompt,
-                system=_PROMOTION_SYSTEM_PROMPT,
-                temperature=self._memory_config.consolidation_temperature,
-            )
+            with internal_context_scope():
+                raw = await self._ai.generate(
+                    prompt=prompt,
+                    system=_PROMOTION_SYSTEM_PROMPT,
+                    temperature=self._memory_config.consolidation_temperature,
+                )
             data = parse_json_object(raw)
             facts = data.get("facts", [])
             if not isinstance(facts, list):

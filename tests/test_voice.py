@@ -32,6 +32,17 @@ def test_stt_config_defaults() -> None:
     assert cfg.enabled is False
     assert cfg.backend == "whisper_openai"
     assert cfg.model == "base"
+    assert cfg.device == ""
+
+
+def test_whisper_local_uses_configured_device() -> None:
+    backend = WhisperLocalSTT(STTConfig(backend="whisper_local", device="cuda"))
+    assert backend._device == "cuda"
+
+
+def test_whisper_local_defaults_to_cpu_device() -> None:
+    backend = WhisperLocalSTT(STTConfig(backend="whisper_local"))
+    assert backend._device == "cpu"
 
 
 def test_tts_config_defaults() -> None:

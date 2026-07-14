@@ -1,8 +1,10 @@
 """In-process metrics registry for CordBeat.
 
-A small, dependency-free metrics layer suitable for a single-event-loop
-agent. Provides :class:`Counter` (monotonic) and :class:`Histogram`
-(latency / size buckets), all keyed by an immutable label tuple.
+A small, dependency-free metrics layer. Provides :class:`Counter`
+(monotonic) and :class:`Histogram` (latency / size buckets), all keyed by
+an immutable label tuple. Each metric takes a per-metric lock so
+background threads (e.g. the voice pipeline) can record safely while the
+``/metrics`` endpoint renders.
 
 The :data:`REGISTRY` singleton collects all metric series and can render
 them in Prometheus 0.0.4 text exposition format via
@@ -64,25 +66,35 @@ def _escape(value: str) -> str:
 
 @dataclass
 class Counter:
-    """Monotonic counter."""
+    """Monotonic counter.
+
+    Updates and rendering are guarded by a per-metric lock: most callers run
+    on the event loop, but voice components record from background threads,
+    and an unguarded ``inc`` racing the ``/metrics`` render would raise.
+    """
 
     name: str
     description: str
     _values: dict[tuple[tuple[str, str], ...], float] = field(default_factory=dict)
+    _lock: Lock = field(default_factory=Lock, repr=False)
 
     def inc(self, amount: float = 1.0, labels: dict[str, str] | None = None) -> None:
         if amount < 0:
             raise ValueError("Counter increments must be non-negative")
         key = _label_key(labels)
-        self._values[key] = self._values.get(key, 0.0) + amount
+        with self._lock:
+            self._values[key] = self._values.get(key, 0.0) + amount
 
     def value(self, labels: dict[str, str] | None = None) -> float:
-        return self._values.get(_label_key(labels), 0.0)
+        with self._lock:
+            return self._values.get(_label_key(labels), 0.0)
 
     def render(self) -> Iterable[str]:
         yield f"# HELP {self.name} {self.description}"
         yield f"# TYPE {self.name} counter"
-        for key, val in sorted(self._values.items()):
+        with self._lock:
+            items = sorted(self._values.items())
+        for key, val in items:
             yield f"{self.name}{_format_labels(key)} {val}"
 
 
@@ -95,7 +107,12 @@ class _HistogramSeries:
 
 @dataclass
 class Histogram:
-    """Cumulative histogram with fixed bucket boundaries."""
+    """Cumulative histogram with fixed bucket boundaries.
+
+    Guarded by a per-metric lock for the same reason as :class:`Counter`:
+    background threads (voice pipeline) may observe values while the
+    ``/metrics`` endpoint renders.
+    """
 
     name: str
     description: str
@@ -103,41 +120,49 @@ class Histogram:
     _series: dict[tuple[tuple[str, str], ...], _HistogramSeries] = field(
         default_factory=dict
     )
+    _lock: Lock = field(default_factory=Lock, repr=False)
 
     def observe(self, value: float, labels: dict[str, str] | None = None) -> None:
         key = _label_key(labels)
-        series = self._series.get(key)
-        if series is None:
-            series = _HistogramSeries(counts=[0] * len(self.buckets))
-            self._series[key] = series
-        # Increment only the smallest bucket containing the value;
-        # render() accumulates these into Prometheus cumulative form.
-        for i, boundary in enumerate(self.buckets):
-            if value <= boundary:
-                series.counts[i] += 1
-                break
-        series.sum_seconds += value
-        series.total += 1
+        with self._lock:
+            series = self._series.get(key)
+            if series is None:
+                series = _HistogramSeries(counts=[0] * len(self.buckets))
+                self._series[key] = series
+            # Increment only the smallest bucket containing the value;
+            # render() accumulates these into Prometheus cumulative form.
+            for i, boundary in enumerate(self.buckets):
+                if value <= boundary:
+                    series.counts[i] += 1
+                    break
+            series.sum_seconds += value
+            series.total += 1
 
     def total(self, labels: dict[str, str] | None = None) -> int:
-        series = self._series.get(_label_key(labels))
-        return 0 if series is None else series.total
+        with self._lock:
+            series = self._series.get(_label_key(labels))
+            return 0 if series is None else series.total
 
     def render(self) -> Iterable[str]:
         yield f"# HELP {self.name} {self.description}"
         yield f"# TYPE {self.name} histogram"
-        for key, series in sorted(self._series.items()):
+        with self._lock:
+            snapshot = [
+                (key, list(series.counts), series.sum_seconds, series.total)
+                for key, series in sorted(self._series.items())
+            ]
+        for key, counts, sum_seconds, total in snapshot:
             cumulative = 0
-            for boundary, count in zip(self.buckets, series.counts, strict=True):
+            for boundary, count in zip(self.buckets, counts, strict=True):
                 cumulative += count
                 bucket_labels = key + (("le", _format_le(boundary)),)
                 yield (
                     f"{self.name}_bucket{_format_labels(bucket_labels)} {cumulative}"
                 )
             inf_labels = key + (("le", "+Inf"),)
-            yield f"{self.name}_bucket{_format_labels(inf_labels)} {series.total}"
-            yield f"{self.name}_sum{_format_labels(key)} {series.sum_seconds}"
-            yield f"{self.name}_count{_format_labels(key)} {series.total}"
+            yield f"{self.name}_bucket{_format_labels(inf_labels)} {total}"
+            yield f"{self.name}_sum{_format_labels(key)} {sum_seconds}"
+            yield f"{self.name}_count{_format_labels(key)} {total}"
 
 
 def _format_le(value: float) -> str:

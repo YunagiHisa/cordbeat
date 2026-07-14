@@ -14,9 +14,11 @@ import yaml
 
 from cordbeat.config import cordbeat_home
 
-_SECRET_KEYS: frozenset[str] = frozenset(
-    {"token", "api_key", "bot_token", "webhook_secret", "auth_token", "password"}
-)
+# Substring markers instead of an exact-key list: adapter credential keys
+# vary (app_token, channel_access_token, app_secret, verify_token, ...) and
+# over-masking a non-secret value is harmless, while a missed secret in
+# show-config output (often copy-pasted into issues) is not.
+_SECRET_KEY_MARKERS: tuple[str, ...] = ("token", "secret", "key", "password")
 
 
 def _check(label: str, ok: bool, detail: str = "") -> bool:
@@ -201,7 +203,8 @@ def _mask_secrets(d: Any) -> None:
         return
     for k in list(d):
         v = d[k]
-        if k in _SECRET_KEYS and isinstance(v, str) and v:
+        is_secret_key = any(marker in str(k).lower() for marker in _SECRET_KEY_MARKERS)
+        if is_secret_key and isinstance(v, str) and v:
             d[k] = v[:3] + "***" + v[-3:] if len(v) > 6 else "***"
         elif isinstance(v, dict):
             _mask_secrets(v)

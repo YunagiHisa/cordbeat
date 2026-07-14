@@ -229,6 +229,9 @@ class STTConfig:
     base_url: str = ""
     # HTTP request timeout for cloud STT calls (whisper_openai / openai_compat).
     timeout: float = 60.0
+    # Inference device for whisper_local ("cpu", "cuda", "auto", ...).
+    # Empty → cpu. Real-time VC transcription benefits greatly from a GPU.
+    device: str = ""
 
 
 @dataclass

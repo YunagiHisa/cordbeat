@@ -24,6 +24,10 @@ _CORE_SLASH_COMMANDS = (
     "/draw",
 )
 
+# How long to block on a Core reply before returning to the prompt; without
+# this a swallowed engine error would leave the CLI stuck on "(thinking...)".
+_REPLY_TIMEOUT_SECONDS = 120.0
+
 
 def _build_cli_completion_tree(pending_proposal_ids: Iterable[str]) -> dict[str, Any]:
     proposal_tree = {proposal_id: None for proposal_id in pending_proposal_ids}
@@ -167,7 +171,16 @@ async def main(ws_url: str = "ws://localhost:8765", auth_token: str = "") -> Non
                 print("  (thinking...) ", end="", flush=True)
                 # Wait for reply before next input; skip if listener already exited
                 if not listen_task.done():
-                    await _reply_event.wait()
+                    try:
+                        await asyncio.wait_for(
+                            _reply_event.wait(), timeout=_REPLY_TIMEOUT_SECONDS
+                        )
+                    except TimeoutError:
+                        _waiting = False
+                        print(
+                            f"\n  (no reply after {_REPLY_TIMEOUT_SECONDS:.0f}s"
+                            " — continuing)"
+                        )
         except (KeyboardInterrupt, EOFError):
             print("\nBye!")
         finally:

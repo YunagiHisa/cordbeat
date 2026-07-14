@@ -53,6 +53,15 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 
 def _save_yaml(path: Path, data: dict[str, Any]) -> None:
+    # yaml.dump rewrites the whole document, which drops every comment from
+    # the template-derived config. Keep a backup so users can restore them.
+    if path.exists():
+        backup = path.with_suffix(path.suffix + ".bak")
+        shutil.copy2(path, backup)
+        print(
+            f"  (YAML comments are not preserved; previous file backed up "
+            f"to {backup.name})"
+        )
     path.write_text(
         yaml.dump(data, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
@@ -123,7 +132,8 @@ def _add_adapter(config_path: Path) -> None:
             else:
                 _err(
                     f"Installation failed — install manually:\n"
-                    f"    pip install {' '.join(packages)}"
+                    f"    uv pip install {' '.join(packages)}\n"
+                    f"    (or: pip install {' '.join(packages)})"
                 )
 
     # Credentials
@@ -211,6 +221,16 @@ def _check_deps_installed(deps: list[str]) -> list[str]:
 
 
 def _install_skill_deps(deps: list[str]) -> bool:
+    # uv-managed venvs ship without pip, so `python -m pip` always fails
+    # there; try uv first and fall back to pip for classic venvs.
+    uv = shutil.which("uv")
+    if uv:
+        result = subprocess.run(
+            [uv, "pip", "install", "--quiet", "--python", sys.executable, *deps],
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            return True
     result = subprocess.run(
         [sys.executable, "-m", "pip", "install", "--quiet", *deps],
         capture_output=True,
@@ -283,7 +303,8 @@ def _add_skill(config_path: Path) -> None:
                 else:
                     _err(
                         f"Installation failed. Install manually:\n"
-                        f"    pip install {' '.join(missing)}"
+                        f"    uv pip install {' '.join(missing)}\n"
+                        f"    (or: pip install {' '.join(missing)})"
                     )
         else:
             _ok("All dependencies already installed")

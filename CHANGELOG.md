@@ -19,6 +19,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Operational tooling fixes (audits #7/#8).** `cordbeat-doctor show-config`
+  masks any key containing token/secret/key/password, so adapter-specific
+  credentials (Slack `app_token`, LINE `channel_secret`, WhatsApp
+  `access_token`/`app_secret`/`verify_token`) no longer appear in shareable
+  output. `cordbeat-add` backs up `config.yaml` before rewriting it (YAML
+  comments are lost on rewrite) and installs skill dependencies via
+  `uv pip install` first, falling back to pip, so uv-managed venvs without
+  pip work. Metrics counters and histograms take a per-metric lock so
+  background-thread updates cannot race the `/metrics` render. The CLI
+  adapter gives up waiting for a reply after 120 s instead of hanging on
+  "(thinking...)". `stt.device` is now configurable for `whisper_local`
+  (empty = cpu) so GPU hosts get real-time VC transcription.
 - **Log/data hygiene and multilingual judge (audits #6/#10/#11/#12).**
   Heartbeat skill-execution logs now show redacted, truncated params and a
   bounded result preview instead of full payloads. Diary and

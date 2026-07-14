@@ -68,6 +68,7 @@ class WhisperLocalSTT(STTBackend):
     def __init__(self, config: STTConfig) -> None:
         self._model_size = config.model or "base"
         self._language = config.language
+        self._device = config.device or "cpu"
         self._model: Any = None  # faster_whisper.WhisperModel, loaded lazily
         self._transcribe_lock = asyncio.Lock()
 
@@ -85,7 +86,7 @@ class WhisperLocalSTT(STTBackend):
                 return ""
 
             if self._model is None:
-                self._model = WhisperModel(self._model_size, device="cpu")
+                self._model = WhisperModel(self._model_size, device=self._device)
 
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 f.write(audio_bytes)

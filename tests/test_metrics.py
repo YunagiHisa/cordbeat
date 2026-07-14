@@ -50,6 +50,32 @@ def test_histogram_observe_and_render() -> None:
     assert "latency_seconds_sum " in rendered
 
 
+def test_counter_and_histogram_are_thread_safe() -> None:
+    """Background threads (voice pipeline) may record while /metrics renders."""
+    import threading
+
+    c = Counter(name="threaded_total", description="t")
+    h = Histogram(name="threaded_seconds", description="t", buckets=(0.1, 1.0))
+
+    def worker() -> None:
+        for _ in range(1000):
+            c.inc(labels={"src": "thread"})
+            h.observe(0.05, labels={"src": "thread"})
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for t in threads:
+        t.start()
+    # Render concurrently with the updates; must not raise.
+    for _ in range(50):
+        list(c.render())
+        list(h.render())
+    for t in threads:
+        t.join()
+
+    assert c.value({"src": "thread"}) == 4000.0
+    assert h.total({"src": "thread"}) == 4000
+
+
 def test_registry_singletons() -> None:
     a = REGISTRY.counter("test_a", "A")
     b = REGISTRY.counter("test_a", "A")

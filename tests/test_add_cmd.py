@@ -12,6 +12,7 @@ import yaml
 from cordbeat.tools.add_cmd import (
     _check_deps_installed,
     _find_config,
+    _install_skill_deps,
     _load_yaml,
     _read_skill_deps,
     _read_skill_info,
@@ -47,6 +48,79 @@ def test_find_config_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.chdir(tmp_path)
     with patch("cordbeat.tools.add_cmd.cordbeat_home", return_value=tmp_path):
         assert _find_config() is None
+
+
+# ---------------------------------------------------------------------------
+# _save_yaml
+# ---------------------------------------------------------------------------
+
+
+def test_save_yaml_backs_up_existing_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Rewriting config.yaml drops comments, so the previous file is kept."""
+    path = tmp_path / "config.yaml"
+    path.write_text("# precious comment\nkey: old\n", encoding="utf-8")
+
+    _save_yaml(path, {"key": "new"})
+
+    backup = tmp_path / "config.yaml.bak"
+    assert "# precious comment" in backup.read_text(encoding="utf-8")
+    assert yaml.safe_load(path.read_text(encoding="utf-8")) == {"key": "new"}
+    assert "backed up" in capsys.readouterr().out
+
+
+def test_save_yaml_new_file_writes_without_backup(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    _save_yaml(path, {"key": "value"})
+    assert not (tmp_path / "config.yaml.bak").exists()
+    assert yaml.safe_load(path.read_text(encoding="utf-8")) == {"key": "value"}
+
+
+# ---------------------------------------------------------------------------
+# _install_skill_deps
+# ---------------------------------------------------------------------------
+
+
+def test_install_skill_deps_prefers_uv(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_kwargs: Any) -> Any:
+        calls.append(cmd)
+
+        class _Result:
+            returncode = 0
+
+        return _Result()
+
+    monkeypatch.setattr("cordbeat.tools.add_cmd.shutil.which", lambda _: "uv")
+    monkeypatch.setattr("cordbeat.tools.add_cmd.subprocess.run", fake_run)
+
+    assert _install_skill_deps(["httpx"]) is True
+    assert calls[0][0] == "uv"
+    assert "--python" in calls[0]
+
+
+def test_install_skill_deps_falls_back_to_pip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_kwargs: Any) -> Any:
+        calls.append(cmd)
+
+        class _Result:
+            # uv attempt fails, pip attempt succeeds
+            returncode = 1 if cmd[0] == "uv" else 0
+
+        return _Result()
+
+    monkeypatch.setattr("cordbeat.tools.add_cmd.shutil.which", lambda _: "uv")
+    monkeypatch.setattr("cordbeat.tools.add_cmd.subprocess.run", fake_run)
+
+    assert _install_skill_deps(["httpx"]) is True
+    assert len(calls) == 2
+    assert calls[1][1:4] == ["-m", "pip", "install"]
 
 
 # ---------------------------------------------------------------------------

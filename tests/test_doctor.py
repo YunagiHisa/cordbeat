@@ -378,6 +378,34 @@ class TestMaskSecrets:
         _mask_secrets("not a dict")
         _mask_secrets(["list", "of", "things"])
 
+    def test_masks_adapter_specific_credential_keys(self) -> None:
+        """Slack/LINE/WhatsApp keys are matched by substring, not exact name."""
+        d: dict = {
+            "adapters": {
+                "slack": {"app_token": "xapp-1234567"},
+                "line": {
+                    "channel_access_token": "line-token-123",
+                    "channel_secret": "line-secret-456",
+                },
+                "whatsapp": {
+                    "access_token": "wa-token-789",
+                    "app_secret": "wa-secret-000",
+                    "verify_token": "wa-verify-111",
+                },
+            }
+        }
+        _mask_secrets(d)
+        flat = str(d)
+        for secret in (
+            "xapp-1234567",
+            "line-token-123",
+            "line-secret-456",
+            "wa-token-789",
+            "wa-secret-000",
+            "wa-verify-111",
+        ):
+            assert secret not in flat
+
 
 # ── sync-config ───────────────────────────────────────────────────────────────
 

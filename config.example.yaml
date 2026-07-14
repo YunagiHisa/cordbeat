@@ -328,6 +328,7 @@ stt:
   base_url: ""                # override official OpenAI URL for whisper_openai
                               # (empty = "https://api.openai.com")
   timeout: 60.0               # HTTP request timeout (seconds)
+  device: ""                 # whisper_local inference device: cpu | cuda | auto (empty = cpu)
 
 # --- TTS: Text-to-speech ---
 # edge_tts requires `uv sync --extra tts-edge`.

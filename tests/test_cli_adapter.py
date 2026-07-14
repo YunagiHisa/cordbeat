@@ -103,6 +103,45 @@ class TestCLIAdapter:
         assert msg["adapter_id"] == "cli"
         assert msg["platform_user_id"] == "cli_user"
 
+    async def test_main_reply_wait_times_out(self, capsys: Any) -> None:
+        """A missing Core reply returns to the prompt instead of hanging."""
+        import asyncio
+
+        mock_ws = AsyncMock()
+        mock_ws.recv = AsyncMock(return_value=json.dumps({"content": "Welcome"}))
+
+        async def _silent_stream() -> AsyncIterator[str]:
+            await asyncio.sleep(30)
+            yield ""  # pragma: no cover
+
+        mock_ws.__aiter__ = MagicMock(side_effect=_silent_stream)
+
+        mock_connect = AsyncMock()
+        mock_connect.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_connect.__aexit__ = AsyncMock(return_value=False)
+
+        call_count = 0
+
+        def fake_input(prompt: str) -> str:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return "Hello CordBeat"
+            raise EOFError
+
+        with (
+            patch(
+                "cordbeat.adapters.cli.websockets.connect", return_value=mock_connect
+            ),
+            patch("cordbeat.adapters.cli._REPLY_TIMEOUT_SECONDS", 0.05),
+            patch("builtins.input", side_effect=fake_input),
+        ):
+            await main()
+
+        out = capsys.readouterr().out
+        assert "no reply after" in out
+        assert "Bye!" in out
+
     async def test_main_skips_blank_input(self) -> None:
         """Blank lines are not sent."""
         mock_ws = AsyncMock()

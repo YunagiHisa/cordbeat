@@ -390,17 +390,22 @@ class TestBuildContext:
             episodic_memories=[
                 {
                     "content": (
-                        "[joy] User: 自画像描いてって / Response: "
-                        "I'll create an image prompt."
+                        "[joy] User: \u81ea\u753b\u50cf\u63cf\u3044\u3066\u3063\u3066"
+                        " / Response: I'll create an image prompt."
                     )
                 },
-                {"content": "[joy] User: <@123> アテナの自画像を描いて"},
+                {
+                    "content": (
+                        "[joy] User: <@123> \u30a2\u30c6\u30ca\u306e"
+                        "\u81ea\u753b\u50cf\u3092\u63cf\u3044\u3066"
+                    )
+                },
                 {"content": "Alice decided to publish CordBeat."},
             ],
         )
 
         assert "image prompt" not in result
-        assert result.count("自画像") == 1
+        assert result.count("\u81ea\u753b\u50cf") == 1
         assert "Alice decided to publish CordBeat." in result
 
     def test_recalled_episode_limit_reduces_context_weight(self) -> None:

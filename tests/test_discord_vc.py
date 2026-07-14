@@ -404,9 +404,9 @@ class TestDiscordAdapterVC:
         config = AdapterConfig(
             options={"token": "test-token", "vc_activation_phrases": ["cordbeat"]}
         )
-        adapter = DiscordAdapter(config, soul_name="アテナ")
+        adapter = DiscordAdapter(config, soul_name="\u30a2\u30c6\u30ca")
 
-        assert adapter._vc_wake_words == ("cordbeat", "アテナ")
+        assert adapter._vc_wake_words == ("cordbeat", "\u30a2\u30c6\u30ca")
 
     async def test_on_vc_speech_no_ws(self) -> None:
         adapter = self._make_adapter()
@@ -493,10 +493,12 @@ class TestDiscordAdapterVC:
         assert "participant-333: Athena, what do you think?" in payload["content"]
 
     async def test_on_vc_speech_normalizes_kana_wake_word(self) -> None:
-        adapter = self._make_adapter(options={"vc_wake_words": ["アテナ"]})
+        adapter = self._make_adapter(options={"vc_wake_words": ["\u30a2\u30c6\u30ca"]})
         adapter._ws = AsyncMock()
         adapter._stt = AsyncMock()
-        adapter._stt.transcribe = AsyncMock(return_value="あてな、聞こえる？")
+        adapter._stt.transcribe = AsyncMock(
+            return_value="\u3042\u3066\u306a\u3001\u805e\u3053\u3048\u308b\uff1f"
+        )
         adapter._vc_receivers[111] = MagicMock()
         adapter._vc_session_ids[111] = "session"
 
@@ -508,7 +510,9 @@ class TestDiscordAdapterVC:
         adapter = self._make_adapter(options={"vc_wake_words": ["cordbeat"]})
         adapter._ws = AsyncMock()
         adapter._stt = AsyncMock()
-        adapter._stt.transcribe = AsyncMock(return_value="Ｃｏｒｄ Ｂｅａｔ, hello")
+        adapter._stt.transcribe = AsyncMock(
+            return_value="\uff23\uff4f\uff52\uff44 \uff22\uff45\uff41\uff54, hello"
+        )
         adapter._vc_receivers[111] = MagicMock()
         adapter._vc_session_ids[111] = "session"
 

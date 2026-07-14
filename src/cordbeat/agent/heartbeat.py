@@ -213,7 +213,7 @@ This is private operational memory, not a message to any user.
 
 _DRAW_TAG_RE = re.compile(r"\[DRAW:\s*.+?\]", re.DOTALL | re.IGNORECASE)
 _PARENTHETICAL_ONLY_RE = re.compile(
-    r"^\s*(?:\([^()]*\)|（[^（）]*）)\s*$",
+    r"^\s*(?:\([^()]*\)|\uff08[^\uff08\uff09]*\uff09)\s*$",
     re.DOTALL,
 )
 _HEARTBEAT_USER_SENT_RECORD = "heartbeat_user_sent"

@@ -4102,7 +4102,7 @@ class TestSendHeartbeatMessagePlatformLink:
         await memory.link_platform("uid-1", "discord", "snowflake-123")
         decision = HeartbeatDecision(
             action=HeartbeatAction.MESSAGE,
-            content="（quietly watching）",
+            content="\uff08quietly watching\uff09",
             target_user_id="uid-1",
             target_adapter_id="discord",
         )

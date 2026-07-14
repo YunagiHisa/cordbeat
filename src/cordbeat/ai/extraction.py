@@ -16,6 +16,11 @@ from .reasoning import parse_json_object
 
 logger = logging.getLogger(__name__)
 
+# One stored fact/episode is a single extracted sentence; anything longer is
+# runaway LLM output that would bloat embeddings and the DB (topic/tone are
+# already capped at write time).
+_MAX_MEMORY_CONTENT_CHARS = 500
+
 _RECALL_KEYWORD_PROMPT = """\
 Based on the recent conversation context below, extract exactly 3 short \
 recall keywords that would help retrieve relevant memories about this user.
@@ -217,7 +222,7 @@ class MemoryExtractor:
                     id=str(uuid.uuid4()),
                     user_id=user_id,
                     layer=MemoryLayer.SEMANTIC,
-                    content=fact.strip(),
+                    content=fact.strip()[:_MAX_MEMORY_CONTENT_CHARS],
                     metadata={"emotional_tone": tone} if tone else {},
                 )
                 await self._memory.add_semantic_memory(entry)
@@ -230,7 +235,7 @@ class MemoryExtractor:
                 id=str(uuid.uuid4()),
                 user_id=user_id,
                 layer=MemoryLayer.EPISODIC,
-                content=episode.strip(),
+                content=episode.strip()[:_MAX_MEMORY_CONTENT_CHARS],
                 metadata={"emotional_tone": tone} if tone else {},
             )
             await self._memory.add_episodic_memory(entry)

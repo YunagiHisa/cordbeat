@@ -10,6 +10,7 @@ from typing import Any
 
 import yaml
 
+from cordbeat.ai.prompt import format_skill_params_for_display
 from cordbeat.core.gateway import GatewayServer
 from cordbeat.memory.core import MemoryStore
 from cordbeat.models import (
@@ -378,9 +379,11 @@ class ProposalExecutor:
         if adapter_id:
             metadata["adapter_id"] = adapter_id
 
+        # Display-oriented content only: redacted and truncated. Execution
+        # reads the complete params from metadata["skill_params"].
         content = (
             f"Skill '{skill_name}' requires confirmation.\n"
-            f"Parameters: {json.dumps(decision.skill_params)}"
+            f"Parameters: {format_skill_params_for_display(decision.skill_params)}"
         )
         duplicate = await find_duplicate_pending_proposal(
             self._memory,

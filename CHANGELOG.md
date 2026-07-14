@@ -19,6 +19,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **ReAct reply-context URLs and thinking-budget retries.** URLs quoted in a
+  replied-to message are now eligible for web tools (replying is an explicit
+  user selection of that context), and the OpenAI-compatible backend retries
+  without thinking when a chat response spends its whole token budget on
+  reasoning and returns empty content.
+- **Security-backlog hardening (audits #10/#12/#13/#14).** The sandbox
+  runner now trims `sys.path` before deriving filesystem-guard read roots,
+  so the runner's own package directory and PYTHONPATH injections are no
+  longer readable by `filesystem: false` skills. `web_search` and `weather`
+  gained the same SSRF resolution pre-flight as `api_call`/`fetch_url` for
+  their fixed domains. Extracted facts, episode summaries, and sleep-promoted
+  facts are capped at 500 characters before storage. Skill-confirmation
+  proposal records now store a redacted, truncated parameter display in
+  their content (full parameters remain in metadata for execution), and the
+  SSRF guard docstring no longer overstates DNS-rebinding coverage for
+  hostname-literal connects.
 - **Heartbeat channel-scope privacy.** Layer-2 heartbeat evaluation now scopes
   recent conversation history to the user's last-seen adapter/channel/DM target
   when that routing metadata is available, preventing DM history from being

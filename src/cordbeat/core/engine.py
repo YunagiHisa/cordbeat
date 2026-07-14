@@ -33,6 +33,9 @@ from cordbeat.ai.prompt import (
     sanitize,
     sanitize_tool_artifacts,
 )
+from cordbeat.ai.prompt import (
+    format_skill_params_for_display as _format_react_params,
+)
 from cordbeat.ai.reasoning import sanitize_reasoning_artifacts
 from cordbeat.config import MemoryConfig, ReActConfig
 from cordbeat.memory.core import MemoryStore
@@ -673,39 +676,6 @@ def _build_reply_context_prompt(
         )
     lines.append("[END REPLIED-TO MESSAGE]")
     return "\n".join(lines)
-
-
-def _format_react_params(params: dict[str, Any]) -> str:
-    """Format tool parameters for an opt-in user trace without leaking secrets."""
-
-    sensitive_markers = (
-        "api_key",
-        "apikey",
-        "authorization",
-        "body",
-        "content",
-        "cookie",
-        "credential",
-        "header",
-        "password",
-        "secret",
-        "token",
-    )
-    parts: list[str] = []
-    for key, value in params.items():
-        safe_key = sanitize(str(key), strict=True, max_len=40)
-        if not safe_key:
-            continue
-        lower_key = safe_key.lower()
-        if any(marker in lower_key for marker in sensitive_markers):
-            rendered = "<redacted>"
-        else:
-            rendered = sanitize(str(value), strict=True, max_len=120)
-            if len(str(value)) > 120:
-                rendered += "…"
-            rendered = json.dumps(rendered, ensure_ascii=False)
-        parts.append(f"{safe_key}={rendered}")
-    return ", ".join(parts)
 
 
 def _react_action_budget_limit(config: ReActConfig) -> int:
@@ -2367,9 +2337,13 @@ class CoreEngine:
             "adapter_id": message.adapter_id,
             "resume_context": _proposal_resume_context(message),
         }
+        # Display-oriented content only: redacted and truncated. The complete
+        # params live in metadata["skill_params"], which execution uses, so
+        # e.g. an update_skill_file approval no longer embeds the whole file
+        # into the record content (metadata already carries it once).
         content = (
             f"Skill '{skill_name}' requires confirmation.\n"
-            f"Parameters: {json.dumps(skill_params, ensure_ascii=False)}"
+            f"Parameters: {_format_react_params(skill_params)}"
         )
         duplicate = await find_duplicate_pending_proposal(
             self._memory,

@@ -12,6 +12,7 @@ from cordbeat.ai.prompt import (
     build_react_continuation_prompt,
     build_soul_system_prompt,
     build_tool_system_prompt,
+    format_skill_params_for_display,
     sanitize,
     sanitize_tool_artifacts,
 )
@@ -282,6 +283,23 @@ class TestBuildSoulSystemPrompt:
         result = build_soul_system_prompt(snap)
         assert "Always respond to the user in ja." in result
         assert "Tool arguments may use the language best suited" in result
+
+
+class TestFormatSkillParamsForDisplay:
+    def test_redacts_sensitive_keys_and_truncates_values(self) -> None:
+        rendered = format_skill_params_for_display(
+            {
+                "path": "notes.txt",
+                "content": "x" * 10_000,
+                "api_key": "sk-12345",
+                "query": "q" * 300,
+            }
+        )
+        assert 'path="notes.txt"' in rendered
+        assert "x" * 200 not in rendered
+        assert "sk-12345" not in rendered
+        assert rendered.count("<redacted>") == 2
+        assert len(rendered) < 400
 
 
 class TestBuildContext:

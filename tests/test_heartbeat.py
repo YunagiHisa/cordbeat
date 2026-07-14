@@ -2193,6 +2193,37 @@ class TestSkillProposal:
         assert len(records) == 1
         mock_gateway.send_to_adapter.assert_awaited_once()
 
+    async def test_skill_proposal_content_is_bounded_and_redacted(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Record content stays display-sized; execution params live in metadata."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+        big_source = "x" * 10_000
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="update_skill_file",
+            skill_params={"path": "main.py", "content": big_source},
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+
+        await heartbeat._proposals.store_skill_proposal(
+            decision, "update_skill_file"
+        )
+
+        records = await memory.get_certain_records("u1", record_type="proposal")
+        assert len(records) == 1
+        content = records[0]["content"]
+        assert big_source not in content
+        assert "<redacted>" in content
+        assert len(content) < 500
+        meta = json.loads(records[0]["metadata"])
+        assert meta["skill_params"]["content"] == big_source
+
     async def test_sandbox_local_file_skill_executes_without_proposal(
         self,
         heartbeat: HeartbeatLoop,

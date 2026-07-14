@@ -134,12 +134,16 @@ def _install_ssrf_guard() -> None:
 
     Installed for ``network=true`` skills as a framework-level, defense-in-
     depth enforcement point: even a skill that uses ``httpx`` or raw sockets
-    naively cannot reach private/loopback/link-local/metadata services. The
-    check runs at ``connect()`` time against the *actual* destination IP,
-    which also defeats DNS-rebinding (the resolved address is validated, not
-    the hostname). Individual network skills (``fetch_url``, ``api_call``)
-    keep their own pre-flight checks as a first line of defense and for
-    clearer error messages, but they are no longer the *only* guard.
+    naively cannot reach private/loopback/link-local/metadata services. When
+    ``connect()`` receives an already-resolved IP (the ``httpx`` path), the
+    check validates the actual destination address, which defeats
+    DNS-rebinding for that case. When a hostname literal is passed straight
+    to ``connect()``, the guard resolves and validates it here while the OS
+    resolves it again inside ``connect()``, so a rebinding window between
+    the two lookups remains for that raw-socket path. Individual network
+    skills (``fetch_url``, ``api_call``) keep their own pre-flight checks as
+    a first line of defense and for clearer error messages, but they are no
+    longer the *only* guard.
     """
     original_connect = _socket_module.socket.connect
     original_connect_ex = _socket_module.socket.connect_ex
@@ -510,6 +514,10 @@ def _run_skill(
     work_dir = Path(sandbox["work_dir"])
     work_dir.mkdir(parents=True, exist_ok=True)
 
+    # Trim sys.path BEFORE deriving filesystem-guard read roots, so entries
+    # like the runner's own package directory or PYTHONPATH injections do not
+    # become readable roots for filesystem=false skills.
+    _restrict_sys_and_env(skill_dir, work_dir)
     if not sandbox.get("network", False):
         _install_network_guard()
     else:
@@ -531,7 +539,6 @@ def _run_skill(
             work_dir,
             allowed_read_roots=(skill_dir, *stdlib_roots, *import_roots),
         )
-    _restrict_sys_and_env(skill_dir, work_dir)
     _apply_resource_limits(
         memory_mb=int(sandbox.get("memory_mb", 256)),
         timeout_seconds=int(sandbox.get("timeout_seconds", 30)),

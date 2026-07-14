@@ -1,5 +1,6 @@
 """Tests for sleep-phase memory consolidation."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 from cordbeat.agent.sleep import SleepPhase
@@ -51,6 +52,27 @@ async def test_promote_episodic_memories_uses_recent_day_scope() -> None:
     assert memory.get_episodic_since.await_args.args[0] == "user-1"
     ai.generate.assert_not_awaited()
     memory.add_semantic_memory.assert_not_awaited()
+
+
+async def test_promote_episodic_memories_caps_fact_length() -> None:
+    memory = MagicMock()
+    memory.get_episodic_since = AsyncMock(
+        return_value=[{"content": "A very talkative day."}]
+    )
+    memory.add_semantic_memory = AsyncMock()
+    ai = MagicMock()
+    ai.generate = AsyncMock(return_value=json.dumps({"facts": ["f" * 2000]}))
+    sleep = SleepPhase(
+        memory=memory,
+        ai=ai,
+        soul=MagicMock(),
+        memory_config=MemoryConfig(),
+    )
+
+    await sleep._promote_episodic_memories("user-1")
+
+    entry = memory.add_semantic_memory.await_args.args[0]
+    assert len(entry.content) == 500
 
 
 async def test_write_diary_disables_thinking() -> None:

@@ -24,6 +24,10 @@ from .soul import Soul
 
 logger = logging.getLogger(__name__)
 
+# A promoted fact is a single generalized sentence; cap runaway LLM output
+# before it reaches embeddings and the DB (mirrors extraction-time caps).
+_MAX_PROMOTED_FACT_CHARS = 500
+
 _DIARY_SYSTEM_PROMPT = """\
 /no_think
 You are {name}, reviewing today's conversations to write a diary entry.
@@ -277,7 +281,7 @@ class SleepPhase:
                     id=str(uuid.uuid4()),
                     user_id=user_id,
                     layer=MemoryLayer.SEMANTIC,
-                    content=fact.strip(),
+                    content=fact.strip()[:_MAX_PROMOTED_FACT_CHARS],
                     metadata={"source": "sleep_promotion"},
                 )
                 await self._memory.add_semantic_memory(entry)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -199,6 +199,35 @@ class TestExtractAndStoreMemories:
         prompt = mock_ai.generate.await_args.kwargs["prompt"]
         assert "Do not store AI claims about hidden progress" in prompt
         assert "unless the user independently confirmed" in prompt
+
+    @pytest.mark.anyio
+    async def test_caps_fact_and_episode_length(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+    ) -> None:
+        """Runaway LLM output is capped before it reaches embeddings/DB."""
+        memory = MagicMock()
+        memory.add_semantic_memory = AsyncMock()
+        memory.add_episodic_memory = AsyncMock()
+        extractor = MemoryExtractor(ai=mock_ai, soul=soul, memory=memory)
+        mock_ai.generate = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "topic": "",
+                    "emotional_tone": "",
+                    "facts": ["f" * 2000],
+                    "episode_summary": "e" * 2000,
+                }
+            )
+        )
+
+        await extractor.extract_and_store_memories("u1", "Bob", "hi", "hello")
+
+        fact_entry = memory.add_semantic_memory.await_args.args[0]
+        assert len(fact_entry.content) == 500
+        episode_entry = memory.add_episodic_memory.await_args.args[0]
+        assert len(episode_entry.content) == 500
 
     @pytest.mark.anyio
     async def test_updates_user_topic_and_tone(

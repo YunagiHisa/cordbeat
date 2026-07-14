@@ -54,6 +54,45 @@ def sanitize(
     return pattern.sub("", text)[:max_len]
 
 
+def format_skill_params_for_display(params: dict[str, Any]) -> str:
+    """Format skill parameters for display without leaking secrets.
+
+    Values are sanitized and truncated, and keys that look like credentials
+    or bulk payloads (e.g. file content) are redacted. Use this wherever
+    params reach user-facing text or bounded records; execution paths must
+    keep the full params in structured metadata instead.
+    """
+
+    sensitive_markers = (
+        "api_key",
+        "apikey",
+        "authorization",
+        "body",
+        "content",
+        "cookie",
+        "credential",
+        "header",
+        "password",
+        "secret",
+        "token",
+    )
+    parts: list[str] = []
+    for key, value in params.items():
+        safe_key = sanitize(str(key), strict=True, max_len=40)
+        if not safe_key:
+            continue
+        lower_key = safe_key.lower()
+        if any(marker in lower_key for marker in sensitive_markers):
+            rendered = "<redacted>"
+        else:
+            rendered = sanitize(str(value), strict=True, max_len=120)
+            if len(str(value)) > 120:
+                rendered += "…"
+            rendered = json.dumps(rendered, ensure_ascii=False)
+        parts.append(f"{safe_key}={rendered}")
+    return ", ".join(parts)
+
+
 def sanitize_tool_artifacts(text: str) -> str:
     """Remove generated tool tags before recalled text enters prompts."""
 

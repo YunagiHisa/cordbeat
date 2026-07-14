@@ -2,10 +2,48 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
+import socket
 from typing import Any
 
 import httpx
+
+_SEARCH_HOST = "lite.duckduckgo.com"
+
+
+def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True if the address is in a range we refuse to contact."""
+    return bool(
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _preflight_blocked(host: str) -> str | None:
+    """SSRF pre-flight: refuse if *host* resolves to an internal address.
+
+    The runner's connect-time SSRF guard remains the enforcement point; this
+    mirrors the api_call/fetch_url pre-flights so a poisoned resolution of the
+    fixed search domain fails with a clear error. Resolution failures are not
+    treated as blocking — the subsequent request fails on its own.
+    """
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return None
+    for *_unused, sockaddr in infos:
+        try:
+            ip = ipaddress.ip_address(str(sockaddr[0]).split("%")[0])
+        except ValueError:
+            continue
+        if _is_blocked_ip(ip):
+            return f"Host {host!r} resolved to an internal address; refusing"
+    return None
 
 
 async def execute(
@@ -15,7 +53,11 @@ async def execute(
     **_kwargs: Any,
 ) -> dict[str, Any]:
     """Search the web using DuckDuckGo Lite and return results."""
-    url = "https://lite.duckduckgo.com/lite/"
+    block_reason = _preflight_blocked(_SEARCH_HOST)
+    if block_reason is not None:
+        return {"error": block_reason, "results": []}
+
+    url = f"https://{_SEARCH_HOST}/lite/"
     headers = {"User-Agent": "CordBeat/1.0"}
 
     try:

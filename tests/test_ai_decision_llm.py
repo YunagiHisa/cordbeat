@@ -129,3 +129,28 @@ async def test_judge_yes_no_forces_no_think_and_rejects_non_exact_yes() -> None:
     assert "/no_think" in fake.kwargs[0]["system"]
     assert fake.kwargs[0]["temperature"] == 0.0
     assert fake.kwargs[0]["max_tokens"] == 8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("yes", True),
+        ("Yes.", True),
+        # Japanese affirmative "hai" (multilingual judges answering in the
+        # persona language), bare and with the CJK full stop.
+        ("\u306f\u3044", True),
+        ("\u306f\u3044\u3002", True),
+        ("no", False),
+        ("maybe", False),
+        # Unrecognized languages fail closed.
+        ("oui", False),
+    ],
+)
+async def test_judge_yes_no_accepts_multilingual_affirmatives(
+    answer: str, expected: bool
+) -> None:
+    fake = _FakeBackend(answer)
+    set_judge_backend(fake)  # type: ignore[arg-type]
+
+    assert await judge_yes_no("Answer:") is expected

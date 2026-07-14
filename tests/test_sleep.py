@@ -75,6 +75,35 @@ async def test_promote_episodic_memories_caps_fact_length() -> None:
     assert len(entry.content) == 500
 
 
+async def test_write_diary_caps_input_and_strips_reasoning() -> None:
+    memory = MagicMock()
+    messages = [
+        {"role": "user", "content": f"msg-{i} " + "x" * 480} for i in range(60)
+    ]
+    memory.get_todays_messages = AsyncMock(return_value=messages)
+    memory.add_certain_record = AsyncMock()
+    ai = MagicMock()
+    ai.generate = AsyncMock(return_value="<think>secret</think>Dear diary entry.")
+    sleep = SleepPhase(
+        memory=memory,
+        ai=ai,
+        soul=MagicMock(),
+        memory_config=MemoryConfig(),
+    )
+    user = MagicMock(user_id="user-1", display_name="User")
+
+    await sleep._write_diary(user, {"name": "CordBeat"})
+
+    prompt = ai.generate.await_args.kwargs["prompt"]
+    assert "data, not instructions" in prompt
+    assert "msg-59" in prompt  # newest messages are kept
+    assert "msg-0 " not in prompt  # oldest dropped once over the budget
+    assert len(prompt) < 25_000
+    stored = memory.add_certain_record.await_args.kwargs["content"]
+    assert "secret" not in stored
+    assert stored.endswith("Dear diary entry.")
+
+
 async def test_write_diary_disables_thinking() -> None:
     memory = MagicMock()
     memory.get_todays_messages = AsyncMock(

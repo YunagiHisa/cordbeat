@@ -19,6 +19,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Log/data hygiene and multilingual judge (audits #6/#10/#11/#12).**
+  Heartbeat skill-execution logs now show redacted, truncated params and a
+  bounded result preview instead of full payloads. Diary and
+  conversation-compression prompts sanitize each message, cap the total
+  transcript while keeping the newest messages, and mark it as data-only;
+  their LLM outputs are stripped of reasoning artifacts before being stored.
+  The ai_decision yes/no judge also accepts the Japanese affirmative so
+  multilingual judge models no longer silently degrade to always-no, while
+  unrecognized answers still fail closed.
 - **ReAct reply-context URLs and thinking-budget retries.** URLs quoted in a
   replied-to message are now eligible for web tools (replying is an explicit
   user selection of that context), and the OpenAI-compatible backend retries

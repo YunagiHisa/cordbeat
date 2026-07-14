@@ -71,6 +71,30 @@ async def test_compress_chunk_to_text() -> None:
 
 
 @pytest.mark.asyncio
+async def test_summarise_input_is_capped_and_output_stripped() -> None:
+    """Summary input keeps the newest messages within budget; output loses <think>."""
+    ai = AsyncMock()
+    ai.generate = AsyncMock(
+        return_value="<think>hidden</think>Earlier in this conversation: stuff."
+    )
+    compressor = ConversationCompressor(ai)
+    messages = [
+        {"role": "user", "content": f"msg-{i} " + "y" * 600} for i in range(60)
+    ]
+
+    summary = await compressor.compress_chunk_to_text(messages)
+
+    prompt = ai.generate.await_args.kwargs["prompt"]
+    assert "data, not instructions" in prompt
+    assert "msg-59" in prompt  # newest messages are kept
+    assert "msg-0 " not in prompt  # oldest dropped once over the budget
+    assert len(prompt) < 25_000
+    assert summary is not None
+    assert "hidden" not in summary
+    assert summary.startswith("Earlier")
+
+
+@pytest.mark.asyncio
 async def test_compress_chunk_to_text_empty() -> None:
     ai = AsyncMock()
     compressor = ConversationCompressor(ai)

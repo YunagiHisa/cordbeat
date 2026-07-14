@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -2269,6 +2270,49 @@ class TestSkillProposal:
             "u1", record_type="heartbeat_skill_result"
         )
         assert len(records) == 1
+
+    async def test_skill_execution_log_is_bounded_and_redacted(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """INFO logs never carry full params or full skill output."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+        big = "z" * 5000
+
+        async def search_files(
+            root: str, query: str, context: object
+        ) -> dict[str, object]:
+            return {"root": root, "returned": 0, "payload": big}
+
+        skill = Skill(
+            meta=SkillMeta(
+                name="file_search",
+                description="Search files",
+                usage="search",
+                safety_level=SafetyLevel.REQUIRES_CONFIRMATION,
+                filesystem=True,
+            ),
+            _test_callable=search_files,
+        )
+        skills._skills["file_search"] = skill
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="file_search",
+            skill_params={"root": ".", "query": big},
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        with caplog.at_level(logging.INFO):
+            await heartbeat._execute_skill(decision)
+
+        assert "HEARTBEAT skill executed" in caplog.text
+        assert big not in caplog.text
 
     async def test_skill_proposal_notifies_user(
         self,

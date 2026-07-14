@@ -11,7 +11,11 @@ from datetime import UTC, datetime, time, tzinfo
 from typing import Any
 
 from cordbeat.ai.backend import AIBackend
-from cordbeat.ai.prompt import build_context, sanitize
+from cordbeat.ai.prompt import (
+    build_context,
+    format_skill_params_for_display,
+    sanitize,
+)
 from cordbeat.ai.validation import (
     validate_heartbeat_decision,
     validate_heartbeat_triage,
@@ -221,6 +225,16 @@ _CONVERSATION_SKILL_ERROR_RECORD = "conversation_skill_error"
 _HEARTBEAT_SKILL_APPROVAL_RECORD = "heartbeat_skill_approval_requested"
 _HEARTBEAT_REFLECTION_RECORD = "heartbeat_reflection"
 _HEARTBEAT_CONCERN_RECORD = "heartbeat_concern"
+
+
+def _display_params(params: dict[str, Any] | None) -> str:
+    """Redacted, truncated params for logs (never full file contents)."""
+    return format_skill_params_for_display(dict(params or {}))
+
+
+def _display_result(result: Any) -> str:
+    """Bounded result preview for logs (skill output may be private)."""
+    return sanitize(str(result), strict=True, max_len=500)
 _HEARTBEAT_JOURNAL_RECORD = "heartbeat_journal"
 _HEARTBEAT_SELF_REVIEW_RECORD = "heartbeat_self_review"
 
@@ -1329,8 +1343,8 @@ class HeartbeatLoop:
                 "HEARTBEAT skill executed skill=%s target_user=%s params=%s result=%s",
                 decision.skill_name,
                 decision.target_user_id or "__system__",
-                params,
-                result,
+                _display_params(params),
+                _display_result(result),
             )
             await self._record_skill_outcome(
                 decision,
@@ -1342,7 +1356,7 @@ class HeartbeatLoop:
                 "HEARTBEAT skill failed skill=%s target_user=%s params=%s",
                 decision.skill_name,
                 decision.target_user_id or "__system__",
-                params,
+                _display_params(params),
             )
             await self._record_skill_outcome(
                 decision,
@@ -1363,8 +1377,8 @@ class HeartbeatLoop:
                 "params=%s result=%s",
                 decision.skill_name,
                 decision.target_user_id or "__system__",
-                params,
-                result,
+                _display_params(params),
+                _display_result(result),
             )
             await self._record_skill_outcome(
                 decision,
@@ -1376,7 +1390,7 @@ class HeartbeatLoop:
                 "HEARTBEAT virtual skill failed skill=%s target_user=%s params=%s",
                 decision.skill_name,
                 decision.target_user_id or "__system__",
-                params,
+                _display_params(params),
             )
             await self._record_skill_outcome(
                 decision,
@@ -1414,8 +1428,8 @@ class HeartbeatLoop:
                 "params=%s result=%s",
                 decision.skill_name,
                 decision.target_user_id or "__system__",
-                params,
-                result,
+                _display_params(params),
+                _display_result(result),
             )
             await self._record_skill_outcome(
                 decision,
@@ -1427,7 +1441,7 @@ class HeartbeatLoop:
                 "HEARTBEAT virtual skill failed skill=%s target_user=%s params=%s",
                 decision.skill_name,
                 decision.target_user_id or "__system__",
-                params,
+                _display_params(params),
             )
             await self._record_skill_outcome(
                 decision,
@@ -1470,8 +1484,8 @@ class HeartbeatLoop:
                 "params=%s result=%s",
                 decision.skill_name,
                 decision.target_user_id or "__system__",
-                params,
-                result,
+                _display_params(params),
+                _display_result(result),
             )
             await self._record_skill_outcome(
                 decision,
@@ -1483,7 +1497,7 @@ class HeartbeatLoop:
                 "HEARTBEAT virtual skill failed skill=%s target_user=%s params=%s",
                 decision.skill_name,
                 decision.target_user_id or "__system__",
-                params,
+                _display_params(params),
             )
             await self._record_skill_outcome(
                 decision,
@@ -1512,8 +1526,8 @@ class HeartbeatLoop:
                 "params=%s result=%s",
                 decision.skill_name,
                 decision.target_user_id or "__system__",
-                params,
-                result,
+                _display_params(params),
+                _display_result(result),
             )
             await self._record_skill_outcome(
                 decision,
@@ -1525,7 +1539,7 @@ class HeartbeatLoop:
                 "HEARTBEAT virtual skill failed skill=%s target_user=%s params=%s",
                 decision.skill_name,
                 decision.target_user_id or "__system__",
-                params,
+                _display_params(params),
             )
             await self._record_skill_outcome(
                 decision,

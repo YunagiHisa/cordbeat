@@ -132,7 +132,15 @@ async def judge_yes_no(prompt: str, *, fail_open: bool = False) -> bool:
     except Exception:  # noqa: BLE001
         logger.warning("ai_decision_llm backend failed", exc_info=True)
         return fail_open
-    yes_pattern = r"""[\s"'`([{]*yes[\s.!?,"'`\])}]*"""
+    # The judge is instructed to answer in English, but small multilingual
+    # models sometimes answer in the persona language instead; accept the
+    # Japanese affirmative ("hai", U+306F U+3044) plus CJK punctuation so the
+    # judgement does not silently degrade to always-no. Anything else counts
+    # as no (fail-closed for unrecognized languages). The \uXXXX escapes are
+    # interpreted by the ``re`` module, keeping this source ASCII-only.
+    yes_pattern = (
+        r"""[\s"'`([{]*(?:yes|\u306f\u3044)[\s.!?,"'`\])}\u3002\u3001]*"""
+    )
     return re.fullmatch(yes_pattern, reply.lower()) is not None
 
 

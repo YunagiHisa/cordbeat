@@ -61,6 +61,10 @@ def test_generation_request_owns_dsl_grammar_and_retry_feedback() -> None:
     assert "Available commands" in system
     assert "CIRCLE <cx> <cy> <radius>" in system
     assert "never exceed 200 total" in system
+    assert "never x/y/width/height" in system
+    assert "RECT 0 450 800 600 #90CAF9 FILL" in system
+    assert "not RECT 0 450 800 150" in system
+    assert "# is mandatory" in system
     assert "Previous attempt failed" in prompt
     assert "CIRCLE has missing arguments" in prompt
 
@@ -149,3 +153,30 @@ def test_normalize_rejects_polygon_with_too_few_points() -> None:
 
     assert result.normalized_dsl == ""
     assert "POLYGON has missing arguments" in result.validation_issues[0]
+
+
+def test_normalize_rejects_width_height_style_bounding_boxes() -> None:
+    result = normalize(
+        "SIZE 800 600\n"
+        "CANVAS white\n"
+        "RECT 0 450 800 150 blue FILL\n"
+        "ELLIPSE 200 300 400 100 red FILL\n"
+    )
+
+    assert result.normalized_dsl == ""
+    assert len(result.validation_issues) == 2
+    assert all("not width/height" in issue for issue in result.validation_issues)
+
+
+def test_normalize_repairs_missing_hash_on_fixed_hex_colors() -> None:
+    result = normalize(
+        "SIZE 800 600\n"
+        "CANVAS E3F2FD\n"
+        "CIRCLE 400 200 120 333333 FILL\n"
+        "ARC 400 200 40 20 160 000000\n"
+    )
+
+    assert result.validation_issues == ()
+    assert "CANVAS #E3F2FD" in result.normalized_dsl
+    assert "CIRCLE 400 200 120 #333333 FILL" in result.normalized_dsl
+    assert "ARC 400 200 40 20 160 #000000" in result.normalized_dsl

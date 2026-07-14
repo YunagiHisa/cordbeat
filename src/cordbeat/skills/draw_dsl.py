@@ -115,6 +115,27 @@ _NUMERIC_FIRST_ARG_OPCODES = frozenset(
 )
 _MINIMUM_TOKENS = {op: spec.min_tokens for op, spec in _COMMAND_SPECS.items()}
 _DSL_LIKE_LINE_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,}:?(?:\s|$)")
+_BARE_HEX_COLOR_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
+
+# Zero-based token positions (including the opcode) for commands whose color
+# arguments have fixed positions. Variable-width commands such as POLYGON and
+# quoted TEXT are intentionally omitted; the common primitive commands are
+# enough to repair the missing-# failure seen from local chat models without
+# risking a numeric coordinate being mistaken for a color.
+_FIXED_COLOR_TOKEN_INDEXES: dict[str, tuple[int, ...]] = {
+    "CANVAS": (1,),
+    "CIRCLE": (4,),
+    "RECT": (5,),
+    "ELLIPSE": (5,),
+    "LINE": (5,),
+    "STAR": (6,),
+    "SPIRAL": (5,),
+    "ARC": (6,),
+    "BEZIER": (9,),
+    "GRADIENT": (5, 6),
+    "DOTS": (6,),
+    "PENCOLOR": (1,),
+}
 
 
 @dataclass(frozen=True)
@@ -205,7 +226,12 @@ def build_generation_request(
         "Never use SAVE. Always end with OUTPUT as the final line.\n"
         "Available commands (one per line):\n"
         f"{_command_reference()}\n"
-        "Colors: named colors (white, red, blue, ...) or #RRGGBB."
+        "RECT and ELLIPSE take two absolute corner points, never x/y/width/height. "
+        "For both commands, x2 MUST be greater than x1 and y2 MUST be greater "
+        "than y1. Example: a bottom band 150 pixels high is "
+        "RECT 0 450 800 600 #90CAF9 FILL, not RECT 0 450 800 150.\n"
+        "Colors: named colors (white, red, blue, ...) or #RRGGBB; the # is "
+        "mandatory for hexadecimal colors."
         " Use curves and gradients only when they improve the main silhouette."
         " Always end with OUTPUT.\n"
         "Composition patterns:\n"
@@ -241,6 +267,32 @@ def _validation_issue(lineno: int, reason: str, line: str) -> str:
     return f"line {lineno} {reason}: {sanitize(line, strict=True, max_len=100)}"
 
 
+def _repair_bare_hex_colors(opcode: str, line: str) -> str:
+    """Add a missing ``#`` to fixed-position six-digit hex colors."""
+
+    indexes = _FIXED_COLOR_TOKEN_INDEXES.get(opcode)
+    if not indexes:
+        return line
+    tokens = line.split()
+    for index in indexes:
+        if index < len(tokens) and _BARE_HEX_COLOR_RE.fullmatch(tokens[index]):
+            tokens[index] = f"#{tokens[index]}"
+    return " ".join(tokens)
+
+
+def _has_forward_bounding_box(opcode: str, line: str) -> bool:
+    """Require RECT/ELLIPSE to use corner coordinates, not x/y/width/height."""
+
+    if opcode not in {"RECT", "ELLIPSE"}:
+        return True
+    tokens = line.split()
+    try:
+        x1, y1, x2, y2 = (float(value) for value in tokens[1:5])
+    except (ValueError, IndexError):
+        return True
+    return x2 > x1 and y2 > y1
+
+
 def normalize(raw_dsl: str) -> NormalizedDrawDSL:
     """Keep safe Draw DSL lines and report commands that could not be preserved."""
 
@@ -270,6 +322,19 @@ def normalize(raw_dsl: str) -> NormalizedDrawDSL:
         if len(normalized_line.split()) < _MINIMUM_TOKENS.get(opcode, 1):
             validation_issues.append(
                 _validation_issue(lineno, f"{opcode} has missing arguments", line)
+            )
+            continue
+        normalized_line = _repair_bare_hex_colors(opcode, normalized_line)
+        if not _has_forward_bounding_box(opcode, normalized_line):
+            validation_issues.append(
+                _validation_issue(
+                    lineno,
+                    (
+                        f"{opcode} must use x1 y1 x2 y2 corner coordinates "
+                        "with x2 > x1 and y2 > y1 (not width/height)"
+                    ),
+                    line,
+                )
             )
             continue
         if opcode == "REPEAT":

@@ -34,6 +34,37 @@ class TestLoadConfig:
         assert isinstance(config, Config)
         assert config.gateway.host == "127.0.0.1"
         assert config.gateway.port == 8765
+        assert config.soul.emotion_style == "full"
+        assert config.soul.absence_note_days == 2
+
+    def test_soul_expression_config(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "soul:\n  emotion_style: subtle\n  absence_note_days: 5\n",
+            encoding="utf-8",
+        )
+
+        config = load_config(cfg_file)
+
+        assert config.soul.emotion_style == "subtle"
+        assert config.soul.absence_note_days == 5
+
+    def test_invalid_soul_expression_config_fails_soft(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "soul:\n  emotion_style: dramatic\n  absence_note_days: -2\n",
+            encoding="utf-8",
+        )
+
+        with caplog.at_level(logging.WARNING):
+            config = load_config(cfg_file)
+
+        assert config.soul.emotion_style == "full"
+        assert config.soul.absence_note_days == 0
+        assert "Invalid soul.emotion_style" in caplog.text
+        assert "Invalid negative soul.absence_note_days" in caplog.text
 
     def test_load_yaml(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.yaml"

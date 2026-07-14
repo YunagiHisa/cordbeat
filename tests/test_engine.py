@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -11,7 +12,7 @@ import pytest
 
 from cordbeat.agent.react_types import ToolCallResult
 from cordbeat.agent.soul import Soul
-from cordbeat.config import MemoryConfig, ReActConfig
+from cordbeat.config import MemoryConfig, ReActConfig, SoulConfig
 from cordbeat.core.engine import CoreEngine, _find_skill_tags
 from cordbeat.memory import MemoryStore
 from cordbeat.models import (
@@ -105,6 +106,102 @@ def engine(
 
 
 class TestCoreEngine:
+    async def test_emotion_style_config_is_wired_to_conversation_prompt(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        soul.update_emotion(Emotion.JOY, intensity=0.9, caller=SoulCaller.AI)
+        engine = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=skills,
+            gateway=mock_gateway,
+            soul_config=SoulConfig(emotion_style="off"),
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="emotion-user",
+            content="Hello",
+        )
+
+        await engine.handle_message(msg)
+        await engine.drain()
+
+        response_call = next(
+            call
+            for call in mock_ai.generate.await_args_list
+            if "User says: Hello" in str(call.kwargs.get("prompt", ""))
+        )
+        assert (
+            "Current emotion: joy (intensity: 0.90)"
+            in response_call.kwargs["system"]
+        )
+        assert "genuine warmth and playfulness" not in response_call.kwargs["system"]
+
+    @pytest.mark.parametrize(
+        ("last_talked_at", "absence_note_days", "shared_voice", "expected"),
+        [
+            (datetime.now(tz=UTC) - timedelta(days=1), 2, False, False),
+            (datetime.now(tz=UTC) - timedelta(days=2), 2, False, True),
+            (datetime.now(tz=UTC) - timedelta(days=3), 2, False, True),
+            (None, 2, False, False),
+            (datetime.now(tz=UTC) - timedelta(days=3), 0, False, False),
+            (datetime.now(tz=UTC) - timedelta(days=3), 2, True, False),
+        ],
+    )
+    async def test_absence_note_conditions_use_timestamp_before_current_update(
+        self,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+        last_talked_at: datetime | None,
+        absence_note_days: int,
+        shared_voice: bool,
+        expected: bool,
+    ) -> None:
+        user_id = "absence-user"
+        user = await memory.get_or_create_user(user_id, "Alice")
+        user.last_talked_at = last_talked_at
+        await memory.update_user_summary(user)
+        platform_user_id = "vc:room" if shared_voice else "alice"
+        await memory.link_platform(user_id, "test", platform_user_id)
+        engine = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=skills,
+            gateway=mock_gateway,
+            soul_config=SoulConfig(absence_note_days=absence_note_days),
+        )
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id=platform_user_id,
+            content="Hello",
+            is_voice=shared_voice,
+            metadata={"shared_voice": True} if shared_voice else {},
+        )
+
+        await engine.handle_message(msg)
+        await engine.drain()
+
+        response_call = next(
+            call
+            for call in mock_ai.generate.await_args_list
+            if "User says: Hello" in str(call.kwargs.get("prompt", ""))
+        )
+        assert (
+            "days since you last talked" in response_call.kwargs["prompt"]
+        ) is expected
+
     async def test_handle_message_calls_ai(
         self,
         engine: CoreEngine,

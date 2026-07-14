@@ -42,7 +42,8 @@ from cordbeat.ai.prompt import (
     format_skill_params_for_display as _format_react_params,
 )
 from cordbeat.ai.reasoning import sanitize_reasoning_artifacts
-from cordbeat.config import MemoryConfig, ReActConfig
+from cordbeat.config import MemoryConfig, ReActConfig, SoulConfig
+from cordbeat.memory.common import ensure_aware
 from cordbeat.memory.core import MemoryStore
 from cordbeat.models import (
     GatewayMessage,
@@ -815,6 +816,7 @@ class CoreEngine:
         gateway: GatewayServer,
         memory_config: MemoryConfig | None = None,
         react_config: ReActConfig | None = None,
+        soul_config: SoulConfig | None = None,
         vision_enabled: bool = False,
         timezone_name: str = "UTC",
         adapters_options: dict[str, dict[str, Any]] | None = None,
@@ -826,6 +828,7 @@ class CoreEngine:
         self._gateway = gateway
         self._memory_config = memory_config or MemoryConfig()
         self._react_config = react_config or ReActConfig()
+        self._soul_config = soul_config or SoulConfig()
         self._vision_enabled = vision_enabled
         self._timezone_name = timezone_name
         self._adapters_options = adapters_options or {}
@@ -874,7 +877,7 @@ class CoreEngine:
                 return
 
         # Phase 1: Resolve user
-        user_id, user = await self._resolve_user(message)
+        user_id, user, previous_last_talked_at = await self._resolve_user(message)
 
         # Voice-context scope: any LLM call inside this block consults
         # ``ai.options.voice_enable_thinking`` instead of
@@ -882,7 +885,12 @@ class CoreEngine:
         # a faster (non-thinking) response when configured.
         with voice_context_scope(message.is_voice):
             # Phase 2: Build prompt and generate initial response
-            result = await self._generate_response(user_id, user, message)
+            result = await self._generate_response(
+                user_id,
+                user,
+                message,
+                last_talked_at_before_update=previous_last_talked_at,
+            )
             if result is None:
                 return
             response, system_prompt, user_prompt = result
@@ -945,7 +953,9 @@ class CoreEngine:
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
 
-    async def _resolve_user(self, message: GatewayMessage) -> tuple[str, UserSummary]:
+    async def _resolve_user(
+        self, message: GatewayMessage
+    ) -> tuple[str, UserSummary, datetime | None]:
         """Resolve or create the user and update their summary."""
         adapter_id = message.adapter_id
         platform_user_id = message.platform_user_id
@@ -964,6 +974,7 @@ class CoreEngine:
 
         if display_name and user.display_name != display_name:
             user.display_name = display_name
+        previous_last_talked_at = user.last_talked_at
         user.last_talked_at = datetime.now(tz=UTC)
         user.last_platform = adapter_id
         await self._memory.update_user_summary(user)
@@ -990,7 +1001,7 @@ class CoreEngine:
                     adapter_id,
                 )
 
-        return user_id, user
+        return user_id, user, previous_last_talked_at
 
     def _skill_is_available(
         self,
@@ -1018,6 +1029,8 @@ class CoreEngine:
         user_id: str,
         user: UserSummary,
         message: GatewayMessage,
+        *,
+        last_talked_at_before_update: datetime | None = None,
     ) -> tuple[str, str, str] | None:
         """Build prompt, call AI, return (response, system_prompt, user_prompt).
 
@@ -1064,6 +1077,7 @@ class CoreEngine:
             soul_snap,
             timezone_name=self._timezone_name,
             user_message_count=message_count,
+            emotion_style=self._soul_config.emotion_style,
         )
         if shared_voice:
             system_prompt += (
@@ -1222,6 +1236,19 @@ class CoreEngine:
         if not shared_voice:
             verified_actions = await self._load_verified_actions(user_id)
 
+        days_since_last_talk: int | None = None
+        absence_note_days = self._soul_config.absence_note_days
+        if (
+            not shared_voice
+            and absence_note_days > 0
+            and last_talked_at_before_update is not None
+        ):
+            elapsed_days = (
+                datetime.now(tz=UTC) - ensure_aware(last_talked_at_before_update)
+            ).days
+            if elapsed_days >= absence_note_days:
+                days_since_last_talk = elapsed_days
+
         context = build_context(
             user_display_name=(
                 "participants in a shared voice channel"
@@ -1238,6 +1265,7 @@ class CoreEngine:
             max_user_input_len=self._memory_config.max_user_input_len,
             recalled_episode_limit=self._memory_config.recalled_episode_context_limit,
             include_verified_actions=not shared_voice,
+            days_since_last_talk=days_since_last_talk,
         )
 
         safe_content = sanitize(
@@ -2846,7 +2874,7 @@ class CoreEngine:
             message.adapter_id, message.platform_user_id
         )
         if user_id is None and message.adapter_id == _ADMIN_LINK_ADAPTER_ID:
-            user_id, _ = await self._resolve_user(message)
+            user_id, _, _ = await self._resolve_user(message)
         return user_id
 
     async def _is_admin_user(

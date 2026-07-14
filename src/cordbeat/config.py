@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -153,6 +154,8 @@ class SoulConfig:
     emotion_decay_rate: float = 0.05
     emotion_baseline_intensity: float = 0.3
     emotion_secondary_clear_threshold: float = 0.1
+    emotion_style: str = "full"
+    absence_note_days: int = 2
 
 
 @dataclass
@@ -686,6 +689,18 @@ def load_config(path: str | Path) -> Config:
     if "soul_dir" in raw and "soul_dir" not in soul_raw:
         soul_raw["soul_dir"] = raw["soul_dir"]
     soul = _build_dataclass(SoulConfig, soul_raw)
+    if soul.emotion_style not in {"full", "subtle", "off"}:
+        logging.getLogger(__name__).warning(
+            "Invalid soul.emotion_style %r; falling back to 'full'",
+            soul.emotion_style,
+        )
+        soul.emotion_style = "full"
+    if soul.absence_note_days < 0:
+        logging.getLogger(__name__).warning(
+            "Invalid negative soul.absence_note_days %r; disabling absence notes",
+            soul.absence_note_days,
+        )
+        soul.absence_note_days = 0
 
     log_raw = raw.get("log", {})
     # Track whether log.file was explicitly set (even to "") in the YAML / env

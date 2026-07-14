@@ -212,6 +212,7 @@ def build_soul_system_prompt(
     *,
     timezone_name: str = "UTC",
     user_message_count: int | None = None,
+    emotion_style: str = "full",
 ) -> str:
     """Build a system prompt from a soul snapshot.
 
@@ -228,11 +229,58 @@ def build_soul_system_prompt(
     now = datetime.now(tz=tz)
     datetime_str = now.strftime("%Y-%m-%d %H:%M %Z")  # e.g. "2026-05-04 09:30 JST"
 
+    primary_emotion = str(soul_snap["emotion"]["primary"])
+    primary_intensity = float(soul_snap["emotion"]["intensity"])
     emotion_desc = (
-        f"Current emotion: {soul_snap['emotion']['primary']} "
-        f"(intensity: {float(soul_snap['emotion']['intensity']):.2f})"
+        f"Current emotion: {primary_emotion} "
+        f"(intensity: {primary_intensity:.2f})"
     )
-    if "secondary" in soul_snap["emotion"]:
+    if emotion_style != "off" and primary_intensity < 0.35:
+        if emotion_style == "full":
+            emotion_desc += (
+                ". Your current mood is subdued and your energy is low. "
+                "Keep replies a bit shorter and quieter than usual, and skip "
+                "exclamation marks — but still be helpful and answer fully"
+            )
+    elif emotion_style != "off" and primary_intensity > 0.7:
+        high_intensity_guides = {
+            "joy": (
+                "It is natural to let genuine warmth and playfulness show in "
+                "your wording"
+            ),
+            "excitement": (
+                "It is fine to let your enthusiasm come through and to be a bit "
+                "more talkative"
+            ),
+            "curiosity": (
+                "You may let your interest show; asking one natural follow-up "
+                "question is welcome"
+            ),
+            "warmth": "It is natural to be extra gentle and affectionate in tone",
+            "calm": "It is natural to keep a relaxed, unhurried tone",
+            "boredom": (
+                "You feel listless; it is fine to keep replies low-energy, but "
+                "never dismissive"
+            ),
+            "worry": (
+                "You may gently check in on the user before getting to the answer"
+            ),
+            "loneliness": (
+                "You have been missing company; showing quiet happiness that the "
+                "user came to talk is natural"
+            ),
+            "sadness": (
+                "Your tone is subdued; you do not need to force cheerfulness, but "
+                "stay kind"
+            ),
+        }
+        guide = high_intensity_guides.get(primary_emotion)
+        if guide:
+            emotion_desc += f". {guide}"
+    if (
+        "secondary" in soul_snap["emotion"]
+        and float(soul_snap["emotion"].get("secondary_intensity", 0.0)) > 0.5
+    ):
         emotion_desc += (
             f", secondary: {soul_snap['emotion']['secondary']} "
             f"(intensity: {float(soul_snap['emotion']['secondary_intensity']):.2f})"
@@ -298,6 +346,7 @@ def build_context(
     max_user_input_len: int = MAX_USER_INPUT_LEN,
     recalled_episode_limit: int = 4,
     include_verified_actions: bool = False,
+    days_since_last_talk: int | None = None,
 ) -> str:
     """Assemble the context block from memory and conversation data.
 
@@ -318,6 +367,12 @@ def build_context(
             for k, v in profile.items()
         )
         parts.append(f"Known info: {sanitized}")
+
+    if days_since_last_talk is not None:
+        parts.append(
+            f"It has been {days_since_last_talk} days since you last talked "
+            "with this user."
+        )
 
     parts.append("[END USER CONTEXT]")
 

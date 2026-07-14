@@ -290,6 +290,7 @@ async def main(
         gateway=gateway,
         memory_config=config.memory,
         react_config=config.react,
+        soul_config=config.soul,
         vision_enabled=config.ai_backend.vision_enabled,
         timezone_name=config.heartbeat.timezone,
         adapters_options={name: dict(a.options) for name, a in config.adapters.items()},

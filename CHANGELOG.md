@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Expression layer stage 1.** Conversation prompts now apply emotion-aware
+  tone guidance (`soul.emotion_style`, default `full`) and provide a factual
+  elapsed-days note after an absence (`soul.absence_note_days`, default `2`).
+  Both behaviors can be disabled with `off` and `0`, respectively.
 - **Timer reminder delivery.** Timer records now use aware UTC timestamps and
   bounded minute ranges, and HEARTBEAT delivers due reminders through the
   user's last-seen route outside proactive cooldowns. Delivery is deferred

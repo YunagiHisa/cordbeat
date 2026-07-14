@@ -186,6 +186,8 @@ soul:
   emotion_decay_rate: 0.05             # per-tick emotion intensity decay
   emotion_baseline_intensity: 0.3      # emotion intensity baseline (decay target)
   emotion_secondary_clear_threshold: 0.1  # below this, secondary emotion is cleared
+  emotion_style: "full"              # full | subtle | off; controls emotion tone guides
+  absence_note_days: 2                # add elapsed-day context after this gap; 0 disables
 skills_dir: "skills"
 data_dir: "data"
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import re
 
+import pytest
+
 from cordbeat.agent.react_types import ToolCallResult
 from cordbeat.ai.prompt import (
     MAX_USER_INPUT_LEN,
@@ -167,7 +169,7 @@ class TestBuildSoulSystemPrompt:
         assert "curious" in result
         assert "Never lie" in result
 
-    def test_includes_secondary_emotion(self) -> None:
+    def test_includes_secondary_emotion_above_threshold(self) -> None:
         snap = {
             "name": "Bot",
             "traits": ["brave"],
@@ -175,12 +177,81 @@ class TestBuildSoulSystemPrompt:
                 "primary": "joy",
                 "intensity": 0.8,
                 "secondary": "curiosity",
-                "secondary_intensity": 0.3,
+                "secondary_intensity": 0.6,
             },
             "immutable_rules": [],
         }
         result = build_soul_system_prompt(snap)
         assert "secondary: curiosity" in result
+
+    @pytest.mark.parametrize("emotion_style", ["full", "subtle", "off"])
+    @pytest.mark.parametrize("intensity", [0.2, 0.5, 0.8])
+    def test_emotion_style_intensity_bands(
+        self, emotion_style: str, intensity: float
+    ) -> None:
+        snap = {
+            "name": "Bot",
+            "traits": ["kind"],
+            "emotion": {"primary": "joy", "intensity": intensity},
+            "immutable_rules": [],
+        }
+
+        result = build_soul_system_prompt(snap, emotion_style=emotion_style)
+
+        assert f"Current emotion: joy (intensity: {intensity:.2f})" in result
+        assert ("current mood is subdued" in result) is (
+            emotion_style == "full" and intensity < 0.35
+        )
+        assert ("genuine warmth and playfulness" in result) is (
+            emotion_style != "off" and intensity > 0.7
+        )
+
+    @pytest.mark.parametrize(
+        ("emotion", "guide"),
+        [
+            ("joy", "genuine warmth and playfulness"),
+            ("excitement", "enthusiasm come through"),
+            ("curiosity", "one natural follow-up question"),
+            ("warmth", "extra gentle and affectionate"),
+            ("calm", "relaxed, unhurried tone"),
+            ("boredom", "low-energy, but never dismissive"),
+            ("worry", "gently check in on the user"),
+            ("loneliness", "quiet happiness that the user came to talk"),
+            ("sadness", "do not need to force cheerfulness"),
+        ],
+    )
+    def test_high_intensity_guide_for_each_emotion(
+        self, emotion: str, guide: str
+    ) -> None:
+        snap = {
+            "name": "Bot",
+            "traits": ["kind"],
+            "emotion": {"primary": emotion, "intensity": 0.9},
+            "immutable_rules": [],
+        }
+
+        assert guide in build_soul_system_prompt(snap)
+
+    @pytest.mark.parametrize(
+        ("secondary_intensity", "expected"), [(0.5, False), (0.5001, True)]
+    )
+    def test_secondary_emotion_threshold(
+        self, secondary_intensity: float, expected: bool
+    ) -> None:
+        snap = {
+            "name": "Bot",
+            "traits": ["kind"],
+            "emotion": {
+                "primary": "calm",
+                "intensity": 0.5,
+                "secondary": "curiosity",
+                "secondary_intensity": secondary_intensity,
+            },
+            "immutable_rules": [],
+        }
+
+        result = build_soul_system_prompt(snap)
+        assert ("secondary: curiosity" in result) is expected
 
     def test_includes_soul_notes(self) -> None:
         snap = {
@@ -308,6 +379,20 @@ class TestBuildContext:
         assert "[BEGIN USER CONTEXT]" in result
         assert "User: Alice" in result
         assert "[END USER CONTEXT]" in result
+
+    def test_includes_days_since_last_talk_in_user_context(self) -> None:
+        result = build_context(user_display_name="Alice", days_since_last_talk=3)
+
+        user_context = result.split("[END USER CONTEXT]", 1)[0]
+        assert (
+            "It has been 3 days since you last talked with this user."
+            in user_context
+        )
+
+    def test_omits_days_since_last_talk_by_default(self) -> None:
+        result = build_context(user_display_name="Alice")
+
+        assert "days since you last talked" not in result
 
     def test_verified_actions_are_included(self) -> None:
         result = build_context(

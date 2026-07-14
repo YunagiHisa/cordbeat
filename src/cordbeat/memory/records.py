@@ -98,6 +98,19 @@ class RecordStore:
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
+    async def update_record_metadata(
+        self,
+        record_id: str,
+        metadata: dict[str, Any],
+    ) -> bool:
+        """Replace a certain record's metadata and report whether it existed."""
+        cursor = await self._db.execute(
+            "UPDATE certain_records SET metadata = ? WHERE id = ?",
+            (json.dumps(metadata), record_id),
+        )
+        await self._db.commit()
+        return cursor.rowcount > 0
+
     async def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
         """Retrieve a single proposal by ID."""
         cursor = await self._db.execute(

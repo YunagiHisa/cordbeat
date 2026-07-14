@@ -487,6 +487,205 @@ class TestTick:
         assert kwargs["tz"] is UTC
 
 
+class TestReminderDelivery:
+    async def _setup_user(self, memory: MemoryStore) -> UserSummary:
+        user = await memory.get_or_create_user("u1", "Alice")
+        user.last_platform = "discord"
+        await memory.update_user_summary(user)
+        await memory.link_platform("u1", "discord", "discord_123")
+        await memory.record_last_seen_channel(
+            "u1",
+            "discord",
+            "channel-1",
+            False,
+        )
+        return user
+
+    async def _add_reminder(
+        self,
+        memory: MemoryStore,
+        *,
+        content: str = "Check oven",
+        remind_at: str | None = None,
+    ) -> str:
+        return await memory.add_certain_record(
+            "u1",
+            content,
+            "reminder",
+            {
+                "status": "pending",
+                "remind_at": remind_at
+                or (datetime.now(tz=UTC) - timedelta(minutes=1)).isoformat(),
+            },
+        )
+
+    async def _metadata(
+        self,
+        memory: MemoryStore,
+        record_id: str,
+    ) -> dict[str, Any]:
+        records = await memory.get_certain_records("u1", record_type="reminder")
+        record = next(record for record in records if record["id"] == record_id)
+        return json.loads(record["metadata"])
+
+    async def test_tick_delivers_due_reminder_and_marks_delivered(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await self._setup_user(memory)
+        record_id = await self._add_reminder(memory)
+        await memory.add_certain_record(
+            "u1",
+            "Recent proactive message",
+            "heartbeat_user_sent",
+        )
+        await memory.add_certain_record(
+            "__system__",
+            "Recent destination message",
+            "heartbeat_destination_sent",
+            {"destination_key": "discord:channel:channel-1"},
+        )
+        mock_ai.generate_json = AsyncMock(
+            return_value={"users": [], "next_heartbeat_minutes": 60}
+        )
+
+        with patch("cordbeat.agent.heartbeat._in_quiet_hours", return_value=False):
+            await heartbeat._tick()
+
+        mock_gateway.send_to_adapter.assert_awaited_once()
+        adapter_id, message = mock_gateway.send_to_adapter.await_args.args
+        assert adapter_id == "discord"
+        assert message.platform_user_id == "discord_123"
+        assert message.content == "Reminder: Check oven"
+        assert message.metadata["channel_id"] == "channel-1"
+        metadata = await self._metadata(memory, record_id)
+        assert metadata["status"] == "delivered"
+        assert datetime.fromisoformat(metadata["delivered_at"]).tzinfo is not None
+
+    async def test_future_reminder_is_not_sent(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        user = await self._setup_user(memory)
+        record_id = await self._add_reminder(
+            memory,
+            remind_at=(datetime.now(tz=UTC) + timedelta(hours=1)).isoformat(),
+        )
+
+        await heartbeat._deliver_due_reminders([user])
+
+        mock_gateway.send_to_adapter.assert_not_awaited()
+        assert (await self._metadata(memory, record_id))["status"] == "pending"
+
+    async def test_quiet_hours_keep_due_reminder_pending(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await self._setup_user(memory)
+        record_id = await self._add_reminder(memory)
+
+        with patch("cordbeat.agent.heartbeat._in_quiet_hours", return_value=True):
+            await heartbeat._tick()
+
+        mock_gateway.send_to_adapter.assert_not_awaited()
+        assert (await self._metadata(memory, record_id))["status"] == "pending"
+
+    async def test_naive_remind_at_is_treated_as_utc(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        user = await self._setup_user(memory)
+        naive_due = (datetime.now(tz=UTC) - timedelta(minutes=1)).replace(
+            tzinfo=None
+        )
+        record_id = await self._add_reminder(
+            memory,
+            remind_at=naive_due.isoformat(),
+        )
+
+        await heartbeat._deliver_due_reminders([user])
+
+        mock_gateway.send_to_adapter.assert_awaited_once()
+        assert (await self._metadata(memory, record_id))["status"] == "delivered"
+
+    async def test_invalid_remind_at_is_disabled(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        user = await self._setup_user(memory)
+        record_id = await self._add_reminder(memory, remind_at="not-a-date")
+
+        await heartbeat._deliver_due_reminders([user])
+        await heartbeat._deliver_due_reminders([user])
+
+        mock_gateway.send_to_adapter.assert_not_awaited()
+        assert (await self._metadata(memory, record_id))["status"] == "invalid"
+        assert caplog.text.count("Invalid remind_at") == 1
+
+    async def test_tick_attempts_at_most_five_due_reminders(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        user = await self._setup_user(memory)
+        for index in range(7):
+            await self._add_reminder(memory, content=f"Reminder {index}")
+
+        await heartbeat._deliver_due_reminders([user])
+
+        assert mock_gateway.send_to_adapter.await_count == 5
+        records = await memory.get_certain_records("u1", record_type="reminder")
+        statuses = [json.loads(record["metadata"])["status"] for record in records]
+        assert statuses.count("delivered") == 5
+        assert statuses.count("pending") == 2
+
+    async def test_delivery_stops_after_five_failures(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        user = await self._setup_user(memory)
+        record_id = await self._add_reminder(memory)
+        mock_gateway.send_to_adapter.side_effect = RuntimeError("adapter down")
+
+        for _ in range(5):
+            await heartbeat._deliver_due_reminders([user])
+
+        metadata = await self._metadata(memory, record_id)
+        assert metadata["status"] == "failed"
+        assert metadata["failure_count"] == 5
+
+    async def test_disconnected_adapter_keeps_reminder_pending(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        user = await self._setup_user(memory)
+        record_id = await self._add_reminder(memory)
+        mock_gateway.send_to_adapter.return_value = False
+
+        await heartbeat._deliver_due_reminders([user])
+
+        metadata = await self._metadata(memory, record_id)
+        assert metadata["status"] == "pending"
+        assert metadata["failure_count"] == 1
+
+
 # ── Sleep Phase ───────────────────────────────────────────────────────
 
 

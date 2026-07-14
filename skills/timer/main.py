@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 
@@ -17,7 +17,11 @@ async def execute(
     if context is None or context.memory is None:
         return {"error": "Memory access not available"}
 
-    remind_at = (datetime.now() + timedelta(minutes=minutes)).isoformat()
+    requested_minutes = minutes
+    scheduled_minutes = max(1, min(minutes, 60 * 24 * 30))
+    remind_at = (
+        datetime.now(tz=UTC) + timedelta(minutes=scheduled_minutes)
+    ).isoformat()
 
     memory = context.memory
     record_id = await memory.add_certain_record(
@@ -30,9 +34,17 @@ async def execute(
         },
     )
 
-    return {
+    result: dict[str, Any] = {
         "status": "scheduled",
         "record_id": record_id,
         "remind_at": remind_at,
         "message": message,
+        "minutes": scheduled_minutes,
     }
+    if scheduled_minutes != requested_minutes:
+        result["clamped"] = True
+        result["clamp_note"] = (
+            f"Requested {requested_minutes} minutes; scheduled "
+            f"{scheduled_minutes} minutes within the supported range."
+        )
+    return result

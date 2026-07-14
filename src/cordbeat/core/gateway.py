@@ -310,11 +310,11 @@ class GatewayServer:
         self,
         adapter_id: str,
         message: GatewayMessage,
-    ) -> None:
+    ) -> bool:
         ws = self._connections.get(adapter_id)
         if ws is None:
             logger.warning("Adapter '%s' not connected", adapter_id)
-            return
+            return False
 
         payload = json.dumps(
             {
@@ -328,6 +328,7 @@ class GatewayServer:
             }
         )
         await ws.send(payload)
+        return True
 
     async def _handle_connection(self, websocket: ServerConnection) -> None:
         adapter_id: str | None = None

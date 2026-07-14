@@ -183,7 +183,8 @@ class TestGatewayServer:
             content="hello",
         )
         # Should not raise
-        await server.send_to_adapter("unknown", msg)
+        sent = await server.send_to_adapter("unknown", msg)
+        assert sent is False
 
     async def test_send_to_adapter_connected(self) -> None:
         """send_to_adapter with connected adapter → sends JSON."""
@@ -200,7 +201,8 @@ class TestGatewayServer:
             platform_user_id="u1",
             content="hello",
         )
-        await server.send_to_adapter("test_adapter", msg)
+        sent = await server.send_to_adapter("test_adapter", msg)
+        assert sent is True
         mock_ws.send.assert_called_once()
         payload = json.loads(mock_ws.send.call_args[0][0])
         assert payload["content"] == "hello"

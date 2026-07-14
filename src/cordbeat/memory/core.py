@@ -298,6 +298,13 @@ class MemoryStore:
     ) -> list[dict[str, Any]]:
         return await self._records.get_certain_records(user_id, record_type, limit)
 
+    async def update_record_metadata(
+        self,
+        record_id: str,
+        metadata: dict[str, Any],
+    ) -> bool:
+        return await self._records.update_record_metadata(record_id, metadata)
+
     async def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
         return await self._records.get_proposal(proposal_id)
 

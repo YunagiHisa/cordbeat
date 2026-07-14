@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Timer reminder delivery.** Timer records now use aware UTC timestamps and
+  bounded minute ranges, and HEARTBEAT delivers due reminders through the
+  user's last-seen route outside proactive cooldowns. Delivery is deferred
+  during quiet hours, limited to five per tick, and stops after five failures;
+  malformed legacy timestamps are disabled without blocking later reminders.
 - **Per-category thinking control.** OpenAI-compatible backends can override
   thinking for internal extraction, compression, sleep, and heartbeat work,
   while skills can select `auto`, `off`, or `force_on`. Draw DSL generation now

@@ -24,6 +24,7 @@ from cordbeat.ai.validation import (
 from cordbeat.config import HeartbeatConfig, MemoryConfig
 from cordbeat.core.gateway import GatewayServer, MessageQueueProtocol
 from cordbeat.exceptions import AIBackendError, MemorySubsystemError
+from cordbeat.memory.common import ensure_aware
 from cordbeat.memory.core import MemoryStore
 from cordbeat.models import (
     GatewayMessage,
@@ -224,6 +225,8 @@ _CONVERSATION_SKILL_ERROR_RECORD = "conversation_skill_error"
 _HEARTBEAT_SKILL_APPROVAL_RECORD = "heartbeat_skill_approval_requested"
 _HEARTBEAT_REFLECTION_RECORD = "heartbeat_reflection"
 _HEARTBEAT_CONCERN_RECORD = "heartbeat_concern"
+_REMINDER_MAX_DELIVERIES_PER_TICK = 5
+_REMINDER_MAX_FAILURES = 5
 
 
 def _display_params(params: dict[str, Any] | None) -> str:
@@ -372,6 +375,7 @@ class HeartbeatLoop:
         self._soul.decay_emotion()
 
         users = await self._memory.get_all_user_summaries()
+        await self._deliver_due_reminders(users)
         if not users:
             await self._record_heartbeat_journal(
                 "No users available for HEARTBEAT evaluation.",
@@ -453,6 +457,110 @@ class HeartbeatLoop:
             )
         )
         return triage_interval, selected_ids
+
+    async def _deliver_due_reminders(self, users: list[UserSummary]) -> None:
+        """Deliver up to five due reminders through heartbeat routing."""
+        attempts = 0
+        now = datetime.now(tz=UTC)
+        for user in users:
+            try:
+                records = await self._memory.get_certain_records(
+                    user.user_id,
+                    record_type="reminder",
+                )
+            except Exception:
+                logger.exception("Failed to load reminders for user=%s", user.user_id)
+                continue
+
+            for record in records:
+                if attempts >= _REMINDER_MAX_DELIVERIES_PER_TICK:
+                    return
+                try:
+                    metadata_raw = record.get("metadata") or "{}"
+                    metadata = (
+                        dict(metadata_raw)
+                        if isinstance(metadata_raw, dict)
+                        else json.loads(str(metadata_raw))
+                    )
+                    if not isinstance(metadata, dict):
+                        raise TypeError("reminder metadata is not an object")
+                except (TypeError, json.JSONDecodeError):
+                    logger.warning(
+                        "Invalid reminder metadata record=%s; disabling reminder",
+                        record.get("id"),
+                    )
+                    await self._memory.update_record_metadata(
+                        str(record["id"]),
+                        {"status": "invalid", "invalid_at": now.isoformat()},
+                    )
+                    continue
+
+                if metadata.get("status") != "pending":
+                    continue
+                try:
+                    remind_at = ensure_aware(
+                        datetime.fromisoformat(str(metadata.get("remind_at", "")))
+                    )
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Invalid remind_at for reminder record=%s; disabling reminder",
+                        record.get("id"),
+                    )
+                    metadata["status"] = "invalid"
+                    metadata["invalid_at"] = now.isoformat()
+                    await self._memory.update_record_metadata(
+                        str(record["id"]), metadata
+                    )
+                    continue
+                if remind_at > now:
+                    continue
+
+                attempts += 1
+                decision = HeartbeatDecision(
+                    action=HeartbeatAction.MESSAGE,
+                    content=f"Reminder: {record.get('content', '')}",
+                    target_user_id=user.user_id,
+                    target_adapter_id=(
+                        user.preferred_platform or user.last_platform or None
+                    ),
+                )
+                try:
+                    delivered = await self._send_heartbeat_message(
+                        decision,
+                        reminder=True,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Reminder delivery raised record=%s user=%s",
+                        record.get("id"),
+                        user.user_id,
+                        exc_info=True,
+                    )
+                    delivered = False
+
+                if delivered:
+                    metadata["status"] = "delivered"
+                    metadata["delivered_at"] = datetime.now(tz=UTC).isoformat()
+                else:
+                    failures_raw = metadata.get("failure_count", 0)
+                    failures = (
+                        failures_raw
+                        if isinstance(failures_raw, int)
+                        and not isinstance(failures_raw, bool)
+                        else 0
+                    )
+                    failures += 1
+                    metadata["failure_count"] = failures
+                    metadata["last_failure_at"] = datetime.now(tz=UTC).isoformat()
+                    if failures >= _REMINDER_MAX_FAILURES:
+                        metadata["status"] = "failed"
+                    logger.warning(
+                        "Reminder delivery failed record=%s user=%s attempt=%d",
+                        record.get("id"),
+                        user.user_id,
+                        failures,
+                    )
+                await self._memory.update_record_metadata(str(record["id"]), metadata)
 
     async def _run_layer2(
         self,
@@ -966,15 +1074,20 @@ class HeartbeatLoop:
         )
         return None
 
-    async def _send_heartbeat_message(self, decision: HeartbeatDecision) -> None:
+    async def _send_heartbeat_message(
+        self,
+        decision: HeartbeatDecision,
+        *,
+        reminder: bool = False,
+    ) -> bool:
         if not decision.target_user_id:
             logger.warning("HEARTBEAT message missing target")
-            return
+            return False
         target_adapter_id = await self._resolve_target_adapter(
             decision.target_user_id, decision.target_adapter_id
         )
         if not target_adapter_id:
-            return
+            return False
         decision.target_adapter_id = target_adapter_id
 
         if self._queue.is_busy():
@@ -982,13 +1095,13 @@ class HeartbeatLoop:
                 "HEARTBEAT skipped before send: message queue became busy "
                 "(user-message generation in progress)"
             )
-            return
-        if (
+            return False
+        if not reminder and (
             self._proactive_messages_sent_this_tick
             >= self._config.max_proactive_messages_per_tick
         ):
             logger.info("HEARTBEAT skipped: proactive message limit reached")
-            return
+            return False
 
         content = decision.content.strip()
         if not content or _PARENTHETICAL_ONLY_RE.fullmatch(content):
@@ -997,17 +1110,20 @@ class HeartbeatLoop:
                 decision.target_user_id,
                 decision.content,
             )
-            return
-        if await self._heartbeat_cooldown_active(
-            decision.target_user_id,
-            _HEARTBEAT_USER_SENT_RECORD,
-            self._config.proactive_user_cooldown_minutes,
+            return False
+        if (
+            not reminder
+            and await self._heartbeat_cooldown_active(
+                decision.target_user_id,
+                _HEARTBEAT_USER_SENT_RECORD,
+                self._config.proactive_user_cooldown_minutes,
+            )
         ):
             logger.info(
                 "HEARTBEAT skipped: proactive user cooldown active user=%s",
                 decision.target_user_id,
             )
-            return
+            return False
 
         # ── dm_policy: gate proactive sends based on last known channel ──
         opts = self._adapters_options.get(decision.target_adapter_id, {})
@@ -1026,7 +1142,7 @@ class HeartbeatLoop:
                 decision.target_user_id,
                 decision.target_adapter_id,
             )
-            return
+            return False
 
         try:
             last_seen = await self._memory.get_last_seen_channel(
@@ -1044,7 +1160,7 @@ class HeartbeatLoop:
                     "HEARTBEAT skipped non-routable Discord VC history user=%s",
                     decision.target_user_id,
                 )
-                return
+                return False
             metadata["channel_id"] = last_channel_id
             metadata["is_dm"] = last_is_dm
             if dm_policy == "reply_only" and last_is_dm:
@@ -1054,7 +1170,7 @@ class HeartbeatLoop:
                     decision.target_user_id,
                     decision.target_adapter_id,
                 )
-                return
+                return False
         else:
             # No history at all: under reply_only we must not initiate.
             if dm_policy == "reply_only":
@@ -1064,7 +1180,7 @@ class HeartbeatLoop:
                     decision.target_user_id,
                     decision.target_adapter_id,
                 )
-                return
+                return False
             # allow_proactive with no last_seen: permit DM fallback as last resort.
             metadata["allow_dm_fallback"] = True
 
@@ -1082,7 +1198,7 @@ class HeartbeatLoop:
                     decision.target_adapter_id,
                     user.last_platform,
                 )
-                return
+                return False
             # Self-heal for legacy users (pre-#310deb4): historically the
             # internal user_id was set to the platform_user_id itself
             # (e.g. a Discord snowflake or "cli_user") and no platform_link
@@ -1103,7 +1219,7 @@ class HeartbeatLoop:
                         decision.target_user_id,
                         decision.target_adapter_id,
                     )
-                    return
+                    return False
                 logger.info(
                     "Backfilled platform_link for legacy user=%s adapter=%s",
                     decision.target_user_id,
@@ -1117,25 +1233,28 @@ class HeartbeatLoop:
                     decision.target_adapter_id,
                     exc,
                 )
-                return
+                return False
 
         destination_key = self._heartbeat_destination_key(
             decision.target_adapter_id,
             platform_user_id,
             metadata,
         )
-        if await self._heartbeat_cooldown_active(
-            "__system__",
-            _HEARTBEAT_DESTINATION_SENT_RECORD,
-            self._config.proactive_destination_cooldown_minutes,
-            destination_key=destination_key,
+        if (
+            not reminder
+            and await self._heartbeat_cooldown_active(
+                "__system__",
+                _HEARTBEAT_DESTINATION_SENT_RECORD,
+                self._config.proactive_destination_cooldown_minutes,
+                destination_key=destination_key,
+            )
         ):
             logger.info(
                 "HEARTBEAT skipped: proactive destination cooldown active "
                 "destination=%s",
                 destination_key,
             )
-            return
+            return False
 
         if _DRAW_TAG_RE.search(decision.content):
             logger.warning(
@@ -1144,7 +1263,7 @@ class HeartbeatLoop:
                 decision.target_user_id,
                 decision.target_adapter_id,
             )
-            return
+            return False
 
         message = GatewayMessage(
             type=MessageType.HEARTBEAT_MESSAGE,
@@ -1153,11 +1272,14 @@ class HeartbeatLoop:
             content=decision.content,
             metadata=metadata,
         )
-        await self._gateway.send_to_adapter(
+        sent = await self._gateway.send_to_adapter(
             decision.target_adapter_id,
             message,
         )
-        self._proactive_messages_sent_this_tick += 1
+        if sent is False:
+            return False
+        if not reminder:
+            self._proactive_messages_sent_this_tick += 1
         logger.info(
             "HEARTBEAT sent message to %s via %s (channel=%s, is_dm=%s)",
             decision.target_user_id,
@@ -1166,27 +1288,28 @@ class HeartbeatLoop:
             metadata.get("is_dm"),
         )
 
-        try:
-            cooldown_metadata = {
-                "adapter_id": decision.target_adapter_id,
-                "destination_key": destination_key,
-                "channel_id": str(metadata.get("channel_id") or ""),
-                "is_dm": bool(metadata.get("is_dm", True)),
-            }
-            await self._memory.add_certain_record(
-                decision.target_user_id,
-                content,
-                _HEARTBEAT_USER_SENT_RECORD,
-                cooldown_metadata,
-            )
-            await self._memory.add_certain_record(
-                "__system__",
-                content,
-                _HEARTBEAT_DESTINATION_SENT_RECORD,
-                cooldown_metadata,
-            )
-        except Exception:
-            logger.exception("Failed to persist HEARTBEAT cooldown record")
+        if not reminder:
+            try:
+                cooldown_metadata = {
+                    "adapter_id": decision.target_adapter_id,
+                    "destination_key": destination_key,
+                    "channel_id": str(metadata.get("channel_id") or ""),
+                    "is_dm": bool(metadata.get("is_dm", True)),
+                }
+                await self._memory.add_certain_record(
+                    decision.target_user_id,
+                    content,
+                    _HEARTBEAT_USER_SENT_RECORD,
+                    cooldown_metadata,
+                )
+                await self._memory.add_certain_record(
+                    "__system__",
+                    content,
+                    _HEARTBEAT_DESTINATION_SENT_RECORD,
+                    cooldown_metadata,
+                )
+            except Exception:
+                logger.exception("Failed to persist HEARTBEAT cooldown record")
 
         # Record the proactive utterance in conversation memory so the next
         # user message has full context that "the assistant spoke first".
@@ -1204,6 +1327,7 @@ class HeartbeatLoop:
                 "Failed to record heartbeat message as assistant turn for user=%s",
                 decision.target_user_id,
             )
+        return True
 
     async def _heartbeat_cooldown_active(
         self,

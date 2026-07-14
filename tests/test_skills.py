@@ -8,6 +8,7 @@ import shutil
 import socket
 import sys
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1370,6 +1371,8 @@ class TestTimerSkill:
         assert result["record_id"] == "rec-001"
         assert result["message"] == "Check oven"
         assert "remind_at" in result
+        remind_at = datetime.fromisoformat(result["remind_at"])
+        assert remind_at.tzinfo is UTC
 
         # Verify memory was called correctly
         mock_memory.add_certain_record.assert_awaited_once()
@@ -1401,6 +1404,35 @@ class TestTimerSkill:
 
         assert result["status"] == "scheduled"
         mock_memory.add_certain_record.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        ("requested", "scheduled"),
+        [(-10, 1), (60 * 24 * 60, 60 * 24 * 30)],
+    )
+    async def test_timer_clamps_minutes(
+        self,
+        tmp_path: Path,
+        requested: int,
+        scheduled: int,
+    ) -> None:
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        _copy_builtin_skill(skills_dir, "timer")
+        registry = SkillRegistry(skills_dir)
+        registry.load_all()
+        skill = registry.get("timer")
+        assert skill is not None
+        mock_memory = AsyncMock()
+        mock_memory.add_certain_record.return_value = "rec-clamped"
+
+        result = await skill.execute(
+            {"user_id": "u1", "message": "Stretch", "minutes": requested},
+            memory=mock_memory,
+        )
+
+        assert result["minutes"] == scheduled
+        assert result["clamped"] is True
+        assert str(requested) in result["clamp_note"]
 
     async def test_boolean_parameter_coercion(self) -> None:
         """boolean parameters accept common string values before execution."""

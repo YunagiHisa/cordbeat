@@ -70,6 +70,22 @@ class TestReactContinuationPrompt:
         assert "This is the final tool step." in result
         assert "Do not emit any [SKILL: ...] tags." in result
         assert "untrusted external data" in result
+        assert "only the content and fields actually returned as confirmed" in result
+        assert "watched" in result
+
+    def test_non_final_result_preserves_evidence_boundary(self) -> None:
+        result = build_react_continuation_prompt(
+            [
+                ToolCallResult(
+                    "fetch_url",
+                    {"url": "https://example.test/video"},
+                    '{"title": "Why do people greet each other?"}',
+                )
+            ]
+        )
+
+        assert "only the content and fields actually returned as confirmed" in result
+        assert "do not imply that you read, watched, heard, or inspected" in result
 
     def test_escapes_tool_response_close_tag_variants(self) -> None:
         result = build_react_continuation_prompt(
@@ -155,6 +171,16 @@ class TestToolSystemPrompt:
         result = build_tool_system_prompt("- web_search: Search")
         assert "Grounding rule" in result
         assert "VERIFIED ACTIONS" in result
+
+    def test_tool_prompt_distinguishes_title_transcript_and_missing_content(
+        self,
+    ) -> None:
+        result = build_tool_system_prompt("- fetch_url: Fetch")
+
+        assert "A page or video title does not verify the body or video" in result
+        assert "subtitles or a transcript do not verify" in result
+        assert "phrase a follow-up as if you consumed it" in result
+        assert "without adding rigid labels" in result
 
 
 class TestBuildSoulSystemPrompt:
@@ -309,6 +335,21 @@ class TestBuildSoulSystemPrompt:
         result = build_soul_system_prompt(snap)
         assert "Operational honesty" in result
         assert "VERIFIED ACTIONS" in result
+
+    def test_evidence_scope_does_not_smooth_over_unavailable_content(self) -> None:
+        snap = {
+            "name": "TestBot",
+            "traits": ["curious"],
+            "emotion": {"primary": "calm", "intensity": 0.5},
+            "immutable_rules": [],
+        }
+
+        result = build_soul_system_prompt(snap)
+
+        assert "A title verifies only the title" in result
+        assert "fetched page text does not verify unseen video" in result
+        assert "Do not smoothly fill gaps" in result
+        assert "Do not add mechanical 'verified' or 'inference' labels" in result
 
     def test_temporal_grounding_scopes_transient_states(self) -> None:
         snap = {

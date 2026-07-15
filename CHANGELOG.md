@@ -36,6 +36,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Evidence-bounded tool responses.** Replies now distinguish the exact scope
+  returned by tools (such as titles, snippets, metadata, transcripts, and page
+  text) from inference or unavailable media, without forcing mechanical labels.
 - **Interaction versus context gaps.** Reunion language now follows the user's
   latest interaction across scopes, while a DM or channel's own idle interval
   is used only to judge whether its previous topic remains active.

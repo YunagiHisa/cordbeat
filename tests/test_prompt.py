@@ -15,6 +15,7 @@ from cordbeat.ai.prompt import (
     build_react_continuation_prompt,
     build_soul_system_prompt,
     build_tool_system_prompt,
+    emotion_expression_guide,
     format_skill_params_for_display,
     sanitize,
     sanitize_tool_artifacts,
@@ -184,6 +185,19 @@ class TestToolSystemPrompt:
 
 
 class TestBuildSoulSystemPrompt:
+    def test_shared_emotion_guide_matches_soul_prompt(self) -> None:
+        snap = {
+            "name": "TestBot",
+            "traits": ["curious"],
+            "emotion": {"primary": "excitement", "intensity": 0.9},
+            "immutable_rules": [],
+        }
+
+        guide = emotion_expression_guide(snap, "full")
+
+        assert "enthusiasm come through" in guide
+        assert guide in build_soul_system_prompt(snap, emotion_style="full")
+
     def test_includes_name_and_traits(self) -> None:
         snap = {
             "name": "TestBot",

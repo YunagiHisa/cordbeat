@@ -108,6 +108,8 @@ class TestLoadConfig:
             "  proactive_user_cooldown_minutes: 720\n"
             "  proactive_destination_cooldown_minutes: 180\n"
             "  max_proactive_messages_per_tick: 2\n"
+            "  discovery_share_cooldown_minutes: 120\n"
+            "  max_discovery_shares_per_day: 2\n"
             "  self_review_interval_ticks: 4\n",
             encoding="utf-8",
         )
@@ -117,7 +119,28 @@ class TestLoadConfig:
         assert config.heartbeat.proactive_user_cooldown_minutes == 720
         assert config.heartbeat.proactive_destination_cooldown_minutes == 180
         assert config.heartbeat.max_proactive_messages_per_tick == 2
+        assert config.heartbeat.discovery_share_cooldown_minutes == 120
+        assert config.heartbeat.max_discovery_shares_per_day == 2
         assert config.heartbeat.self_review_interval_ticks == 4
+
+    def test_negative_discovery_share_limits_fail_soft(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "heartbeat:\n"
+            "  discovery_share_cooldown_minutes: -10\n"
+            "  max_discovery_shares_per_day: -2\n",
+            encoding="utf-8",
+        )
+
+        with caplog.at_level(logging.WARNING):
+            config = load_config(cfg_file)
+
+        assert config.heartbeat.discovery_share_cooldown_minutes == 0
+        assert config.heartbeat.max_discovery_shares_per_day == 0
+        assert "discovery_share_cooldown_minutes" in caplog.text
+        assert "max_discovery_shares_per_day" in caplog.text
 
     def test_memory_config(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.yaml"

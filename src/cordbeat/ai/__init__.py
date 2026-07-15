@@ -17,6 +17,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "MemoryExtractor": ("cordbeat.ai.extraction", "MemoryExtractor"),
     "build_context": ("cordbeat.ai.prompt", "build_context"),
     "build_soul_system_prompt": ("cordbeat.ai.prompt", "build_soul_system_prompt"),
+    "emotion_expression_guide": (
+        "cordbeat.ai.prompt",
+        "emotion_expression_guide",
+    ),
     "sanitize": ("cordbeat.ai.prompt", "sanitize"),
     "STTBackend": ("cordbeat.ai.stt", "STTBackend"),
     "create_stt_backend": ("cordbeat.ai.stt", "create_stt_backend"),

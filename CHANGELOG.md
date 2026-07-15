@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Grounded discovery sharing (expression E5).** HEARTBEAT can now turn a
+  successful, user-scoped skill result into a short emotion-aware message using
+  only that result as generation context. Shares have a separate per-user
+  cooldown and UTC daily cap, while retaining routing, DM-policy, and content
+  safety gates; setting the daily cap to zero disables the feature.
 - **Grounded same-server continuity.** Public Discord channels automatically
   contribute source-linked decisions, schedules, and announcements to isolated
   server indexes. Related notes are injected three at a time within that server

@@ -129,7 +129,7 @@ async def memory(tmp_path: Path) -> MemoryStore:
 @pytest.fixture
 def mock_ai() -> AsyncMock:
     ai = AsyncMock()
-    ai.generate = AsyncMock(return_value="test")
+    ai.generate = AsyncMock(return_value="SKIP")
     ai.generate_json = AsyncMock(
         return_value={
             "action": "none",
@@ -1255,6 +1255,218 @@ class TestSkillExecution:
 # ── Sleep phase error handling ────────────────────────────────────────
 
 
+class TestDiscoverySharing:
+    @staticmethod
+    def _register_skill(skills: SkillRegistry, result: dict[str, Any]) -> None:
+        skills._skills["discover"] = Skill(
+            meta=SkillMeta(
+                name="discover",
+                description="Find something",
+                usage="discover",
+                safety_level=SafetyLevel.SAFE,
+            ),
+            _test_callable=AsyncMock(return_value=result),
+        )
+
+    @staticmethod
+    def _decision(user_id: str = "u1") -> HeartbeatDecision:
+        return HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="discover",
+            skill_params={"topic": "greetings"},
+            target_user_id=user_id,
+            target_adapter_id="discord",
+        )
+
+    async def test_successful_result_is_generated_sent_and_recorded(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.link_platform("u1", "discord", "snowflake-1")
+        await memory.add_message(
+            "u1", "user", "PRIVATE HISTORY MUST NOT APPEAR", "discord"
+        )
+        result = {
+            "title": "Why people greet each other",
+            "finding": "Greetings can regulate social distance.",
+        }
+        self._register_skill(skills, result)
+        mock_ai.generate.return_value = "This finding about greetings was neat."
+
+        await heartbeat._execute_skill(self._decision())
+
+        mock_ai.generate.assert_awaited_once()
+        prompt = mock_ai.generate.await_args.kwargs["prompt"]
+        system = mock_ai.generate.await_args.kwargs["system"]
+        assert json.dumps(result, ensure_ascii=False) in prompt
+        assert "PRIVATE HISTORY MUST NOT APPEAR" not in prompt
+        assert "ONLY in the skill result" in system
+        assert "Current emotion:" in system
+        mock_gateway.send_to_adapter.assert_awaited_once()
+        _, sent = mock_gateway.send_to_adapter.await_args.args
+        assert sent.content == "This finding about greetings was neat."
+
+        shares = await memory.get_certain_records(
+            "u1", record_type="discovery_share_sent"
+        )
+        skill_results = await memory.get_certain_records(
+            "u1", record_type="heartbeat_skill_result"
+        )
+        assert len(shares) == 1
+        share_metadata = json.loads(shares[0]["metadata"])
+        assert share_metadata["skill_name"] == "discover"
+        assert share_metadata["source_record"] == skill_results[0]["id"]
+
+    async def test_skip_response_does_not_send_or_record(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        self._register_skill(skills, {"finding": "small update"})
+        mock_ai.generate.return_value = "  skip  "
+
+        await heartbeat._execute_skill(self._decision())
+
+        mock_gateway.send_to_adapter.assert_not_awaited()
+        assert await memory.get_certain_records(
+            "u1", record_type="discovery_share_sent"
+        ) == []
+
+    async def test_send_failure_is_not_retried_or_recorded_as_skill_error(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        self._register_skill(skills, {"finding": "grounded detail"})
+        mock_ai.generate.return_value = "Worth sharing"
+        mock_gateway.send_to_adapter.side_effect = RuntimeError("offline")
+
+        await heartbeat._execute_skill(self._decision())
+
+        mock_gateway.send_to_adapter.assert_awaited_once()
+        assert await memory.get_certain_records(
+            "u1", record_type="heartbeat_skill_error"
+        ) == []
+        assert await memory.get_certain_records(
+            "u1", record_type="discovery_share_sent"
+        ) == []
+
+    @pytest.mark.parametrize(
+        ("result", "user_id", "daily_limit"),
+        [
+            ({"error": "failed"}, "u1", 3),
+            ({"finding": "private maintenance"}, "__system__", 3),
+            ({"finding": "disabled"}, "u1", 0),
+        ],
+    )
+    async def test_ineligible_results_skip_generation(
+        self,
+        heartbeat: HeartbeatLoop,
+        mock_ai: AsyncMock,
+        result: dict[str, Any],
+        user_id: str,
+        daily_limit: int,
+    ) -> None:
+        heartbeat._config.max_discovery_shares_per_day = daily_limit
+
+        await heartbeat._maybe_share_discovery(
+            self._decision(user_id), result, "source-1"
+        )
+
+        mock_ai.generate.assert_not_awaited()
+
+    async def test_discovery_bypasses_normal_proactive_cooldowns(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.link_platform("u1", "discord", "snowflake-1")
+        await memory.add_certain_record(
+            "u1", "normal proactive", "heartbeat_user_sent"
+        )
+        await memory.add_certain_record(
+            "__system__",
+            "normal destination",
+            "heartbeat_destination_sent",
+            {"destination_key": "discord:user:snowflake-1"},
+        )
+        heartbeat._proactive_messages_sent_this_tick = 1
+        share = HeartbeatDecision(
+            action=HeartbeatAction.MESSAGE,
+            content="Grounded finding",
+            target_user_id="u1",
+            target_adapter_id="discord",
+            skill_name="discover",
+            skill_params={"source_record": "source-1"},
+        )
+
+        sent = await heartbeat._send_heartbeat_message(
+            share, discovery_share=True
+        )
+
+        assert sent is True
+        mock_gateway.send_to_adapter.assert_awaited_once()
+
+    async def test_discovery_cooldown_blocks_recent_share(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.add_certain_record(
+            "u1", "recent discovery", "discovery_share_sent"
+        )
+
+        sent = await heartbeat._send_heartbeat_message(
+            HeartbeatDecision(
+                action=HeartbeatAction.MESSAGE,
+                content="Another finding",
+                target_user_id="u1",
+                target_adapter_id="discord",
+            ),
+            discovery_share=True,
+        )
+
+        assert sent is False
+        mock_gateway.send_to_adapter.assert_not_awaited()
+
+    async def test_daily_utc_limit_blocks_fourth_share(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        heartbeat._config.discovery_share_cooldown_minutes = 0
+        for index in range(3):
+            await memory.add_certain_record(
+                "u1", f"discovery {index}", "discovery_share_sent"
+            )
+
+        sent = await heartbeat._send_heartbeat_message(
+            HeartbeatDecision(
+                action=HeartbeatAction.MESSAGE,
+                content="Fourth finding",
+                target_user_id="u1",
+                target_adapter_id="discord",
+            ),
+            discovery_share=True,
+        )
+
+        assert sent is False
+        mock_gateway.send_to_adapter.assert_not_awaited()
+
+
 class TestSleepPhaseErrors:
     async def test_diary_error_does_not_stop_sleep(
         self,
@@ -1756,6 +1968,10 @@ class TestLayer2Evaluate:
         system = mock_ai.generate_json.await_args.kwargs["system"]
         assert "Do not revive a completed topic" in system
         assert "If uncertain, choose" in system
+        assert "claim that you just performed an action" not in system
+        assert "You may share a discovery with the user" in system
+        assert "Never add details that are not in the recorded result" in system
+        assert "results worth sharing may be" in system
 
     async def test_evaluate_fallback_on_validation_failure(
         self,

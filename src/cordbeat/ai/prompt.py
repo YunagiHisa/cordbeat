@@ -207,28 +207,10 @@ def _familiarity_tone_hint(level: str) -> str:
     )
 
 
-def build_soul_system_prompt(
-    soul_snap: dict[str, Any],
-    *,
-    timezone_name: str = "UTC",
-    user_message_count: int | None = None,
-    emotion_style: str = "full",
+def emotion_expression_guide(
+    soul_snap: dict[str, Any], emotion_style: str = "full"
 ) -> str:
-    """Build a system prompt from a soul snapshot.
-
-    Args:
-        soul_snap: Snapshot dict from ``Soul.snapshot()``.
-        timezone_name: IANA timezone name used to format the current datetime
-            (e.g. ``"Asia/Tokyo"``).  Falls back to UTC if the name is unknown.
-    """
-    # --- Current date/time ---
-    try:
-        tz: ZoneInfo | UTC = ZoneInfo(timezone_name)  # type: ignore[valid-type]
-    except (ZoneInfoNotFoundError, ValueError):
-        tz = UTC
-    now = datetime.now(tz=tz)
-    datetime_str = now.strftime("%Y-%m-%d %H:%M %Z")  # e.g. "2026-05-04 09:30 JST"
-
+    """Translate the current Soul emotion into shared expression guidance."""
     primary_emotion = str(soul_snap["emotion"]["primary"])
     primary_intensity = float(soul_snap["emotion"]["intensity"])
     emotion_desc = (
@@ -285,6 +267,31 @@ def build_soul_system_prompt(
             f", secondary: {soul_snap['emotion']['secondary']} "
             f"(intensity: {float(soul_snap['emotion']['secondary_intensity']):.2f})"
         )
+    return emotion_desc
+
+
+def build_soul_system_prompt(
+    soul_snap: dict[str, Any],
+    *,
+    timezone_name: str = "UTC",
+    user_message_count: int | None = None,
+    emotion_style: str = "full",
+) -> str:
+    """Build a system prompt from a soul snapshot.
+
+    Args:
+        soul_snap: Snapshot dict from ``Soul.snapshot()``.
+        timezone_name: IANA timezone name used to format the current datetime
+            (e.g. ``"Asia/Tokyo"``).  Falls back to UTC if the name is unknown.
+    """
+    # --- Current date/time ---
+    try:
+        tz: ZoneInfo | UTC = ZoneInfo(timezone_name)  # type: ignore[valid-type]
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = UTC
+    now = datetime.now(tz=tz)
+    datetime_str = now.strftime("%Y-%m-%d %H:%M %Z")  # e.g. "2026-05-04 09:30 JST"
+    emotion_desc = emotion_expression_guide(soul_snap, emotion_style)
 
     prompt = (
         f"You are {soul_snap['name']}. "

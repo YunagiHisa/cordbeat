@@ -135,6 +135,8 @@ heartbeat:
   default_interval_minutes: 60
   min_interval_minutes: 5
   max_interval_minutes: 1440
+  discovery_share_cooldown_minutes: 240  # minimum gap between grounded discoveries per user
+  max_discovery_shares_per_day: 3        # 0 disables discovery sharing
   max_actions_per_tick: 3  # shared ActionBudget cap for heartbeat actions
   quiet_hours_start: "01:00"
   quiet_hours_end: "07:00"

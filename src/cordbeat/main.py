@@ -306,6 +306,7 @@ async def main(
         gateway=gateway,
         queue=queue,
         memory_config=config.memory,
+        soul_config=config.soul,
         adapters_options={name: dict(a.options) for name, a in config.adapters.items()},
     )
 

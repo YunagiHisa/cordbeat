@@ -132,6 +132,8 @@ heartbeat:
   proactive_user_cooldown_minutes: 1440        # max one proactive message/user/day
   proactive_destination_cooldown_minutes: 360  # max one proactive message/channel/6h
   max_proactive_messages_per_tick: 1           # prevent bursts to shared channels
+  discovery_share_cooldown_minutes: 240        # minimum grounded-discovery gap/user
+  max_discovery_shares_per_day: 3              # daily UTC cap; 0 disables sharing
   max_actions_per_tick: 3                      # shared ActionBudget cap per tick
   quiet_hours_start: "01:00"
   quiet_hours_end: "07:00"

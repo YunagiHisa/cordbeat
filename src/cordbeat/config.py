@@ -85,6 +85,8 @@ class HeartbeatConfig:
     proactive_user_cooldown_minutes: int = 1440
     proactive_destination_cooldown_minutes: int = 360
     max_proactive_messages_per_tick: int = 1
+    discovery_share_cooldown_minutes: int = 240
+    max_discovery_shares_per_day: int = 3
     max_actions_per_tick: int = 3
     self_review_interval_ticks: int = 6
     quiet_hours_start: str = "01:00"
@@ -655,6 +657,20 @@ def load_config(path: str | Path) -> Config:
         HeartbeatConfig,
         raw.get("heartbeat", {}),
     )
+    if heartbeat.discovery_share_cooldown_minutes < 0:
+        logging.getLogger(__name__).warning(
+            "Invalid negative heartbeat.discovery_share_cooldown_minutes %r; "
+            "disabling the discovery share cooldown",
+            heartbeat.discovery_share_cooldown_minutes,
+        )
+        heartbeat.discovery_share_cooldown_minutes = 0
+    if heartbeat.max_discovery_shares_per_day < 0:
+        logging.getLogger(__name__).warning(
+            "Invalid negative heartbeat.max_discovery_shares_per_day %r; "
+            "disabling discovery sharing",
+            heartbeat.max_discovery_shares_per_day,
+        )
+        heartbeat.max_discovery_shares_per_day = 0
     memory = _build_dataclass(
         MemoryConfig,
         raw.get("memory", {}),

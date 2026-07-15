@@ -75,6 +75,30 @@ Do NOT fabricate or assume information.
 Respond in valid JSON only.
 """
 
+_SERVER_SHARED_NOTE_PROMPT = """\
+Classify this single message from an explicitly shared public server channel.
+
+Create a shared note only when the message explicitly states one of:
+- decision: a clear decision or settled change
+- schedule: a concrete planned date or time
+- announcement: an explicit server-relevant announcement
+
+Do not create notes for questions, requests, opinions, jokes, casual chat,
+personal details, emotions, temporary activities, guesses, or implications.
+The evidence must be an exact contiguous excerpt from the message. The summary
+must contain no detail that is absent from that evidence.
+
+Message:
+{user_message}
+
+Respond in JSON only:
+{{
+  "kind": "decision | schedule | announcement | none",
+  "summary": "one grounded sentence, or empty",
+  "evidence": "exact excerpt, or empty"
+}}
+"""
+
 
 class MemoryExtractor:
     """AI-driven extraction of emotions, facts, and episodes."""
@@ -130,7 +154,41 @@ class MemoryExtractor:
             logger.debug("Recall keyword extraction parse failed, skipping")
         except Exception:
             logger.debug("Recall keyword extraction failed, skipping")
+            return []
         return []
+
+    async def extract_server_shared_note(
+        self, user_message: str
+    ) -> dict[str, str] | None:
+        """Extract one source-grounded server note from an allowed message."""
+
+        message = user_message.strip()[:2000]
+        if not message:
+            return None
+        try:
+            with internal_context_scope():
+                raw = await self._ai.generate(
+                    prompt=_SERVER_SHARED_NOTE_PROMPT.format(user_message=message),
+                    system="/no_think\nRespond in valid JSON only.",
+                    temperature=self._memory_config.extraction_temperature,
+                )
+            data = parse_json_object(raw)
+        except (json.JSONDecodeError, KeyError, ValueError):
+            logger.debug("Server shared-note extraction parse failed, skipping")
+            return None
+        except Exception:
+            logger.debug("Server shared-note extraction failed, skipping")
+            return None
+
+        kind = str(data.get("kind") or "").strip().lower()
+        summary = str(data.get("summary") or "").strip()[:300]
+        evidence = str(data.get("evidence") or "").strip()[:500]
+        if kind not in {"decision", "schedule", "announcement"}:
+            return None
+        if not summary or not evidence or evidence not in message:
+            logger.debug("Server shared-note evidence validation failed, skipping")
+            return None
+        return {"kind": kind, "summary": summary, "evidence": evidence}
 
     async def infer_and_update_emotion(
         self, user_id: str, user_message: str, ai_response: str

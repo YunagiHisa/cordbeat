@@ -426,7 +426,10 @@ class TestBuildContext:
 
         assert "[2026-07-14 23:55 JST] User: Message A" in result
         assert "User sent this message at: 2026-07-15 00:05 JST" in result
-        assert "Elapsed since the previous user message: 10 minutes" in result
+        assert (
+            "Elapsed since the previous user message in this conversation "
+            "context: 10 minutes"
+        ) in result
 
     def test_delayed_media_is_scoped_to_original_send_time(self) -> None:
         result = build_context(
@@ -449,7 +452,10 @@ class TestBuildContext:
 
         assert "[2026-07-14 19:10 JST] User: Dinner" in result
         assert "visible at the parent message's recorded time only" in result
-        assert "Elapsed since the previous user message: 14 hours 50 minutes" in result
+        assert (
+            "Elapsed since the previous user message in this conversation "
+            "context: 14 hours 50 minutes"
+        ) in result
 
     def test_current_message_shows_delayed_platform_delivery(self) -> None:
         result = build_context(
@@ -461,6 +467,54 @@ class TestBuildContext:
 
         assert "User sent this message at: 2026-07-14 23:55 JST" in result
         assert "CordBeat received it at: 2026-07-15 08:10 JST" in result
+
+    def test_global_and_context_intervals_are_distinct(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            history=[
+                {
+                    "role": "user",
+                    "content": "Old DM topic",
+                    "created_at": "2026-07-13T00:00:00+00:00",
+                }
+            ],
+            previous_interaction_at=datetime(2026, 7, 14, 23, 50, tzinfo=UTC),
+            current_message_at=datetime(2026, 7, 15, 0, 0, tzinfo=UTC),
+            current_received_at=datetime(2026, 7, 15, 0, 0, tzinfo=UTC),
+        )
+
+        assert "Elapsed since any interaction: 10 minutes" in result
+        assert (
+            "Elapsed since the previous user message in this conversation "
+            "context: 2 days"
+        ) in result
+        assert "Use the any-interaction interval for reunion" in result
+
+    def test_grounded_server_notes_are_bounded_and_sourced(self) -> None:
+        notes = [
+            {
+                "content": f"Decision {index}",
+                "metadata": {
+                    "evidence": f"Evidence {index}",
+                    "channel_name": "general",
+                    "source_created_at": "2026-07-15T00:00:00+00:00",
+                },
+            }
+            for index in range(4)
+        ]
+
+        result = build_context(
+            user_display_name="Alice",
+            server_shared_notes=notes,
+            timezone_name="Asia/Tokyo",
+        )
+
+        assert "[BEGIN GROUNDED SERVER NOTES]" in result
+        assert "Summary: Decision 0" in result
+        assert "evidence: Evidence 0" in result
+        assert "#general at 2026-07-15 09:00 JST" in result
+        assert "Decision 2" in result
+        assert "Decision 3" not in result
 
     def test_verified_actions_are_included(self) -> None:
         result = build_context(

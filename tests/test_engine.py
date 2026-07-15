@@ -106,6 +106,211 @@ def engine(
 
 
 class TestCoreEngine:
+    async def test_server_shared_note_scope_requires_public_non_excluded_channel(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        engine = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=skills,
+            gateway=mock_gateway,
+            adapters_options={
+                "discord": {"shared_context_exclude_channels": ["excluded"]}
+            },
+        )
+        allowed = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="u1",
+            content="Release decision",
+            metadata={
+                "guild_id": "g1",
+                "guild_name": "Server One",
+                "channel_id": "allowed",
+                "channel_name": "general",
+                "is_dm": False,
+                "channel_is_public": True,
+            },
+        )
+        excluded = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="u1",
+            content="Excluded",
+            metadata={
+                "guild_id": "g1",
+                "channel_id": "excluded",
+                "is_dm": False,
+                "channel_is_public": True,
+            },
+        )
+
+        assert engine._server_shared_store_scope(allowed) == (
+            "g1",
+            "Server One",
+            "allowed",
+            "general",
+        )
+        assert engine._server_shared_store_scope(excluded) is None
+
+    async def test_stores_grounded_note_under_server_specific_vector_key(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        engine = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=skills,
+            gateway=mock_gateway,
+        )
+        engine._extractor.extract_server_shared_note = AsyncMock(
+            return_value={
+                "kind": "decision",
+                "summary": "The release moved to Friday.",
+                "evidence": "release moved to Friday",
+            }
+        )
+        memory.add_semantic_memory = AsyncMock(return_value="note-id")  # type: ignore[method-assign]
+        message = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="u1",
+            content="The release moved to Friday.",
+            timestamp=datetime(2026, 7, 15, 0, 0, tzinfo=UTC),
+            metadata={
+                "guild_id": "g1",
+                "guild_name": "Server One",
+                "channel_id": "allowed",
+                "channel_name": "general",
+                "message_id": "m1",
+                "is_dm": False,
+                "channel_is_public": True,
+            },
+        )
+
+        await engine._store_server_shared_note("user-id", message, message.content)
+
+        entry = memory.add_semantic_memory.await_args.args[0]
+        assert entry.user_id == "__server_shared__:discord:g1"
+        assert entry.content == "The release moved to Friday."
+        assert entry.metadata["evidence"] == "release moved to Friday"
+        assert entry.metadata["source_message_id"] == "m1"
+        assert entry.metadata["guild_name"] == "Server One"
+
+    async def test_server_shared_note_lookup_is_bounded_and_dm_safe(
+        self,
+        mock_ai: AsyncMock,
+        soul: Soul,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        engine = CoreEngine(
+            ai=mock_ai,
+            soul=soul,
+            memory=memory,
+            skills=skills,
+            gateway=mock_gateway,
+        )
+        guild_one = [
+            {
+                "id": "g1-close",
+                "content": "Guild one close",
+                "distance": 0.1,
+                "metadata": {"server_shared_note": True},
+            },
+            {
+                "id": "g1-far",
+                "content": "Guild one far",
+                "distance": 0.7,
+                "metadata": {"server_shared_note": True},
+            },
+        ]
+        guild_two = [
+            {
+                "id": "g2-close",
+                "content": "Guild two close",
+                "distance": 0.2,
+                "metadata": {"server_shared_note": True},
+            },
+            {
+                "id": "g2-mid",
+                "content": "Guild two mid",
+                "distance": 0.3,
+                "metadata": {"server_shared_note": True},
+            },
+        ]
+        memory.search_semantic = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[guild_one, guild_one, guild_two]
+        )
+        allowed = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="u1",
+            content="Release",
+            metadata={
+                "guild_id": "g1",
+                "channel_id": "allowed",
+                "is_dm": False,
+                "channel_is_public": True,
+            },
+        )
+        dm = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="u1",
+            content="Release",
+            metadata={
+                "channel_id": "dm",
+                "is_dm": True,
+                "mutual_guild_ids": ["g1", "g2"],
+            },
+        )
+
+        server_notes = await engine._load_server_shared_notes(allowed)
+        dm_notes = await engine._load_server_shared_notes(dm)
+
+        assert [note["id"] for note in server_notes] == ["g1-close", "g1-far"]
+        assert [note["id"] for note in dm_notes] == [
+            "g1-close",
+            "g2-close",
+            "g2-mid",
+        ]
+        assert memory.search_semantic.await_count == 3
+
+    async def test_dm_never_contributes_server_shared_notes(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+    ) -> None:
+        memory.add_semantic_memory = AsyncMock(return_value="note-id")  # type: ignore[method-assign]
+        message = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="u1",
+            content="Private decision",
+            metadata={
+                "channel_id": "dm",
+                "is_dm": True,
+                "mutual_guild_ids": ["g1"],
+            },
+        )
+
+        await engine._store_server_shared_note("user-id", message, message.content)
+
+        memory.add_semantic_memory.assert_not_awaited()
+
     async def test_persists_platform_sent_and_core_received_times(
         self,
         engine: CoreEngine,

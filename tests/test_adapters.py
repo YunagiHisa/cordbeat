@@ -172,8 +172,32 @@ class TestDiscordAdapter:
         assert payload["platform_user_id"] == "123"
         assert payload["content"] == "Hello!"
         assert payload["timestamp"] == "2026-07-14T14:55:00+00:00"
+        assert payload["metadata"]["channel_is_public"] is True
         # User channel should be cached
         assert adapter._user_channels["123"] == 456
+
+    async def test_dm_includes_mutual_guild_ids_for_private_read_context(self) -> None:
+        from cordbeat.adapters.discord import DiscordAdapter
+
+        adapter = DiscordAdapter(AdapterConfig(options={"token": "test"}))
+        adapter._ws = AsyncMock()
+        guild = MagicMock(id=789)
+        guild.get_member.return_value = MagicMock()
+        adapter._bot = MagicMock(guilds=[guild])
+        message = MagicMock(
+            author=MagicMock(id=123, display_name="Alice"),
+            content="Hello privately",
+            channel=MagicMock(id=456),
+            guild=None,
+            created_at=datetime(2026, 7, 14, 14, 55, tzinfo=UTC),
+        )
+
+        await adapter._forward_to_core(message)
+
+        payload = json.loads(adapter._ws.send.call_args.args[0])
+        assert payload["metadata"]["is_dm"] is True
+        assert payload["metadata"]["mutual_guild_ids"] == ["789"]
+        assert payload["metadata"]["channel_is_public"] is False
 
     async def test_forward_to_core_includes_discord_reply_context(self) -> None:
         from cordbeat.adapters.discord import DiscordAdapter

@@ -79,6 +79,65 @@ class TestInferAndUpdateEmotion:
         assert snap["emotion"]["primary"] == "joy"
         assert "/no_think" not in mock_ai.generate.await_args.kwargs["system"]
 
+
+class TestServerSharedNoteExtraction:
+    async def test_accepts_exact_evidence_in_internal_scope(
+        self, extractor: MemoryExtractor, mock_ai: AsyncMock
+    ) -> None:
+        async def observe_scope(**_kwargs: object) -> str:
+            assert is_internal_context() is True
+            return json.dumps(
+                {
+                    "kind": "decision",
+                    "summary": "The release moved to Friday.",
+                    "evidence": "release moved to Friday",
+                }
+            )
+
+        mock_ai.generate = AsyncMock(side_effect=observe_scope)
+
+        note = await extractor.extract_server_shared_note(
+            "The release moved to Friday after review."
+        )
+
+        assert note == {
+            "kind": "decision",
+            "summary": "The release moved to Friday.",
+            "evidence": "release moved to Friday",
+        }
+        assert is_internal_context() is False
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"kind": "none", "summary": "", "evidence": ""},
+            {
+                "kind": "decision",
+                "summary": "A fabricated decision.",
+                "evidence": "words absent from the source",
+            },
+        ],
+    )
+    async def test_rejects_non_notes_and_ungrounded_evidence(
+        self,
+        extractor: MemoryExtractor,
+        mock_ai: AsyncMock,
+        payload: dict[str, str],
+    ) -> None:
+        mock_ai.generate = AsyncMock(return_value=json.dumps(payload))
+
+        assert await extractor.extract_server_shared_note("Casual conversation") is None
+
+    async def test_backend_failure_is_fail_soft(
+        self, extractor: MemoryExtractor, mock_ai: AsyncMock
+    ) -> None:
+        mock_ai.generate = AsyncMock(side_effect=RuntimeError("offline"))
+
+        assert await extractor.extract_server_shared_note("Release decided") is None
+
+
+class TestInferAndUpdateEmotionContinued:
+
     @pytest.mark.anyio
     async def test_accepts_fenced_json(
         self, extractor: MemoryExtractor, mock_ai: AsyncMock, soul: Soul

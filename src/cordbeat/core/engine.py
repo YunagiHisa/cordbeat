@@ -47,6 +47,8 @@ from cordbeat.memory.common import ensure_aware
 from cordbeat.memory.core import MemoryStore
 from cordbeat.models import (
     GatewayMessage,
+    MemoryEntry,
+    MemoryLayer,
     MessageType,
     ProposalStatus,
     ProposalType,
@@ -836,6 +838,123 @@ class CoreEngine:
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._post_process_lock = asyncio.Lock()
 
+    def _server_shared_enabled(self) -> bool:
+        value = self._adapters_options.get("discord", {}).get(
+            "shared_context_enabled", True
+        )
+        return bool(value)
+
+    def _server_shared_store_scope(
+        self, message: GatewayMessage
+    ) -> tuple[str, str, str, str] | None:
+        """Return a public server scope eligible to contribute shared notes."""
+
+        if message.adapter_id != "discord" or not self._server_shared_enabled():
+            return None
+        metadata = message.metadata or {}
+        guild_id = str(metadata.get("guild_id") or "")
+        channel_id = str(metadata.get("channel_id") or "")
+        if (
+            not guild_id
+            or not channel_id
+            or bool(metadata.get("is_dm", False))
+            or metadata.get("channel_is_public") is not True
+        ):
+            return None
+        raw_excluded = self._adapters_options.get("discord", {}).get(
+            "shared_context_exclude_channels", []
+        )
+        if not isinstance(raw_excluded, (list, tuple, set)):
+            return None
+        if channel_id in {str(value) for value in raw_excluded}:
+            return None
+        channel_name = str(metadata.get("channel_name") or channel_id)
+        guild_name = str(metadata.get("guild_name") or guild_id)
+        return guild_id, guild_name, channel_id, channel_name
+
+    def _server_shared_read_guild_ids(self, message: GatewayMessage) -> list[str]:
+        """Return isolated guild indexes readable from this server or DM turn."""
+
+        if message.adapter_id != "discord" or not self._server_shared_enabled():
+            return []
+        metadata = message.metadata or {}
+        if bool(metadata.get("is_dm", False)):
+            raw_ids = metadata.get("mutual_guild_ids", [])
+            if not isinstance(raw_ids, (list, tuple, set)):
+                return []
+            return list(dict.fromkeys(str(value) for value in raw_ids if value))
+        scope = self._server_shared_store_scope(message)
+        return [scope[0]] if scope is not None else []
+
+    @staticmethod
+    def _server_shared_memory_user_id(guild_id: str) -> str:
+        return f"__server_shared__:discord:{guild_id}"
+
+    async def _load_server_shared_notes(
+        self, message: GatewayMessage
+    ) -> list[dict[str, Any]]:
+        guild_ids = self._server_shared_read_guild_ids(message)
+        if not guild_ids or not message.content.strip():
+            return []
+        candidates: list[dict[str, Any]] = []
+        try:
+            for guild_id in guild_ids:
+                candidates.extend(
+                    await self._memory.search_semantic(
+                        self._server_shared_memory_user_id(guild_id),
+                        message.content,
+                        n_results=9,
+                    )
+                )
+        except Exception:
+            logger.debug("Server shared-note lookup failed", exc_info=True)
+            return []
+        relevant = [
+            note
+            for note in candidates
+            if note.get("metadata", {}).get("server_shared_note") is True
+            and float(note.get("distance", 999.0)) <= 0.8
+        ]
+        relevant.sort(key=lambda note: float(note.get("distance", 999.0)))
+        return relevant[:3]
+
+    async def _store_server_shared_note(
+        self,
+        user_id: str,
+        message: GatewayMessage,
+        stored_user_content: str,
+    ) -> None:
+        scope = self._server_shared_store_scope(message)
+        if scope is None:
+            return
+        guild_id, guild_name, channel_id, channel_name = scope
+        note = await self._extractor.extract_server_shared_note(stored_user_content)
+        if note is None:
+            return
+        metadata = message.metadata or {}
+        await self._memory.add_semantic_memory(
+            MemoryEntry(
+                id=uuid.uuid4().hex,
+                user_id=self._server_shared_memory_user_id(guild_id),
+                layer=MemoryLayer.SEMANTIC,
+                content=note["summary"],
+                created_at=ensure_aware(message.timestamp),
+                metadata={
+                    "server_shared_note": True,
+                    "kind": note["kind"],
+                    "evidence": note["evidence"],
+                    "guild_id": guild_id,
+                    "guild_name": guild_name,
+                    "channel_id": channel_id,
+                    "channel_name": channel_name,
+                    "source_message_id": str(metadata.get("message_id") or ""),
+                    "source_user_id": user_id,
+                    "source_author": str(metadata.get("display_name") or ""),
+                    "source_created_at": ensure_aware(message.timestamp).isoformat(),
+                },
+            )
+        )
+
     async def handle_message(self, message: GatewayMessage) -> None:
         """Handle a single incoming message from the queue."""
         if message.type == MessageType.LINK_REQUEST:
@@ -1236,6 +1355,10 @@ class CoreEngine:
         if not shared_voice:
             verified_actions = await self._load_verified_actions(user_id)
 
+        server_shared_notes = (
+            [] if shared_voice else await self._load_server_shared_notes(message)
+        )
+
         days_since_last_talk: int | None = None
         absence_note_days = self._soul_config.absence_note_days
         if (
@@ -1269,6 +1392,8 @@ class CoreEngine:
             current_message_at=ensure_aware(message.timestamp),
             current_received_at=ensure_aware(message.received_at),
             timezone_name=self._timezone_name,
+            previous_interaction_at=last_talked_at_before_update,
+            server_shared_notes=server_shared_notes or None,
         )
 
         safe_content = sanitize(
@@ -1511,6 +1636,9 @@ class CoreEngine:
                 )
                 await self._extractor.extract_and_store_memories(
                     user_id, user.display_name, stored_user_content, stored_response
+                )
+                await self._store_server_shared_note(
+                    user_id, message, stored_user_content
                 )
         except Exception:
             logger.exception("Background post-processing failed for user %s", user_id)

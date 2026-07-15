@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Grounded same-server continuity.** Public Discord channels automatically
+  contribute source-linked decisions, schedules, and announcements to isolated
+  server indexes. Related notes are injected three at a time within that server
+  or a mutual-member DM; DM content is never published back to a server.
 - **Expression layer stage 1.** Conversation prompts now apply emotion-aware
   tone guidance (`soul.emotion_style`, default `full`) and provide a factual
   elapsed-days note after an absence (`soul.absence_note_days`, default `2`).
@@ -32,6 +36,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Interaction versus context gaps.** Reunion language now follows the user's
+  latest interaction across scopes, while a DM or channel's own idle interval
+  is used only to judge whether its previous topic remains active.
 - **Conversation temporal grounding.** Platform send times now survive adapter
   delivery and conversation persistence separately from Core receipt times.
   Prompts timestamp history and media observations, show exact elapsed time,

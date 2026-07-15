@@ -887,6 +887,29 @@ class DiscordAdapter(RetryableConnection):
             if isinstance(platform_created_at, datetime)
             else datetime.now(tz=UTC)
         )
+        guild = message.guild
+        channel = message.channel
+        channel_is_public = False
+        mutual_guild_ids: list[str] = []
+        if guild is not None:
+            try:
+                channel_type = str(getattr(channel, "type", ""))
+                channel_is_public = (
+                    channel_type != "private_thread"
+                    and bool(channel.permissions_for(guild.default_role).view_channel)
+                )
+            except Exception:
+                logger.debug("Could not determine Discord channel visibility")
+        elif self._bot is not None:
+            try:
+                mutual_guild_ids = [
+                    str(candidate.id)
+                    for candidate in self._bot.guilds
+                    if candidate.get_member(message.author.id) is not None
+                ]
+            except Exception:
+                logger.debug("Could not determine mutual Discord guilds")
+
         payload = json.dumps(
             {
                 "type": "message",
@@ -898,8 +921,13 @@ class DiscordAdapter(RetryableConnection):
                 "is_voice": is_voice,
                 "metadata": {
                     "channel_id": str(message.channel.id),
+                    "channel_name": str(getattr(message.channel, "name", "") or ""),
+                    "message_id": str(getattr(message, "id", "") or ""),
                     "guild_id": str(message.guild.id) if message.guild else "",
+                    "guild_name": str(getattr(message.guild, "name", "") or ""),
                     "is_dm": message.guild is None,
+                    "channel_is_public": channel_is_public,
+                    "mutual_guild_ids": mutual_guild_ids,
                     "display_name": message.author.display_name,
                     **({"reply_context": reply_context} if reply_context else {}),
                 },

@@ -32,6 +32,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Conversation temporal grounding.** Platform send times now survive adapter
+  delivery and conversation persistence separately from Core receipt times.
+  Prompts timestamp history and media observations, show exact elapsed time,
+  and avoid carrying short-lived states forward without evidence.
 - **Draw DSL coordinate and color normalization.** RECT and ELLIPSE must use
   forward corner coordinates (`x2 > x1`, `y2 > y1`), rejecting the
   width/height-style boxes small models emit, and six-digit hex colors at

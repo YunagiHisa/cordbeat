@@ -23,11 +23,15 @@ class ConversationStore:
         adapter_id: str = "",
         channel_id: str = "",
         is_dm: bool = True,
+        created_at: datetime | None = None,
+        received_at: datetime | None = None,
     ) -> int:
+        stored_created_at = created_at or datetime.now(tz=UTC)
+        stored_received_at = received_at or stored_created_at
         cursor = await self._db.execute(
             "INSERT INTO conversation_messages "
-            "(user_id, role, content, adapter_id, channel_id, is_dm, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(user_id, role, content, adapter_id, channel_id, is_dm, created_at, "
+            "received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 user_id,
                 role,
@@ -35,7 +39,8 @@ class ConversationStore:
                 adapter_id,
                 channel_id,
                 1 if is_dm else 0,
-                datetime.now(tz=UTC).isoformat(),
+                stored_created_at.isoformat(),
+                stored_received_at.isoformat(),
             ),
         )
         await self._db.commit()
@@ -102,8 +107,8 @@ class ConversationStore:
         where_clause = " AND ".join(conditions)
         params.append(limit)
         cursor = await self._db.execute(
-            "SELECT role, content FROM ("
-            "  SELECT role, content, created_at "
+            "SELECT role, content, created_at, received_at FROM ("
+            "  SELECT role, content, created_at, received_at "
             "  FROM conversation_messages "
             f"  WHERE {where_clause} "
             "  ORDER BY created_at DESC LIMIT ?"
@@ -111,7 +116,15 @@ class ConversationStore:
             tuple(params),
         )
         rows = await cursor.fetchall()
-        return [{"role": row["role"], "content": row["content"]} for row in rows]
+        return [
+            {
+                "role": row["role"],
+                "content": row["content"],
+                "created_at": row["created_at"],
+                "received_at": row["received_at"],
+            }
+            for row in rows
+        ]
 
     async def get_recent_messages_with_media(
         self,
@@ -134,8 +147,9 @@ class ConversationStore:
             params.append(adapter_id)
         params.append(limit)
         cursor = await self._db.execute(
-            "SELECT id, role, content FROM ("
-            "SELECT id, role, content, created_at FROM conversation_messages "
+            "SELECT id, role, content, created_at, received_at FROM ("
+            "SELECT id, role, content, created_at, received_at "
+            "FROM conversation_messages "
             f"WHERE {' AND '.join(conditions)} ORDER BY created_at DESC LIMIT ?) "
             "sub ORDER BY created_at ASC",
             tuple(params),
@@ -154,6 +168,8 @@ class ConversationStore:
                 {
                     "role": row["role"],
                     "content": row["content"],
+                    "created_at": row["created_at"],
+                    "received_at": row["received_at"],
                     "media_observations": [
                         dict(media_row) for media_row in await media_cursor.fetchall()
                     ],

@@ -106,6 +106,35 @@ def engine(
 
 
 class TestCoreEngine:
+    async def test_persists_platform_sent_and_core_received_times(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+    ) -> None:
+        sent_at = datetime(2026, 7, 14, 14, 55, tzinfo=UTC)
+        received_at = datetime(2026, 7, 14, 23, 10, tzinfo=UTC)
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="test",
+            platform_user_id="timed-user",
+            content="Late delivery",
+            timestamp=sent_at,
+            received_at=received_at,
+        )
+
+        await engine.handle_message(msg)
+        await engine.drain()
+
+        user_id = await memory.resolve_user("test", "timed-user")
+        assert user_id is not None
+        user_message = next(
+            message
+            for message in await memory.get_recent_messages(user_id)
+            if message["role"] == "user"
+        )
+        assert user_message["created_at"] == sent_at.isoformat()
+        assert user_message["received_at"] == received_at.isoformat()
+
     async def test_emotion_style_config_is_wired_to_conversation_prompt(
         self,
         soul: Soul,

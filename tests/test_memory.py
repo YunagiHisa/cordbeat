@@ -160,6 +160,23 @@ class TestConversationHistory:
         assert msgs[0]["content"] == "Hello!"
         assert msgs[1]["role"] == "assistant"
 
+    async def test_preserves_sent_and_received_times(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        sent_at = datetime(2026, 7, 14, 14, 55, tzinfo=UTC)
+        received_at = datetime(2026, 7, 14, 23, 10, tzinfo=UTC)
+
+        await memory.add_message(
+            "u1",
+            "user",
+            "Late delivery",
+            created_at=sent_at,
+            received_at=received_at,
+        )
+
+        message = (await memory.get_recent_messages("u1"))[0]
+        assert message["created_at"] == sent_at.isoformat()
+        assert message["received_at"] == received_at.isoformat()
+
     async def test_messages_chronological_order(self, memory: MemoryStore) -> None:
         await memory.get_or_create_user("u1", "Test")
         for i in range(5):

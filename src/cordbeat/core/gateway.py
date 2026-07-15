@@ -390,6 +390,7 @@ class GatewayServer:
                         timestamp=datetime.fromisoformat(msg_data["timestamp"])
                         if "timestamp" in msg_data
                         else datetime.now(tz=UTC),
+                        received_at=datetime.now(tz=UTC),
                         metadata=msg_data.get("metadata", {}),
                         images=msg_data.get("images", []),
                         is_voice=bool(msg_data.get("is_voice", False)),

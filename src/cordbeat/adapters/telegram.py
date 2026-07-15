@@ -259,6 +259,7 @@ class TelegramAdapter(RetryableConnection):
                 images=images,
                 is_voice=user_id in self._voice_users,
                 reply_context=reply_context,
+                sent_at=msg.date,
             )
 
         async def handle_core_command(update: Update, context: Any) -> None:
@@ -279,6 +280,7 @@ class TelegramAdapter(RetryableConnection):
                 normalized,
                 display_name=user.full_name or user.username or "",
                 chat_id=chat_id,
+                sent_at=msg.date,
             )
 
         from telegram.ext import CallbackQueryHandler  # noqa: PLC0415
@@ -543,6 +545,7 @@ class TelegramAdapter(RetryableConnection):
         images: list[str] | None = None,
         is_voice: bool = False,
         reply_context: dict[str, Any] | None = None,
+        sent_at: datetime | None = None,
     ) -> None:
         payload = json.dumps(
             {
@@ -550,7 +553,7 @@ class TelegramAdapter(RetryableConnection):
                 "adapter_id": ADAPTER_ID,
                 "platform_user_id": user_id,
                 "content": text,
-                "timestamp": datetime.now(tz=UTC).isoformat(),
+                "timestamp": (sent_at or datetime.now(tz=UTC)).isoformat(),
                 "images": images or [],
                 "is_voice": is_voice,
                 "metadata": {

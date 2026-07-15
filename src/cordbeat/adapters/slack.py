@@ -25,7 +25,11 @@ from collections import OrderedDict
 from datetime import UTC, datetime
 from typing import Any
 
-from cordbeat.adapters._utils import AdapterFilter, normalize_inbound_text
+from cordbeat.adapters._utils import (
+    AdapterFilter,
+    normalize_inbound_text,
+    parse_unix_timestamp,
+)
 from cordbeat.config import AdapterConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -125,6 +129,7 @@ class SlackAdapter(RetryableConnection):
                 text=event.get("text", ""),
                 channel=event.get("channel", ""),
                 channel_type=event.get("channel_type", "channel"),
+                sent_at=parse_unix_timestamp(event.get("ts")),
             )
 
         self._socket_client.socket_mode_request_listeners.append(handle_socket)
@@ -166,6 +171,7 @@ class SlackAdapter(RetryableConnection):
         channel: str,
         channel_type: str = "channel",
         bypass_filter: bool = False,
+        sent_at: datetime | None = None,
     ) -> None:
         if not user_id:
             return
@@ -200,7 +206,7 @@ class SlackAdapter(RetryableConnection):
                 "adapter_id": ADAPTER_ID,
                 "platform_user_id": user_id,
                 "content": text,
-                "timestamp": datetime.now(tz=UTC).isoformat(),
+                "timestamp": (sent_at or datetime.now(tz=UTC)).isoformat(),
                 "metadata": {
                     "channel": channel,
                     "channel_id": channel,

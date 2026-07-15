@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -160,6 +161,7 @@ class TestDiscordAdapter:
             content="Hello!",
             channel=MagicMock(id=456),
             guild=MagicMock(id=789),
+            created_at=datetime(2026, 7, 14, 14, 55, tzinfo=UTC),
         )
         await adapter._forward_to_core(message)
 
@@ -169,6 +171,7 @@ class TestDiscordAdapter:
         assert payload["adapter_id"] == "discord"
         assert payload["platform_user_id"] == "123"
         assert payload["content"] == "Hello!"
+        assert payload["timestamp"] == "2026-07-14T14:55:00+00:00"
         # User channel should be cached
         assert adapter._user_channels["123"] == 456
 
@@ -1143,6 +1146,7 @@ class TestTelegramAdapter:
             "Hello!",
             display_name="Alice",
             chat_id=999,
+            sent_at=datetime(2026, 7, 14, 14, 56, tzinfo=UTC),
         )
 
         adapter._ws.send.assert_awaited_once()
@@ -1151,6 +1155,7 @@ class TestTelegramAdapter:
         assert payload["adapter_id"] == "telegram"
         assert payload["platform_user_id"] == "user42"
         assert payload["content"] == "Hello!"
+        assert payload["timestamp"] == "2026-07-14T14:56:00+00:00"
 
     async def test_forward_to_core_includes_telegram_reply_context(self) -> None:
         from cordbeat.adapters.telegram import TelegramAdapter
@@ -2182,6 +2187,7 @@ class TestSlackAdapter:
             text="hello",
             channel="C999",
             channel_type="channel",
+            sent_at=datetime(2026, 7, 14, 14, 57, tzinfo=UTC),
         )
 
         adapter._ws.send.assert_awaited_once()
@@ -2189,6 +2195,7 @@ class TestSlackAdapter:
         assert payload["adapter_id"] == "slack"
         assert payload["metadata"]["channel_id"] == "C999"
         assert payload["metadata"]["is_dm"] is False
+        assert payload["timestamp"] == "2026-07-14T14:57:00+00:00"
 
     async def test_send_to_slack_metadata_channel_overrides_cache(self) -> None:
         from cordbeat.adapters.slack import SlackAdapter
@@ -2255,6 +2262,7 @@ class TestLineAdapter:
             text="hello",
             is_group=True,
             channel_id="Gline",
+            sent_at=datetime(2026, 7, 14, 14, 58, tzinfo=UTC),
         )
 
         adapter._ws.send.assert_awaited_once()
@@ -2262,6 +2270,7 @@ class TestLineAdapter:
         assert payload["adapter_id"] == "line"
         assert payload["metadata"]["channel_id"] == "Gline"
         assert payload["metadata"]["is_dm"] is False
+        assert payload["timestamp"] == "2026-07-14T14:58:00+00:00"
 
     async def test_line_group_without_keywords_is_not_mentioned(self) -> None:
         from cordbeat.adapters.line import LineAdapter
@@ -2293,6 +2302,7 @@ class TestWhatsAppAdapter:
         await adapter._forward_to_core(
             user_id="15551234567",
             text="x" * (MAX_INBOUND_TEXT_CHARS + 10),
+            sent_at=datetime(2026, 7, 14, 14, 59, tzinfo=UTC),
         )
 
         adapter._ws.send.assert_awaited_once()
@@ -2301,6 +2311,7 @@ class TestWhatsAppAdapter:
         assert len(payload["content"]) == MAX_INBOUND_TEXT_CHARS
         assert payload["metadata"]["channel_id"] == "15551234567"
         assert payload["metadata"]["is_dm"] is True
+        assert payload["timestamp"] == "2026-07-14T14:59:00+00:00"
 
 
 class TestSignalAdapter:
@@ -2332,10 +2343,15 @@ class TestSignalAdapter:
         adapter = SignalAdapter(config)
         adapter._ws = AsyncMock()
 
-        await adapter._forward_to_core(user_id="+15551234567", text="hello")
+        await adapter._forward_to_core(
+            user_id="+15551234567",
+            text="hello",
+            sent_at=datetime(2026, 7, 14, 15, 0, tzinfo=UTC),
+        )
 
         adapter._ws.send.assert_awaited_once()
         payload = json.loads(adapter._ws.send.call_args[0][0])
         assert payload["adapter_id"] == "signal"
         assert payload["metadata"]["channel_id"] == "+15551234567"
         assert payload["metadata"]["is_dm"] is True
+        assert payload["timestamp"] == "2026-07-14T15:00:00+00:00"

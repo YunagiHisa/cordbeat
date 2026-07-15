@@ -6,12 +6,14 @@ mention_only, ai_decision (keywords + extra_keywords + soul fallback).
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 from cordbeat.adapters._utils import (
     MAX_INBOUND_TEXT_CHARS,
     AdapterFilter,
     normalize_inbound_text,
+    parse_unix_timestamp,
 )
 
 # ---------------------------------------------------------------------------
@@ -259,3 +261,20 @@ class TestInboundText:
 
         assert normalized is not None
         assert len(normalized) == MAX_INBOUND_TEXT_CHARS
+
+
+class TestPlatformTimestamp:
+    def test_parses_seconds_and_milliseconds(self) -> None:
+        expected = datetime(2026, 7, 14, 14, 55, tzinfo=UTC)
+
+        assert parse_unix_timestamp(expected.timestamp()) == expected
+        assert (
+            parse_unix_timestamp(
+                expected.timestamp() * 1000,
+                milliseconds=True,
+            )
+            == expected
+        )
+
+    def test_invalid_value_falls_back_to_none(self) -> None:
+        assert parse_unix_timestamp("not-a-timestamp") is None

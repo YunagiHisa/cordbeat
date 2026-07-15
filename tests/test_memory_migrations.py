@@ -64,6 +64,25 @@ async def test_apply_migrations_on_empty_db_creates_full_schema(tmp_path):
         await cur.close()
         assert {"archived_at", "archive_reason"} <= semantic_columns
         assert {"archived_at", "archive_reason"} <= episodic_columns
+        cur = await conn.execute("PRAGMA table_info(conversation_messages)")
+        conversation_columns = {r["name"] for r in await cur.fetchall()}
+        await cur.close()
+        assert {"created_at", "received_at"} <= conversation_columns
+        await conn.execute(
+            "INSERT INTO users (user_id, display_name) VALUES ('fallback', 'Test')"
+        )
+        await conn.execute(
+            "INSERT INTO conversation_messages "
+            "(user_id, role, content, created_at) "
+            "VALUES ('fallback', 'user', 'hello', '2026-07-14T14:55:00+00:00')"
+        )
+        cur = await conn.execute(
+            "SELECT created_at, received_at FROM conversation_messages "
+            "WHERE user_id = 'fallback'"
+        )
+        fallback_row = await cur.fetchone()
+        await cur.close()
+        assert fallback_row["received_at"] == fallback_row["created_at"]
     finally:
         await conn.close()
 
@@ -103,6 +122,10 @@ async def test_legacy_db_without_schema_version_is_fast_forwarded(tmp_path):
         # v1 is fast-forwarded (stamped without re-running SQL); v2 and later
         # are applied normally to fill in any tables that pre-date sqlite-vec.
         assert [r[0] for r in rows] == list(range(1, latest_version() + 1))
+        cur = await conn.execute("PRAGMA table_info(conversation_messages)")
+        conversation_columns = {r["name"] for r in await cur.fetchall()}
+        await cur.close()
+        assert "received_at" in conversation_columns
     finally:
         await conn.close()
 

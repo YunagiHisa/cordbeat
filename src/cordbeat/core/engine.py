@@ -1266,6 +1266,9 @@ class CoreEngine:
             recalled_episode_limit=self._memory_config.recalled_episode_context_limit,
             include_verified_actions=not shared_voice,
             days_since_last_talk=days_since_last_talk,
+            current_message_at=ensure_aware(message.timestamp),
+            current_received_at=ensure_aware(message.received_at),
+            timezone_name=self._timezone_name,
         )
 
         safe_content = sanitize(
@@ -1427,6 +1430,8 @@ class CoreEngine:
                 message.adapter_id,
                 channel_id=channel_id,
                 is_dm=is_dm,
+                created_at=ensure_aware(message.timestamp),
+                received_at=ensure_aware(message.received_at),
             )
             stored_response = sanitize_tool_artifacts(
                 sanitize_reasoning_artifacts(response)

@@ -881,13 +881,19 @@ class DiscordAdapter(RetryableConnection):
                         "Failed to transcribe Discord audio attachment: %s", att.url
                     )
 
+        platform_created_at = getattr(message, "created_at", None)
+        sent_at = (
+            platform_created_at
+            if isinstance(platform_created_at, datetime)
+            else datetime.now(tz=UTC)
+        )
         payload = json.dumps(
             {
                 "type": "message",
                 "adapter_id": ADAPTER_ID,
                 "platform_user_id": str(message.author.id),
                 "content": content,
-                "timestamp": datetime.now(tz=UTC).isoformat(),
+                "timestamp": sent_at.isoformat(),
                 "images": images,
                 "is_voice": is_voice,
                 "metadata": {

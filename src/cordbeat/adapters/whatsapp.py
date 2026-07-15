@@ -33,7 +33,11 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from cordbeat.adapters._utils import AdapterFilter, normalize_inbound_text
+from cordbeat.adapters._utils import (
+    AdapterFilter,
+    normalize_inbound_text,
+    parse_unix_timestamp,
+)
 from cordbeat.config import AdapterConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -156,6 +160,7 @@ class WhatsAppAdapter(RetryableConnection):
                         await self._forward_to_core(
                             user_id=message.get("from", ""),
                             text=message.get("text", {}).get("body", ""),
+                            sent_at=parse_unix_timestamp(message.get("timestamp")),
                         )
             return web.Response(text="OK")
 
@@ -198,7 +203,9 @@ class WhatsAppAdapter(RetryableConnection):
     ) -> None:
         await self._send_to_whatsapp(platform_user_id, content)
 
-    async def _forward_to_core(self, *, user_id: str, text: str) -> None:
+    async def _forward_to_core(
+        self, *, user_id: str, text: str, sent_at: datetime | None = None
+    ) -> None:
         if not user_id:
             return
         normalized = normalize_inbound_text(text, adapter_id=ADAPTER_ID)
@@ -217,7 +224,7 @@ class WhatsAppAdapter(RetryableConnection):
                 "adapter_id": ADAPTER_ID,
                 "platform_user_id": user_id,
                 "content": text,
-                "timestamp": datetime.now(tz=UTC).isoformat(),
+                "timestamp": (sent_at or datetime.now(tz=UTC)).isoformat(),
                 "metadata": {
                     "channel_id": user_id,
                     "is_dm": True,

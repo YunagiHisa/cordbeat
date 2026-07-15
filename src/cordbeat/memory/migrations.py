@@ -114,6 +114,12 @@ MIGRATIONS: list[Migration] = [
         "normal recall",
         callable=lambda conn: _migrate_v7_vector_archives(conn),
     ),
+    Migration(
+        version=8,
+        description="preserve separate platform-sent and Core-received times "
+        "for conversation messages",
+        callable=lambda conn: _migrate_v8_conversation_received_at(conn),
+    ),
 ]
 
 
@@ -217,6 +223,39 @@ async def _migrate_v7_vector_archives(conn: aiosqlite.Connection) -> None:
             f"CREATE INDEX IF NOT EXISTS {index} "  # noqa: S608
             f"ON {table}(user_id, archived_at)"
         )
+
+
+async def _migrate_v8_conversation_received_at(
+    conn: aiosqlite.Connection,
+) -> None:
+    """Add Core receipt time while treating legacy creation time as both values."""
+
+    if not await _table_exists(conn, "conversation_messages"):
+        return
+    cur = await conn.execute("PRAGMA table_info(conversation_messages)")
+    columns = {row[1] for row in await cur.fetchall()}
+    await cur.close()
+    if "received_at" not in columns:
+        await conn.execute(
+            "ALTER TABLE conversation_messages "
+            "ADD COLUMN received_at TEXT NOT NULL DEFAULT ''"
+        )
+    await conn.execute(
+        "UPDATE conversation_messages SET received_at = created_at "
+        "WHERE received_at = ''"
+    )
+    await conn.executescript(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_conv_received_at_fallback
+        AFTER INSERT ON conversation_messages
+        WHEN NEW.received_at = ''
+        BEGIN
+            UPDATE conversation_messages
+            SET received_at = NEW.created_at
+            WHERE id = NEW.id;
+        END;
+        """
+    )
 
 
 async def _ensure_version_table(conn: aiosqlite.Connection) -> None:

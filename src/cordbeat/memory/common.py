@@ -57,11 +57,21 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     content    TEXT NOT NULL,
     adapter_id TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
+    received_at TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_conv_user_time
     ON conversation_messages (user_id, created_at DESC);
+
+CREATE TRIGGER IF NOT EXISTS trg_conv_received_at_fallback
+AFTER INSERT ON conversation_messages
+WHEN NEW.received_at = ''
+BEGIN
+    UPDATE conversation_messages
+    SET received_at = NEW.created_at
+    WHERE id = NEW.id;
+END;
 
 CREATE TABLE IF NOT EXISTS conversation_media_observations (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,

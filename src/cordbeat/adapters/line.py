@@ -25,7 +25,11 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from cordbeat.adapters._utils import AdapterFilter, normalize_inbound_text
+from cordbeat.adapters._utils import (
+    AdapterFilter,
+    normalize_inbound_text,
+    parse_unix_timestamp,
+)
 from cordbeat.config import AdapterConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -118,6 +122,9 @@ class LineAdapter(RetryableConnection):
                         text=event.message.text,
                         is_group=getattr(source, "type", "user") != "user",
                         channel_id=str(channel_id),
+                        sent_at=parse_unix_timestamp(
+                            event.timestamp, milliseconds=True
+                        ),
                     )
             return web.Response(text="OK")
 
@@ -165,6 +172,7 @@ class LineAdapter(RetryableConnection):
         text: str,
         is_group: bool = False,
         channel_id: str = "",
+        sent_at: datetime | None = None,
     ) -> None:
         if not user_id:
             return
@@ -199,7 +207,7 @@ class LineAdapter(RetryableConnection):
                 "adapter_id": ADAPTER_ID,
                 "platform_user_id": user_id,
                 "content": text,
-                "timestamp": datetime.now(tz=UTC).isoformat(),
+                "timestamp": (sent_at or datetime.now(tz=UTC)).isoformat(),
                 "metadata": {
                     "channel_id": channel_id or user_id,
                     "is_dm": is_dm,

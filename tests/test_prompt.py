@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, datetime
 
 import pytest
 
@@ -309,6 +310,20 @@ class TestBuildSoulSystemPrompt:
         assert "Operational honesty" in result
         assert "VERIFIED ACTIONS" in result
 
+    def test_temporal_grounding_scopes_transient_states(self) -> None:
+        snap = {
+            "name": "TestBot",
+            "traits": ["curious"],
+            "emotion": {"primary": "calm", "intensity": 0.5},
+            "immutable_rules": [],
+        }
+
+        result = build_soul_system_prompt(snap)
+
+        assert "timestamps describe when something was said or observed" in result
+        assert "calendar-date change alone does not end" in result
+        assert "eating" in result
+
     def test_invalid_timezone_value_falls_back_to_utc(self) -> None:
         snap = {
             "name": "TestBot",
@@ -393,6 +408,59 @@ class TestBuildContext:
         result = build_context(user_display_name="Alice")
 
         assert "days since you last talked" not in result
+
+    def test_midnight_crossing_uses_elapsed_time_not_date_boundary(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            history=[
+                {
+                    "role": "user",
+                    "content": "Message A",
+                    "created_at": "2026-07-14T14:55:00+00:00",
+                }
+            ],
+            current_message_at=datetime(2026, 7, 14, 15, 5, tzinfo=UTC),
+            current_received_at=datetime(2026, 7, 14, 15, 5, tzinfo=UTC),
+            timezone_name="Asia/Tokyo",
+        )
+
+        assert "[2026-07-14 23:55 JST] User: Message A" in result
+        assert "User sent this message at: 2026-07-15 00:05 JST" in result
+        assert "Elapsed since the previous user message: 10 minutes" in result
+
+    def test_delayed_media_is_scoped_to_original_send_time(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            history=[
+                {
+                    "role": "user",
+                    "content": "Dinner",
+                    "created_at": "2026-07-14T10:10:00+00:00",
+                    "received_at": "2026-07-14T10:10:01+00:00",
+                    "media_observations": [
+                        {"relation": "attached", "summary": "A dinner plate"}
+                    ],
+                }
+            ],
+            current_message_at=datetime(2026, 7, 15, 1, 0, tzinfo=UTC),
+            current_received_at=datetime(2026, 7, 15, 1, 0, tzinfo=UTC),
+            timezone_name="Asia/Tokyo",
+        )
+
+        assert "[2026-07-14 19:10 JST] User: Dinner" in result
+        assert "visible at the parent message's recorded time only" in result
+        assert "Elapsed since the previous user message: 14 hours 50 minutes" in result
+
+    def test_current_message_shows_delayed_platform_delivery(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            current_message_at=datetime(2026, 7, 14, 14, 55, tzinfo=UTC),
+            current_received_at=datetime(2026, 7, 14, 23, 10, tzinfo=UTC),
+            timezone_name="Asia/Tokyo",
+        )
+
+        assert "User sent this message at: 2026-07-14 23:55 JST" in result
+        assert "CordBeat received it at: 2026-07-15 08:10 JST" in result
 
     def test_verified_actions_are_included(self) -> None:
         result = build_context(

@@ -5,12 +5,27 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from cordbeat.ai.backend import AIBackend
 
 logger = logging.getLogger(__name__)
+
+
+def parse_unix_timestamp(value: Any, *, milliseconds: bool = False) -> datetime | None:
+    """Parse a platform Unix timestamp without failing the inbound event."""
+
+    if value is None or value == "":
+        return None
+    try:
+        seconds = float(value)
+        if milliseconds:
+            seconds /= 1000
+        return datetime.fromtimestamp(seconds, tz=UTC)
+    except (OSError, OverflowError, TypeError, ValueError):
+        return None
 
 
 # ── respond_mode constants ────────────────────────────────────────────

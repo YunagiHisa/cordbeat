@@ -335,9 +335,18 @@ class MemoryStore:
         adapter_id: str = "",
         channel_id: str = "",
         is_dm: bool = True,
+        created_at: datetime | None = None,
+        received_at: datetime | None = None,
     ) -> int:
         message_id = await self._conversations.add_message(
-            user_id, role, content, adapter_id, channel_id, is_dm
+            user_id,
+            role,
+            content,
+            adapter_id,
+            channel_id,
+            is_dm,
+            created_at,
+            received_at,
         )
         # Lifetime counter survives nightly history trimming so the
         # familiarity stage keeps growing with the relationship.

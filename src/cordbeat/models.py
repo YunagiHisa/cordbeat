@@ -57,6 +57,7 @@ class GatewayMessage:
     platform_user_id: str
     content: str
     timestamp: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
+    received_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
     metadata: dict[str, Any] = field(default_factory=dict)
     images: list[str] = field(default_factory=list)  # base64-encoded image data
     is_voice: bool = False  # True if the message originated from a voice

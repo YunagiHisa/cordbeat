@@ -45,14 +45,29 @@ class TestHeartbeatValidation:
         r = validate_heartbeat_decision({"action": "message", "content": ""})
         assert not r.valid
 
-    def test_invalid_interval(self) -> None:
+    def test_large_interval_is_accepted_for_clamping(self) -> None:
+        """The loop clamps to configured bounds, as the prompt promises."""
         r = validate_heartbeat_decision(
             {
                 "action": "none",
                 "next_heartbeat_minutes": 99999,
             }
         )
+        assert r.valid
+
+    @pytest.mark.parametrize(
+        "minutes",
+        [0, -5, float("nan"), float("inf"), True, "60"],
+    )
+    def test_unclampable_interval_is_rejected(self, minutes: object) -> None:
+        r = validate_heartbeat_decision(
+            {
+                "action": "none",
+                "next_heartbeat_minutes": minutes,
+            }
+        )
         assert not r.valid
+        assert any(err.field == "next_heartbeat_minutes" for err in r.errors)
 
     def test_target_adapter_id_must_be_string(self) -> None:
         r = validate_heartbeat_decision(
@@ -169,6 +184,14 @@ class TestTriageValidation:
             }
         )
         assert r.valid
+
+    def test_triage_accepts_large_interval_for_clamping(self) -> None:
+        r = validate_heartbeat_triage({"users": [], "next_heartbeat_minutes": 4320})
+        assert r.valid
+
+    def test_triage_rejects_unclampable_interval(self) -> None:
+        r = validate_heartbeat_triage({"users": [], "next_heartbeat_minutes": 0})
+        assert not r.valid
 
     def test_valid_empty_users(self) -> None:
         r = validate_heartbeat_triage({"users": [], "next_heartbeat_minutes": 60})

@@ -1306,6 +1306,9 @@ class TestDiscoverySharing:
         assert "PRIVATE HISTORY MUST NOT APPEAR" not in prompt
         assert "ONLY in the skill result" in system
         assert "Current emotion:" in system
+        # Thinking models need budget headroom or every share hits the
+        # content=null no-think retry (observed hourly in production logs).
+        assert mock_ai.generate.await_args.kwargs["max_tokens"] >= 2048
         mock_gateway.send_to_adapter.assert_awaited_once()
         _, sent = mock_gateway.send_to_adapter.await_args.args
         assert sent.content == "This finding about greetings was neat."

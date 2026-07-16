@@ -1626,11 +1626,14 @@ class HeartbeatLoop:
         )
         try:
             with internal_context_scope():
+                # Thinking-capable models spend several hundred tokens on the
+                # thinking phase before the short share message; a tight budget
+                # made every share hit the content=null no-think retry path.
                 generated = await self._ai.generate(
                     prompt=prompt,
                     system=system,
                     temperature=0.4,
-                    max_tokens=256,
+                    max_tokens=2048,
                 )
         except Exception:
             logger.exception(

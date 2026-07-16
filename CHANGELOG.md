@@ -41,6 +41,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Heartbeat interval intent and share-generation budget.** Validation now
+  accepts multi-day `next_heartbeat_minutes` requests and lets the loop clamp
+  them to the configured bounds as the prompt promises, instead of rejecting
+  the value, burning retries, and discarding the model's pacing intent every
+  tick. Discovery-share composition also gets enough token budget for a
+  thinking phase, so shares no longer hit the content=null no-think retry on
+  every attempt.
 - **Evidence-bounded tool responses.** Replies now distinguish the exact scope
   returned by tools (such as titles, snippets, metadata, transcripts, and page
   text) from inference or unavailable media, without forcing mechanical labels.

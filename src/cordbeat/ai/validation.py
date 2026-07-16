@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from typing import Any
 
 from cordbeat.exceptions import OutputValidationError
@@ -69,17 +70,32 @@ def validate_heartbeat_decision(data: dict[str, Any]) -> ValidationResult:
         )
 
     minutes = data.get("next_heartbeat_minutes")
-    if minutes is not None:
-        if not isinstance(minutes, int | float) or minutes < 1 or minutes > 1440:
-            errors.append(
-                ValidationError(
-                    field="next_heartbeat_minutes",
-                    message="must be between 1 and 1440",
-                    value=minutes,
-                )
+    if minutes is not None and not _is_clampable_interval(minutes):
+        errors.append(
+            ValidationError(
+                field="next_heartbeat_minutes",
+                message=_INTERVAL_MESSAGE,
+                value=minutes,
             )
+        )
 
     return ValidationResult(valid=len(errors) == 0, errors=errors)
+
+
+# The heartbeat loop clamps intervals to the configured min/max bounds (as the
+# decision prompt promises), so validation only rejects values that cannot be
+# clamped meaningfully. Rejecting large values here forced pointless retries
+# whenever the model reasonably asked for a multi-day pause.
+_INTERVAL_MESSAGE = (
+    "must be a finite number of minutes >= 1 "
+    "(values above the configured maximum are clamped)"
+)
+
+
+def _is_clampable_interval(minutes: Any) -> bool:
+    if isinstance(minutes, bool) or not isinstance(minutes, int | float):
+        return False
+    return math.isfinite(float(minutes)) and minutes >= 1
 
 
 def validate_heartbeat_triage(data: dict[str, Any]) -> ValidationResult:
@@ -126,15 +142,14 @@ def validate_heartbeat_triage(data: dict[str, Any]) -> ValidationResult:
                 )
 
     minutes = data.get("next_heartbeat_minutes")
-    if minutes is not None:
-        if not isinstance(minutes, int | float) or minutes < 1 or minutes > 1440:
-            errors.append(
-                ValidationError(
-                    field="next_heartbeat_minutes",
-                    message="must be between 1 and 1440",
-                    value=minutes,
-                )
+    if minutes is not None and not _is_clampable_interval(minutes):
+        errors.append(
+            ValidationError(
+                field="next_heartbeat_minutes",
+                message=_INTERVAL_MESSAGE,
+                value=minutes,
             )
+        )
 
     return ValidationResult(valid=len(errors) == 0, errors=errors)
 

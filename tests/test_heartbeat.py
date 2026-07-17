@@ -1324,6 +1324,30 @@ class TestDiscoverySharing:
         assert share_metadata["skill_name"] == "discover"
         assert share_metadata["source_record"] == skill_results[0]["id"]
 
+    async def test_share_prompt_carries_persona_language(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """Shares must repeat the language instruction or they come out in
+        English (observed in production with a Japanese persona)."""
+        await memory.link_platform("u1", "discord", "snowflake-1")
+        self._register_skill(skills, {"finding": "neat"})
+        mock_ai.generate.return_value = "SKIP"
+        snapshot = dict(heartbeat._soul.get_soul_snapshot())
+        snapshot["language"] = "ja"
+
+        with patch.object(
+            heartbeat._soul, "get_soul_snapshot", return_value=snapshot
+        ):
+            await heartbeat._execute_skill(self._decision())
+
+        system = mock_ai.generate.await_args.kwargs["system"]
+        assert "Write the message in ja." in system
+
     async def test_skip_response_does_not_send_or_record(
         self,
         heartbeat: HeartbeatLoop,
@@ -2951,6 +2975,64 @@ class TestApprovedProposalExecution:
         assert proposal is not None
         meta = json.loads(proposal["metadata"])
         assert meta["status"] == ProposalStatus.EXECUTED
+
+        # The outcome is recorded so the agent can see its own approved work.
+        outcomes = await memory.get_certain_records(
+            "u1", record_type="proposal_skill_result"
+        )
+        assert len(outcomes) == 1
+        outcome_meta = json.loads(outcomes[0]["metadata"])
+        assert outcome_meta["skill_name"] == "test_skill"
+        assert outcome_meta["proposal_id"] == proposal_id
+
+    async def test_rejected_skill_file_update_records_error_outcome(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A validator-rejected update is logged and visible to the agent.
+
+        Reproduces the production incident where an approved draw-skill
+        rewrite failed AST validation and expired without any log or memory
+        trace, leaving both the user and the agent unaware.
+        """
+        import shutil
+
+        builtin_timer = Path(__file__).parent.parent / "skills" / "timer"
+        shutil.copytree(builtin_timer, skills.skills_dir / "timer")
+        skills.load_all()
+
+        proposal_id = await memory.add_certain_record(
+            user_id="u1",
+            content="Update timer skill",
+            record_type="proposal",
+            metadata={
+                "status": ProposalStatus.APPROVED,
+                "proposal_type": ProposalType.SKILL_EXECUTION,
+                "skill_name": "update_skill_file",
+                "skill_params": {
+                    "skill_name": "timer",
+                    "path": "main.py",
+                    "content": "import os\n\ndef execute(**kw):\n    return {}\n",
+                },
+            },
+        )
+
+        with caplog.at_level(logging.WARNING):
+            await heartbeat._proposals.execute_approved()
+
+        proposal = await memory.get_proposal(proposal_id)
+        assert proposal is not None
+        assert json.loads(proposal["metadata"])["status"] == ProposalStatus.EXPIRED
+        assert "Approved skill file update rejected" in caplog.text
+
+        errors = await memory.get_certain_records(
+            "u1", record_type="proposal_skill_error"
+        )
+        assert len(errors) == 1
+        assert "validation_failed" in errors[0]["content"]
 
     async def test_execute_approved_skips_corrupt_metadata_and_continues(
         self,

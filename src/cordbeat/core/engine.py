@@ -147,6 +147,10 @@ _VERIFIED_ACTION_RECORD_TYPES = (
     _CONVERSATION_SKILL_ERROR_RECORD,
     "heartbeat_skill_result",
     "heartbeat_skill_error",
+    # Outcomes of user-approved proposals: without these in the ledger the
+    # agent could not follow up on (or explain) its own approved work.
+    "proposal_skill_result",
+    "proposal_skill_error",
 )
 _MAX_VERIFIED_ACTIONS = 8
 _MAX_RECORDED_CONVERSATION_SKILL_RESULTS = 5

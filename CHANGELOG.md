@@ -41,6 +41,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Approved-proposal visibility, share language, and skill-edit guidance.**
+  Outcomes of user-approved proposals (success and failure) are now recorded
+  and included in the verified-actions ledger and heartbeat continuity, so
+  the agent can follow up on its own approved work and explain failures
+  instead of silently losing them. A validator-rejected skill-file update is
+  logged instead of expiring without a trace, and the approved-skill success
+  log is bounded instead of embedding full response bodies. Discovery shares
+  repeat the persona language instruction so a Japanese persona no longer
+  shares in English, and the heartbeat skill-maintenance guidance explains
+  that built-in skill edits are restored on restart and that skill code must
+  satisfy the sandbox validator.
 - **Heartbeat interval intent and share-generation budget.** Validation now
   accepts multi-day `next_heartbeat_minutes` requests and lets the loop clamp
   them to the configured bounds as the prompt promises, instead of rejecting

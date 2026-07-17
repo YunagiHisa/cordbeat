@@ -4254,6 +4254,16 @@ class TestReActLoop:
                 "outcome": "result",
             },
         )
+        await memory.add_certain_record(
+            "u1",
+            "Skill file update failed (validation_failed) after approval",
+            "proposal_skill_error",
+            {
+                "source": "proposal",
+                "skill_name": "update_skill_file",
+                "outcome": "error",
+            },
+        )
 
         await self._make_engine(
             mock_ai,
@@ -4274,6 +4284,8 @@ class TestReActLoop:
         assert "[BEGIN VERIFIED ACTIONS" in prompt
         assert "web_search" in prompt
         assert "found docs" in prompt
+        # Approved-proposal outcomes are part of the ledger too.
+        assert "Skill file update failed (validation_failed)" in prompt
 
     async def test_react_pre_text_strips_draw_tags(
         self,

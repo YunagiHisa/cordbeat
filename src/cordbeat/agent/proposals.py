@@ -38,6 +38,8 @@ from .soul import Soul
 logger = logging.getLogger(__name__)
 
 _AI_GENERATED_AUTHOR = "cordbeat-ai"
+_PROPOSAL_SKILL_RESULT_RECORD = "proposal_skill_result"
+_PROPOSAL_SKILL_ERROR_RECORD = "proposal_skill_error"
 _UPDATE_SKILL_FILE_TOOL_NAME = "update_skill_file"
 _DELETE_SKILL_FILE_TOOL_NAME = "delete_skill_file"
 _DELETE_SKILL_TOOL_NAME = "delete_skill"
@@ -733,12 +735,51 @@ class ProposalExecutor:
         self,
         proposal: dict[str, Any],
         message: str,
+        *,
+        error: bool = False,
     ) -> None:
+        await self._record_execution_outcome(proposal, message, error=error)
         try:
             await self._notify_result(proposal, message)
         except Exception:
             logger.warning(
                 "Could not send proposal result notification for %s",
+                proposal.get("id"),
+                exc_info=True,
+            )
+
+    async def _record_execution_outcome(
+        self,
+        proposal: dict[str, Any],
+        message: str,
+        *,
+        error: bool,
+    ) -> None:
+        """Persist the outcome so the agent itself can see what happened.
+
+        Approved-proposal results previously went only to the user
+        notification; without a record, the agent could not follow up on its
+        own approved work or explain a failure in conversation.
+        """
+        meta = _load_proposal_metadata(proposal) or {}
+        record_type = (
+            _PROPOSAL_SKILL_ERROR_RECORD if error else _PROPOSAL_SKILL_RESULT_RECORD
+        )
+        try:
+            await self._memory.add_certain_record(
+                str(proposal.get("user_id") or "__system__"),
+                message[:500],
+                record_type,
+                {
+                    "source": "proposal",
+                    "proposal_id": str(proposal.get("id") or ""),
+                    "skill_name": str(meta.get("skill_name") or ""),
+                    "outcome": "error" if error else "result",
+                },
+            )
+        except Exception:
+            logger.warning(
+                "Could not record proposal outcome for %s",
                 proposal.get("id"),
                 exc_info=True,
             )
@@ -796,12 +837,12 @@ class ProposalExecutor:
                     skill_params,
                 ),
             )
+            summary = _format_skill_result_summary(result)
             logger.info(
                 "Approved skill '%s' executed: %s",
                 skill_name,
-                result,
+                summary,
             )
-            summary = _format_skill_result_summary(result)
             await self._memory.update_proposal_status(
                 proposal_id, ProposalStatus.EXECUTED
             )
@@ -818,6 +859,7 @@ class ProposalExecutor:
             await self._notify_result_safely(
                 proposal,
                 f"❌ Skill '{skill_name}' failed — proposal expired.",
+                error=True,
             )
 
     async def _execute_skill_file_update(
@@ -836,6 +878,11 @@ class ProposalExecutor:
             )
             if result.get("error"):
                 detail = str(result.get("detail") or result["error"])
+                logger.warning(
+                    "Approved skill file update rejected (%s): %.300s",
+                    result["error"],
+                    detail,
+                )
                 await self._expire_proposal_safely(
                     proposal_id,
                     reason="skill file update returned error",
@@ -844,6 +891,7 @@ class ProposalExecutor:
                     proposal,
                     "❌ Skill file update failed"
                     f" ({result['error']}) — {detail[:500]}",
+                    error=True,
                 )
                 return
             await asyncio.to_thread(self._skills.load_all)
@@ -864,6 +912,7 @@ class ProposalExecutor:
             await self._notify_result_safely(
                 proposal,
                 "❌ Skill file update failed — proposal expired.",
+                error=True,
             )
 
     async def _execute_skill_settings_update(
@@ -903,6 +952,7 @@ class ProposalExecutor:
             await self._notify_result_safely(
                 proposal,
                 "❌ Skill settings update failed — proposal expired.",
+                error=True,
             )
 
     async def _execute_skill_file_delete(
@@ -937,6 +987,7 @@ class ProposalExecutor:
             await self._notify_result_safely(
                 proposal,
                 "❌ Skill file delete failed — proposal expired.",
+                error=True,
             )
 
     async def _execute_skill_delete(
@@ -968,6 +1019,7 @@ class ProposalExecutor:
             await self._notify_result_safely(
                 proposal,
                 "❌ Skill delete failed — proposal expired.",
+                error=True,
             )
 
     async def _execute_trait_proposal(
@@ -1010,6 +1062,7 @@ class ProposalExecutor:
             await self._notify_result_safely(
                 proposal,
                 "❌ Personality change failed — proposal expired.",
+                error=True,
             )
 
     async def _execute_skill_creation(
@@ -1049,6 +1102,7 @@ class ProposalExecutor:
             await self._notify_result_safely(
                 proposal,
                 f"❌ Skill '{skill_name}' installation failed{detail_text}.",
+                error=True,
             )
 
     async def _notify_result(

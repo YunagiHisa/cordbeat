@@ -431,8 +431,9 @@ class ProposalExecutor:
                     content=(
                         f"🔧 {soul_snap['name']} wants to run "
                         f"skill '{skill_name}'.\n"
-                        f"Parameters: {json.dumps(decision.skill_params)}\n\n"
-                        f"(proposal ID: {proposal_id})"
+                        "Parameters: "
+                        f"{format_skill_params_for_display(decision.skill_params)}"
+                        f"\n\n(proposal ID: {proposal_id})"
                     ),
                     metadata={
                         "proposal_id": proposal_id,

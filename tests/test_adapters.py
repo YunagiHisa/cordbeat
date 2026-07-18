@@ -807,6 +807,34 @@ class TestDiscordSkillConfirm:
 
         return DiscordAdapter(AdapterConfig(options={"token": "t"}))
 
+    async def test_confirm_embed_hides_bulk_params(self) -> None:
+        """The embed must not dump raw file bodies (production incident:
+        an update_skill_file proposal pasted the whole main.py)."""
+        adapter = self._adapter()
+        channel = MagicMock()
+        channel.send = AsyncMock()
+        adapter._bot = MagicMock()
+        adapter._bot.get_channel.return_value = channel
+        adapter._user_channels["u1"] = 123
+        adapter._ws = AsyncMock()
+        big_source = "x" * 8000
+        data = {
+            "content": "fallback",
+            "metadata": {
+                "proposal_id": "p1",
+                "skill_name": "update_skill_file",
+                "skill_params": {"skill_name": "draw", "content": big_source},
+            },
+        }
+        with patch.dict("sys.modules", {"discord": _discord_ui_mock()}):
+            await adapter._dispatch_skill_confirm("u1", data)
+
+        embed = channel.send.call_args.kwargs["embed"]
+        _, field_value, _ = embed.fields[0]
+        assert big_source not in field_value
+        assert "<redacted>" in field_value
+        assert len(field_value) <= 1000
+
     async def test_sends_embed_and_buttons_drive_core_commands(self) -> None:
         adapter = self._adapter()
         channel = MagicMock()
@@ -1351,9 +1379,45 @@ class TestTelegramAdapter:
         call_kwargs = adapter._app.bot.send_message.call_args.kwargs
         assert call_kwargs["chat_id"] == 12345
         assert "shell_exec" in call_kwargs["text"]
-        assert "path_name: value_with_underscores" in call_kwargs["text"]
+        assert 'path_name="value_with_underscores"' in call_kwargs["text"]
         assert "parse_mode" not in call_kwargs
         assert call_kwargs["reply_markup"] == "keyboard"
+
+    async def test_dispatch_skill_confirm_hides_bulk_params(self) -> None:
+        """Confirm text must not dump raw file bodies or credentials."""
+        from cordbeat.adapters.telegram import TelegramAdapter
+
+        config = AdapterConfig(options={"token": "test"})
+        adapter = TelegramAdapter(config)
+        adapter._app = MagicMock()
+        adapter._app.bot = MagicMock()
+        adapter._app.bot.send_message = AsyncMock()
+        adapter._chat_map["user1"] = 12345
+
+        tg_mock = MagicMock()
+        tg_mock.InlineKeyboardButton = MagicMock(side_effect=lambda text, **kw: text)
+        tg_mock.InlineKeyboardMarkup = MagicMock(return_value="keyboard")
+
+        big_source = "x" * 8000
+        data = {
+            "content": "🔧 run update_skill_file?",
+            "metadata": {
+                "proposal_id": "abc-123",
+                "skill_name": "update_skill_file",
+                "skill_params": {"skill_name": "draw", "content": big_source},
+            },
+        }
+
+        with patch.dict(
+            "sys.modules",
+            {"telegram": tg_mock, "telegram.ext": MagicMock()},
+        ):
+            await adapter._dispatch_skill_confirm("user1", data)
+
+        text = adapter._app.bot.send_message.call_args.kwargs["text"]
+        assert big_source not in text
+        assert "<redacted>" in text
+        assert len(text) < 1200
 
     async def test_dispatch_skill_confirm_fallback_no_chat_map(self) -> None:
         """Skill confirm should fall back to text if chat_id is unknown."""

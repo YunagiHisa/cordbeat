@@ -2824,6 +2824,36 @@ class TestSkillProposal:
         assert "proposal ID:" in msg.content
         assert msg.metadata["skill_name"] == "cleanup"
 
+    async def test_skill_proposal_notification_hides_bulk_params(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """The approval message must not dump raw file bodies (production
+        incident: an update_skill_file proposal pasted the whole main.py
+        into the Discord approval message)."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.link_platform("u1", "discord", "discord_123")
+        big_source = "x" * 8000
+
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.SKILL,
+            skill_name="update_skill_file",
+            skill_params={"skill_name": "draw", "content": big_source},
+            target_user_id="u1",
+            target_adapter_id="discord",
+        )
+        await heartbeat._proposals.store_skill_proposal(
+            decision, "update_skill_file"
+        )
+
+        msg = mock_gateway.send_to_adapter.call_args[0][1]
+        assert big_source not in msg.content
+        assert "<redacted>" in msg.content
+        assert len(msg.content) < 600
+
     async def test_draw_prompt_text_is_not_stored_as_skill_proposal(
         self,
         heartbeat: HeartbeatLoop,

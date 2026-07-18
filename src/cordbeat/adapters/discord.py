@@ -24,6 +24,7 @@ from cordbeat.adapters._utils import (
     judge_yes_no,
     split_message,
 )
+from cordbeat.ai.prompt import format_skill_params_for_display
 from cordbeat.config import AdapterConfig, RVCConfig, STTConfig, TTSConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -532,9 +533,10 @@ class DiscordAdapter(RetryableConnection):
             color=discord.Color.orange(),
         )
         if skill_params:
-            params_text = "\n".join(
-                f"• **{k}**: `{v}`" for k, v in skill_params.items()
-            )
+            # Redacted, truncated display: raw values can contain whole file
+            # bodies (update_skill_file) or credentials, and embed fields are
+            # capped at 1024 characters anyway.
+            params_text = format_skill_params_for_display(skill_params)[:1000]
             embed.add_field(name="Parameters", value=params_text, inline=False)
         embed.set_footer(text=f"Proposal ID: {proposal_id}")
 

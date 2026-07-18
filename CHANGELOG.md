@@ -41,6 +41,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Bounded skill-approval displays.** Skill-approval messages (heartbeat
+  proposal notifications, Discord embeds, Telegram confirmations) now render
+  parameters through the redacted, truncated display formatter instead of
+  dumping raw values — an update_skill_file proposal pasted its entire
+  main.py into the Discord approval message. Full parameters remain in
+  metadata for execution.
 - **Approved-proposal visibility, share language, and skill-edit guidance.**
   Outcomes of user-approved proposals (success and failure) are now recorded
   and included in the verified-actions ledger and heartbeat continuity, so

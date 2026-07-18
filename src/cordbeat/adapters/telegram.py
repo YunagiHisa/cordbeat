@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from cordbeat.adapters._utils import AdapterFilter, split_message
+from cordbeat.ai.prompt import format_skill_params_for_display
 from cordbeat.config import AdapterConfig, STTConfig, TTSConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -434,10 +435,12 @@ class TelegramAdapter(RetryableConnection):
 
             params_text = ""
             if skill_params:
-                params_text = "\n".join(
-                    f"  • {k}: {v}" for k, v in skill_params.items()
+                # Redacted, truncated display: raw values can contain whole
+                # file bodies (update_skill_file) or credentials.
+                params_text = (
+                    "\n\nParameters:\n  "
+                    f"{format_skill_params_for_display(skill_params)[:1000]}"
                 )
-                params_text = f"\n\nParameters:\n{params_text}"
 
             text = (
                 "🔧 Skill Execution Required\n"

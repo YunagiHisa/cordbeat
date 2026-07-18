@@ -41,6 +41,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Vision image downscaling.** Images are resized so their longest edge
+  fits 1568px (EXIF-rotation applied, JPEG re-encoded) before the vision
+  payload is built. A 12-megapixel phone photo crashed the llama.cpp server's
+  image preprocessing in production, taking the model offline for the
+  ~25-minute reload; smaller screenshots had always worked. Decode failures
+  fail open and send the original data.
 - **Bounded skill-approval displays.** Skill-approval messages (heartbeat
   proposal notifications, Discord embeds, Telegram confirmations) now render
   parameters through the redacted, truncated display formatter instead of

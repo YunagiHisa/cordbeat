@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 import contextvars
@@ -174,6 +175,65 @@ def _flatten_content_for_retry(content: Any) -> str:
     return str(content or "")
 
 
+# Large photos (12MP phone captures) have crashed llama.cpp's image
+# preprocessing in production, taking the whole server down; vision encoders
+# work on far smaller resolutions anyway, so bound the pixel size before the
+# payload is built.
+_IMAGE_MAX_EDGE_PX = 1568
+_IMAGE_JPEG_QUALITY = 85
+
+
+def _downscale_image_b64(b64data: str) -> str:
+    """Resize a base64 image so its longest edge fits the vision budget.
+
+    Fails open: any decode or resize problem returns the original data.
+    """
+    try:
+        import io
+
+        from PIL import Image, ImageOps
+
+        raw = base64.b64decode(b64data)
+        with Image.open(io.BytesIO(raw)) as opened:
+            img = ImageOps.exif_transpose(opened)
+            width, height = img.size
+            longest = max(width, height)
+            if longest <= _IMAGE_MAX_EDGE_PX:
+                return b64data
+            scale = _IMAGE_MAX_EDGE_PX / longest
+            resized = img.resize(
+                (max(1, round(width * scale)), max(1, round(height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+            if resized.mode not in ("RGB", "L"):
+                resized = resized.convert("RGB")
+            out = io.BytesIO()
+            resized.save(out, format="JPEG", quality=_IMAGE_JPEG_QUALITY)
+        logger.info(
+            "Downscaled vision image %dx%d to fit %dpx (%d -> %d bytes)",
+            width,
+            height,
+            _IMAGE_MAX_EDGE_PX,
+            len(raw),
+            out.tell(),
+        )
+        return base64.b64encode(out.getvalue()).decode("ascii")
+    except Exception:
+        logger.warning(
+            "Could not downscale vision image; sending original", exc_info=True
+        )
+        return b64data
+
+
+async def _downscale_images(images: list[str]) -> list[str]:
+    """Downscale off-loop: a 12MP decode+resize is tens of milliseconds."""
+    if not images:
+        return images
+    return await asyncio.to_thread(
+        lambda: [_downscale_image_b64(image) for image in images]
+    )
+
+
 def _detect_image_mime(b64data: str) -> str:
     """Detect image MIME type from base64-encoded data magic bytes."""
     try:
@@ -248,6 +308,7 @@ class AIBackend(ABC):
         max_tokens: int | None = None,
     ) -> str:
         """Generate from chat history with images attached to the last user turn."""
+        images = await _downscale_images(images)
 
         logger.warning(
             "Multimodal chat not supported by this backend; falling back to text-only"
@@ -391,6 +452,7 @@ class OllamaBackend(AIBackend):
         max_tokens: int | None = None,
     ) -> str:
         """Generate using Ollama's chat API with image support (e.g. llava)."""
+        images = await _downscale_images(images)
         messages: list[dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -455,6 +517,7 @@ class OllamaBackend(AIBackend):
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> str:
+        images = await _downscale_images(images)
         enriched = [dict(message) for message in messages]
         for message in reversed(enriched):
             if message.get("role") == "user":
@@ -939,6 +1002,7 @@ class OpenAICompatBackend(AIBackend):
         max_tokens: int | None = None,
     ) -> str:
         """Generate using OpenAI vision API (content array with image_url blocks)."""
+        images = await _downscale_images(images)
         max_tokens = self._effective_max_tokens(max_tokens)
         temperature = 0.7 if temperature is None else temperature
         messages: list[dict[str, Any]] = []
@@ -1126,6 +1190,7 @@ class OpenAICompatBackend(AIBackend):
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> str:
+        images = await _downscale_images(images)
         enriched = [dict(message) for message in messages]
         for message in reversed(enriched):
             if message.get("role") != "user":

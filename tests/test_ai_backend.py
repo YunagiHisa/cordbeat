@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -1402,3 +1402,73 @@ class TestGenerateChat:
 
         with pytest.raises(AIBackendError, match="Unexpected response format"):
             await backend.generate_chat([{"role": "user", "content": "hi"}])
+
+
+class TestVisionImageDownscale:
+    """Oversized photos crashed llama.cpp in production; the backend bounds
+    image pixel size before building the vision payload."""
+
+    @staticmethod
+    def _image_b64(width: int, height: int) -> str:
+        import base64
+        import io
+
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (width, height), (200, 30, 30)).save(buf, format="JPEG")
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+
+    def test_large_image_is_downscaled_to_budget(self) -> None:
+        import base64
+        import io
+
+        from PIL import Image
+
+        from cordbeat.ai.backend import _IMAGE_MAX_EDGE_PX, _downscale_image_b64
+
+        original = self._image_b64(4032, 3024)
+        result = _downscale_image_b64(original)
+
+        assert result != original
+        with Image.open(io.BytesIO(base64.b64decode(result))) as img:
+            assert max(img.size) == _IMAGE_MAX_EDGE_PX
+        assert len(result) < len(original)
+
+    def test_small_image_is_returned_unchanged(self) -> None:
+        from cordbeat.ai.backend import _downscale_image_b64
+
+        original = self._image_b64(800, 600)
+        assert _downscale_image_b64(original) == original
+
+    def test_invalid_data_fails_open(self) -> None:
+        from cordbeat.ai.backend import _downscale_image_b64
+
+        assert _downscale_image_b64("not-a-real-image") == "not-a-real-image"
+
+    async def test_generate_with_vision_sends_downscaled_images(self) -> None:
+        import json as jsonlib
+
+        from cordbeat.ai.backend import OpenAICompatBackend
+        from cordbeat.config import AIBackendConfig
+
+        cfg = AIBackendConfig(
+            provider="openai_compat", base_url="http://localhost:1", model="m"
+        )
+        backend = OpenAICompatBackend(cfg)
+        resp = MagicMock()
+        resp.json.return_value = {"choices": [{"message": {"content": "ok"}}]}
+        backend._client = AsyncMock()
+        backend._client.post = AsyncMock(return_value=resp)
+        backend._raise_for_status_with_body = MagicMock()  # type: ignore[method-assign]
+
+        with patch(
+            "cordbeat.ai.backend._downscale_images",
+            new=AsyncMock(return_value=["SCALEDDATA"]),
+        ) as mock_downscale:
+            await backend.generate_with_vision("describe", ["ORIGINALDATA"])
+
+        mock_downscale.assert_awaited_once_with(["ORIGINALDATA"])
+        payload = jsonlib.dumps(backend._client.post.call_args.kwargs["json"])
+        assert "SCALEDDATA" in payload
+        assert "ORIGINALDATA" not in payload

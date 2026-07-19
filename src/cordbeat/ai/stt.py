@@ -57,6 +57,15 @@ class STTBackend(ABC):
         can gracefully degrade to a "could not transcribe" message.
         """
 
+    async def preload(self) -> None:
+        """Prepare the backend so the first transcription is not delayed.
+
+        Default is a no-op (cloud backends have nothing to warm up). Local
+        model backends override this to download/load weights ahead of the
+        first utterance, which otherwise stalls the whole VC pipeline.
+        """
+        return None
+
 
 class WhisperLocalSTT(STTBackend):
     """Local Whisper inference via *faster-whisper* (CPU/CUDA).
@@ -71,28 +80,70 @@ class WhisperLocalSTT(STTBackend):
         self._device = config.device or "cpu"
         self._model: Any = None  # faster_whisper.WhisperModel, loaded lazily
         self._transcribe_lock = asyncio.Lock()
+        self._load_lock = asyncio.Lock()
+
+    def _load_model_sync(self) -> Any:
+        """Load (downloading if needed) the faster-whisper model. Blocking."""
+        from faster_whisper import WhisperModel
+
+        return WhisperModel(self._model_size, device=self._device)
+
+    async def _ensure_model(self) -> Any:
+        """Return the loaded model, loading it off-loop under a lock.
+
+        The large-v3 weights are ~3 GB; loading them lazily inside the first
+        transcription stalled the whole VC pipeline while the download ran.
+        """
+        if self._model is not None:
+            return self._model
+        async with self._load_lock:
+            if self._model is None:
+                logger.info(
+                    "Loading faster-whisper model %r on %s ...",
+                    self._model_size,
+                    self._device,
+                )
+                self._model = await asyncio.get_running_loop().run_in_executor(
+                    None, self._load_model_sync
+                )
+                logger.info("faster-whisper model %r ready", self._model_size)
+        return self._model
+
+    async def preload(self) -> None:
+        """Download/load the model at startup instead of on first speech."""
+        try:
+            await self._ensure_model()
+        except ImportError:
+            logger.error(
+                "faster-whisper is not installed. "
+                "Install with: uv sync --extra stt-local"
+            )
+        except Exception:
+            logger.warning(
+                "Failed to preload faster-whisper model %r; it will be loaded "
+                "on first use",
+                self._model_size,
+                exc_info=True,
+            )
 
     async def transcribe(self, audio_bytes: bytes, language: str = "") -> str:
         lang: str | None = language or self._language or None
 
+        try:
+            model = await self._ensure_model()
+        except ImportError:
+            logger.error(
+                "faster-whisper is not installed. "
+                "Install with: uv sync --extra stt-local"
+            )
+            return ""
+
         def _run() -> str:
-            try:
-                from faster_whisper import WhisperModel
-            except ImportError:
-                logger.error(
-                    "faster-whisper is not installed. "
-                    "Install with: uv sync --extra stt-local"
-                )
-                return ""
-
-            if self._model is None:
-                self._model = WhisperModel(self._model_size, device=self._device)
-
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 f.write(audio_bytes)
                 tmp_path = f.name
             try:
-                segments, _ = self._model.transcribe(tmp_path, language=lang)
+                segments, _ = model.transcribe(tmp_path, language=lang)
                 return "".join(seg.text for seg in segments).strip()
             finally:
                 Path(tmp_path).unlink(missing_ok=True)

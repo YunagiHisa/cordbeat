@@ -45,6 +45,48 @@ def test_whisper_local_defaults_to_cpu_device() -> None:
     assert backend._device == "cpu"
 
 
+async def test_whisper_local_preload_loads_model_once() -> None:
+    """preload() loads the model at startup so the first utterance is not
+    stalled behind a multi-gigabyte download (production VC incident)."""
+    backend = WhisperLocalSTT(STTConfig(backend="whisper_local", model="large-v3"))
+    fake_segment = MagicMock()
+    fake_segment.text = "hi"
+    fake_model = MagicMock()
+    fake_model.transcribe = MagicMock(return_value=([fake_segment], None))
+    load_calls = 0
+
+    def fake_load() -> object:
+        nonlocal load_calls
+        load_calls += 1
+        return fake_model
+
+    backend._load_model_sync = fake_load  # type: ignore[method-assign]
+
+    await backend.preload()
+    assert backend._model is fake_model
+    assert load_calls == 1
+
+    # A later transcribe reuses the preloaded model instead of loading again.
+    with patch("tempfile.NamedTemporaryFile"), patch("cordbeat.ai.stt.Path"):
+        result = await backend.transcribe(b"wav")
+
+    assert result == "hi"
+    assert load_calls == 1
+
+
+async def test_whisper_local_preload_failure_is_non_fatal() -> None:
+    backend = WhisperLocalSTT(STTConfig(backend="whisper_local"))
+
+    def boom() -> object:
+        raise RuntimeError("no weights")
+
+    backend._load_model_sync = boom  # type: ignore[method-assign]
+
+    # Must not raise; model stays unloaded for a later lazy retry.
+    await backend.preload()
+    assert backend._model is None
+
+
 def test_tts_config_defaults() -> None:
     cfg = TTSConfig()
     assert cfg.enabled is False

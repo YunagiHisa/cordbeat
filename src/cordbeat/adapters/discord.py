@@ -215,6 +215,7 @@ class DiscordAdapter(RetryableConnection):
 
         self._stt: STTBackend | None = None
         self._tts: TTSBackend | None = None
+        self._stt_preload_task: asyncio.Future[None] | None = None
 
         if stt_config is not None and stt_config.enabled:
             from cordbeat.ai.stt import create_stt_backend
@@ -240,6 +241,11 @@ class DiscordAdapter(RetryableConnection):
                 "Discord bot token not configured in adapters.discord.options.token"
             )
             return
+
+        # Warm up the local STT model in the background so the first VC
+        # utterance is not stalled behind a multi-gigabyte model download.
+        if self._stt is not None:
+            self._stt_preload_task = asyncio.ensure_future(self._stt.preload())
 
         intents = discord.Intents.default()
         intents.message_content = True

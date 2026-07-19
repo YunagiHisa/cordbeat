@@ -41,6 +41,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Preload local STT model at startup.** The `whisper_local` backend now
+  downloads and loads its model when the Discord adapter starts, in the
+  background, instead of lazily on the first voice utterance. A cold cache
+  meant the first VC speaker triggered a multi-gigabyte model download inside
+  the transcription call, which never returned before the conversation ended,
+  so voice activation (including the ai_decision judge in hybrid mode) never
+  ran. Preload failures are non-fatal and fall back to lazy loading.
 - **Vision image downscaling.** Images are resized so their longest edge
   fits 1568px (EXIF-rotation applied, JPEG re-encoded) before the vision
   payload is built. A 12-megapixel phone photo crashed the llama.cpp server's

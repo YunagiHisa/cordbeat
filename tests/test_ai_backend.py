@@ -1472,3 +1472,44 @@ class TestVisionImageDownscale:
         payload = jsonlib.dumps(backend._client.post.call_args.kwargs["json"])
         assert "SCALEDDATA" in payload
         assert "ORIGINALDATA" not in payload
+
+
+class TestTransientBackendStatus:
+    """A server that is still loading (503) must be a calm, typed error, not a
+    raw HTTPStatusError that logs a stack trace on every heartbeat tick."""
+
+    @staticmethod
+    def _resp(status: int, text: str = "") -> MagicMock:
+        resp = MagicMock()
+        resp.status_code = status
+        resp.text = text
+        resp.raise_for_status = MagicMock(
+            side_effect=AssertionError("should not reach raise_for_status")
+        )
+        return resp
+
+    def test_503_loading_model_raises_ai_backend_error(self) -> None:
+        resp = self._resp(503, '{"error":{"message":"Loading model"}}')
+        with pytest.raises(AIBackendError, match="temporarily unavailable"):
+            OpenAICompatBackend._raise_for_status_with_body(resp)
+
+    @pytest.mark.parametrize("status", [429, 502, 503, 504])
+    def test_transient_statuses_are_typed_backend_errors(self, status: int) -> None:
+        with pytest.raises(AIBackendError):
+            OpenAICompatBackend._raise_for_status_with_body(self._resp(status))
+
+    def test_hard_error_still_calls_raise_for_status(self) -> None:
+        resp = MagicMock()
+        resp.status_code = 400
+        resp.text = "bad request"
+        raised = RuntimeError("boom")
+        resp.raise_for_status = MagicMock(side_effect=raised)
+        with pytest.raises(RuntimeError):
+            OpenAICompatBackend._raise_for_status_with_body(resp)
+
+    def test_success_is_noop(self) -> None:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.raise_for_status = MagicMock()
+        OpenAICompatBackend._raise_for_status_with_body(resp)
+        resp.raise_for_status.assert_not_called()

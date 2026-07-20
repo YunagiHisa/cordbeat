@@ -45,6 +45,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Transient backend status handled calmly.** A 503 "Loading model" (or
+  other 429/502/503/504) from the LLM server — expected while it restarts —
+  is now raised as a typed `AIBackendError` and logged as a warning, so the
+  heartbeat reports "backend temporarily unavailable" and retries next tick
+  instead of logging a full stack trace on every tick during model load.
 - **STT falls back to CPU on CUDA load failure.** If the local whisper model
   cannot load on the configured GPU (e.g. VRAM already consumed by the LLM,
   raising CUDA out-of-memory), it now retries on CPU so voice transcription

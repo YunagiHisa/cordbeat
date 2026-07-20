@@ -43,6 +43,10 @@ _OPENAI_COMPAT_MODES = {
 }
 _LOCAL_OPENAI_COMPAT_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
 _REASONING_EFFORT_VALUES = {"none", "minimal", "low", "medium", "high"}
+# Transient server states (still loading, overloaded, briefly down). These are
+# expected during a backend restart and should be reported calmly, not as a
+# hard error with a stack trace on every heartbeat tick.
+_TRANSIENT_HTTP_STATUS_CODES = frozenset({429, 502, 503, 504})
 
 
 def _resolve_configured_max_tokens(
@@ -674,8 +678,23 @@ class OpenAICompatBackend(AIBackend):
     @staticmethod
     def _raise_for_status_with_body(resp: httpx.Response) -> None:
         status_code = getattr(resp, "status_code", None)
-        if isinstance(status_code, int) and status_code >= 400:
-            logger.error("openai_compat error body: %s", resp.text[:4000])
+        if not isinstance(status_code, int) or status_code < 400:
+            return
+        body = resp.text[:4000]
+        if status_code in _TRANSIENT_HTTP_STATUS_CODES:
+            # e.g. llama.cpp returns 503 "Loading model" during startup. This
+            # resolves on its own once the model finishes loading; surface it
+            # as a typed, calm error so the heartbeat logs a warning instead of
+            # a stack trace on every tick.
+            logger.warning(
+                "openai_compat backend unavailable (HTTP %d): %s",
+                status_code,
+                body,
+            )
+            raise AIBackendError(
+                f"AI backend temporarily unavailable (HTTP {status_code})"
+            )
+        logger.error("openai_compat error body: %s", body)
         resp.raise_for_status()
 
     def _strip_reasoning_text(self, raw: str) -> str:

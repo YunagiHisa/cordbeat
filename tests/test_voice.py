@@ -8,6 +8,8 @@ import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from cordbeat.ai.stt import (
     OpenAICompatSTT,
     WhisperLocalSTT,
@@ -74,7 +76,7 @@ def test_whisper_local_model_kwargs_include_compute_type_and_index() -> None:
     fake_module = MagicMock()
     fake_module.WhisperModel = FakeWhisperModel
     with patch.dict("sys.modules", {"faster_whisper": fake_module}):
-        backend._load_model_sync()
+        backend._load_model_sync("cuda", 1, "int8_float16")
 
     assert captured["model_size"] == "large-v3"
     assert captured["device"] == "cuda"
@@ -93,7 +95,7 @@ def test_whisper_local_omits_compute_type_when_unset() -> None:
     fake_module = MagicMock()
     fake_module.WhisperModel = FakeWhisperModel
     with patch.dict("sys.modules", {"faster_whisper": fake_module}):
-        backend._load_model_sync()
+        backend._load_model_sync("cpu", None, "")
 
     assert "compute_type" not in captured
     assert "device_index" not in captured
@@ -110,7 +112,7 @@ async def test_whisper_local_preload_loads_model_once() -> None:
     fake_model.transcribe = MagicMock(return_value=([fake_segment], None))
     load_calls = 0
 
-    def fake_load() -> object:
+    def fake_load(device: str, index: object, compute_type: str) -> object:
         nonlocal load_calls
         load_calls += 1
         return fake_model
@@ -132,7 +134,7 @@ async def test_whisper_local_preload_loads_model_once() -> None:
 async def test_whisper_local_preload_failure_is_non_fatal() -> None:
     backend = WhisperLocalSTT(STTConfig(backend="whisper_local"))
 
-    def boom() -> object:
+    def boom(device: str, index: object, compute_type: str) -> object:
         raise RuntimeError("no weights")
 
     backend._load_model_sync = boom  # type: ignore[method-assign]
@@ -140,6 +142,53 @@ async def test_whisper_local_preload_failure_is_non_fatal() -> None:
     # Must not raise; model stays unloaded for a later lazy retry.
     await backend.preload()
     assert backend._model is None
+
+
+async def test_whisper_local_falls_back_to_cpu_on_cuda_oom() -> None:
+    """When the GPU is full, STT must degrade to CPU instead of failing every
+    utterance (production: LLM filled VRAM, whisper load hit CUDA OOM)."""
+    backend = WhisperLocalSTT(
+        STTConfig(
+            backend="whisper_local",
+            device="cuda:1",
+            compute_type="int8_float16",
+        )
+    )
+    cpu_model = MagicMock()
+    calls: list[tuple[str, object, str]] = []
+
+    def fake_load(device: str, index: object, compute_type: str) -> object:
+        calls.append((device, index, compute_type))
+        if device != "cpu":
+            raise RuntimeError("CUDA failed with error out of memory")
+        return cpu_model
+
+    backend._load_model_sync = fake_load  # type: ignore[method-assign]
+
+    model = await backend._ensure_model()
+
+    assert model is cpu_model
+    # First tried cuda:1 with the CUDA compute type, then fell back to CPU
+    # without the CUDA-only compute type.
+    assert calls[0] == ("cuda", 1, "int8_float16")
+    assert calls[1] == ("cpu", None, "")
+    # State updated so later loads/logs reflect the CPU fallback.
+    assert backend._device == "cpu"
+    assert backend._device_index is None
+    assert backend._compute_type == ""
+
+
+async def test_whisper_local_cpu_load_failure_still_raises() -> None:
+    """A genuine CPU load failure has no fallback and must propagate."""
+    backend = WhisperLocalSTT(STTConfig(backend="whisper_local", device="cpu"))
+
+    def boom(device: str, index: object, compute_type: str) -> object:
+        raise RuntimeError("no weights")
+
+    backend._load_model_sync = boom  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError):
+        await backend._ensure_model()
 
 
 def test_tts_config_defaults() -> None:

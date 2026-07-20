@@ -99,15 +99,20 @@ class WhisperLocalSTT(STTBackend):
         self._transcribe_lock = asyncio.Lock()
         self._load_lock = asyncio.Lock()
 
-    def _load_model_sync(self) -> Any:
+    def _load_model_sync(
+        self,
+        device: str,
+        device_index: int | None,
+        compute_type: str,
+    ) -> Any:
         """Load (downloading if needed) the faster-whisper model. Blocking."""
         from faster_whisper import WhisperModel
 
-        kwargs: dict[str, Any] = {"device": self._device}
-        if self._device_index is not None:
-            kwargs["device_index"] = self._device_index
-        if self._compute_type:
-            kwargs["compute_type"] = self._compute_type
+        kwargs: dict[str, Any] = {"device": device}
+        if device_index is not None:
+            kwargs["device_index"] = device_index
+        if compute_type:
+            kwargs["compute_type"] = compute_type
         return WhisperModel(self._model_size, **kwargs)
 
     async def _ensure_model(self) -> Any:
@@ -115,24 +120,55 @@ class WhisperLocalSTT(STTBackend):
 
         The large-v3 weights are ~3 GB; loading them lazily inside the first
         transcription stalled the whole VC pipeline while the download ran.
+        If a CUDA load fails (e.g. VRAM exhausted by the LLM), fall back to
+        CPU so VC keeps working — slower — instead of failing every utterance.
         """
         if self._model is not None:
             return self._model
         async with self._load_lock:
-            if self._model is None:
-                device_desc = self._device
-                if self._device_index is not None:
-                    device_desc = f"{self._device}:{self._device_index}"
-                logger.info(
-                    "Loading faster-whisper model %r on %s (compute_type=%s) ...",
-                    self._model_size,
+            if self._model is not None:
+                return self._model
+            loop = asyncio.get_running_loop()
+            device_desc = self._device
+            if self._device_index is not None:
+                device_desc = f"{self._device}:{self._device_index}"
+            logger.info(
+                "Loading faster-whisper model %r on %s (compute_type=%s) ...",
+                self._model_size,
+                device_desc,
+                self._compute_type or "default",
+            )
+            try:
+                self._model = await loop.run_in_executor(
+                    None,
+                    self._load_model_sync,
+                    self._device,
+                    self._device_index,
+                    self._compute_type,
+                )
+            except ImportError:
+                raise
+            except Exception:
+                if self._device == "cpu":
+                    raise
+                logger.warning(
+                    "faster-whisper failed to load on %s; falling back to CPU. "
+                    "VC transcription will work but be slower. Free GPU VRAM "
+                    "(e.g. reduce the LLM context) to use the GPU.",
                     device_desc,
-                    self._compute_type or "default",
+                    exc_info=True,
                 )
-                self._model = await asyncio.get_running_loop().run_in_executor(
-                    None, self._load_model_sync
+                # CPU cannot use CUDA compute types like int8_float16; let
+                # CTranslate2 pick its CPU default (int8) instead.
+                self._model = await loop.run_in_executor(
+                    None, self._load_model_sync, "cpu", None, ""
                 )
-                logger.info("faster-whisper model %r ready", self._model_size)
+                self._device, self._device_index, self._compute_type = "cpu", None, ""
+            logger.info(
+                "faster-whisper model %r ready on %s",
+                self._model_size,
+                self._device,
+            )
         return self._model
 
     async def preload(self) -> None:

@@ -45,6 +45,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **STT falls back to CPU on CUDA load failure.** If the local whisper model
+  cannot load on the configured GPU (e.g. VRAM already consumed by the LLM,
+  raising CUDA out-of-memory), it now retries on CPU so voice transcription
+  keeps working — slower — instead of failing on every utterance. The
+  CUDA-only compute type is dropped for the CPU retry.
 - **Pin embedding model to CPU by default.** The sentence-transformers
   embedder used for memory recall now loads on the device set by
   `memory.embedding_device` (default `cpu`) instead of auto-selecting CUDA.

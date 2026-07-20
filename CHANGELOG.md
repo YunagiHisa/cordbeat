@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **STT compute-type and device-index selection.** `stt.compute_type` (e.g.
+  `int8_float16`) and a `cuda:N` form for `stt.device` let `whisper_local`
+  fit a large model into limited VRAM (~1.6 GB for large-v3 at int8_float16
+  vs ~3 GB at the CUDA-default float16) and pin it to a specific GPU.
 - **Grounded discovery sharing (expression E5).** HEARTBEAT can now turn a
   successful, user-scoped skill result into a short emotion-aware message using
   only that result as generation context. Shares have a separate per-user

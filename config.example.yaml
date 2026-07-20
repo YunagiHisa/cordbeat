@@ -363,7 +363,8 @@ rvc:
   model_path: ""              # path to .pth RVC checkpoint
   index_path: ""              # path to .index file (optional, improves quality)
   f0_up_key: 0                # pitch shift in semitones (0 = no shift)
-  device: ""                  # "cuda" | "cpu" | "" (auto)
+  device: ""                  # "cuda" | "cpu" | "cuda:1" | "" (auto)
+  compute_type: ""            # whisper_local: "int8_float16" | "int8" | "" (default); int8_float16 fits large-v3 in ~1.6GB VRAM
 
 # --- Metrics ---
 metrics:

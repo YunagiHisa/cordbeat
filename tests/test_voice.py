@@ -43,6 +43,61 @@ def test_whisper_local_uses_configured_device() -> None:
 def test_whisper_local_defaults_to_cpu_device() -> None:
     backend = WhisperLocalSTT(STTConfig(backend="whisper_local"))
     assert backend._device == "cpu"
+    assert backend._device_index is None
+
+
+def test_whisper_local_parses_device_index() -> None:
+    backend = WhisperLocalSTT(
+        STTConfig(backend="whisper_local", device="cuda:1")
+    )
+    assert backend._device == "cuda"
+    assert backend._device_index == 1
+
+
+def test_whisper_local_model_kwargs_include_compute_type_and_index() -> None:
+    """VRAM-constrained GPUs need int8 quantization and a pinned device."""
+    backend = WhisperLocalSTT(
+        STTConfig(
+            backend="whisper_local",
+            model="large-v3",
+            device="cuda:1",
+            compute_type="int8_float16",
+        )
+    )
+    captured: dict[str, Any] = {}
+
+    class FakeWhisperModel:
+        def __init__(self, model_size: str, **kwargs: Any) -> None:
+            captured["model_size"] = model_size
+            captured.update(kwargs)
+
+    fake_module = MagicMock()
+    fake_module.WhisperModel = FakeWhisperModel
+    with patch.dict("sys.modules", {"faster_whisper": fake_module}):
+        backend._load_model_sync()
+
+    assert captured["model_size"] == "large-v3"
+    assert captured["device"] == "cuda"
+    assert captured["device_index"] == 1
+    assert captured["compute_type"] == "int8_float16"
+
+
+def test_whisper_local_omits_compute_type_when_unset() -> None:
+    backend = WhisperLocalSTT(STTConfig(backend="whisper_local", device="cpu"))
+    captured: dict[str, Any] = {}
+
+    class FakeWhisperModel:
+        def __init__(self, model_size: str, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    fake_module = MagicMock()
+    fake_module.WhisperModel = FakeWhisperModel
+    with patch.dict("sys.modules", {"faster_whisper": fake_module}):
+        backend._load_model_sync()
+
+    assert "compute_type" not in captured
+    assert "device_index" not in captured
+    assert captured["device"] == "cpu"
 
 
 async def test_whisper_local_preload_loads_model_once() -> None:

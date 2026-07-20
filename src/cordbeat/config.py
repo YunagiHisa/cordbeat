@@ -238,9 +238,15 @@ class STTConfig:
     base_url: str = ""
     # HTTP request timeout for cloud STT calls (whisper_openai / openai_compat).
     timeout: float = 60.0
-    # Inference device for whisper_local ("cpu", "cuda", "auto", ...).
-    # Empty → cpu. Real-time VC transcription benefits greatly from a GPU.
+    # Inference device for whisper_local. "cpu", "cuda", "auto", or a specific
+    # index like "cuda:1" to pin to one GPU. Empty → cpu. Real-time VC
+    # transcription benefits greatly from a GPU.
     device: str = ""
+    # faster-whisper compute type for whisper_local, e.g. "int8_float16" or
+    # "int8" to fit large models into limited VRAM (~1.6 GB / ~1.5 GB for
+    # large-v3 vs ~3 GB at float16). Empty → CTranslate2 default for the
+    # device (float16 on CUDA, int8 on CPU).
+    compute_type: str = ""
 
 
 @dataclass

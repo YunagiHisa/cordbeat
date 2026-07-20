@@ -37,6 +37,19 @@ _LOCAL_WHISPER_MODEL_NAMES = frozenset(
 _DEFAULT_API_STT_MODEL = "whisper-1"
 
 
+def _parse_device(device: str) -> tuple[str, int | None]:
+    """Split a device string like "cuda:1" into (device, index).
+
+    faster-whisper/CTranslate2 expects the device ("cpu"/"cuda"/"auto") and the
+    index as separate arguments. A plain "cuda" or "cpu" yields index None.
+    """
+    device = (device or "cpu").strip() or "cpu"
+    base, sep, idx = device.partition(":")
+    if sep and idx.isdigit():
+        return base or "cpu", int(idx)
+    return device, None
+
+
 def _resolve_api_stt_model(model: str) -> str:
     """Map local Whisper size defaults to the cloud-compatible API default."""
 
@@ -77,7 +90,11 @@ class WhisperLocalSTT(STTBackend):
     def __init__(self, config: STTConfig) -> None:
         self._model_size = config.model or "base"
         self._language = config.language
-        self._device = config.device or "cpu"
+        # Split "cuda:1" into device="cuda" + index=1 for CTranslate2, which
+        # takes the index as a separate argument rather than in the string.
+        device = (config.device or "cpu").strip()
+        self._device, self._device_index = _parse_device(device)
+        self._compute_type = (config.compute_type or "").strip()
         self._model: Any = None  # faster_whisper.WhisperModel, loaded lazily
         self._transcribe_lock = asyncio.Lock()
         self._load_lock = asyncio.Lock()
@@ -86,7 +103,12 @@ class WhisperLocalSTT(STTBackend):
         """Load (downloading if needed) the faster-whisper model. Blocking."""
         from faster_whisper import WhisperModel
 
-        return WhisperModel(self._model_size, device=self._device)
+        kwargs: dict[str, Any] = {"device": self._device}
+        if self._device_index is not None:
+            kwargs["device_index"] = self._device_index
+        if self._compute_type:
+            kwargs["compute_type"] = self._compute_type
+        return WhisperModel(self._model_size, **kwargs)
 
     async def _ensure_model(self) -> Any:
         """Return the loaded model, loading it off-loop under a lock.
@@ -98,10 +120,14 @@ class WhisperLocalSTT(STTBackend):
             return self._model
         async with self._load_lock:
             if self._model is None:
+                device_desc = self._device
+                if self._device_index is not None:
+                    device_desc = f"{self._device}:{self._device_index}"
                 logger.info(
-                    "Loading faster-whisper model %r on %s ...",
+                    "Loading faster-whisper model %r on %s (compute_type=%s) ...",
                     self._model_size,
-                    self._device,
+                    device_desc,
+                    self._compute_type or "default",
                 )
                 self._model = await asyncio.get_running_loop().run_in_executor(
                     None, self._load_model_sync

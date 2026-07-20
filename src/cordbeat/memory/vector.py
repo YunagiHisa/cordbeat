@@ -44,26 +44,37 @@ _models: dict[str, Any] = {}
 _models_lock = Lock()
 
 
-def _load_model(name: str) -> Any:
-    """Lazily load (and cache) a sentence-transformers model by name."""
-    cached = _models.get(name)
+def _load_model(name: str, device: str = "cpu") -> Any:
+    """Lazily load (and cache) a sentence-transformers model by name.
+
+    The embedding model is pinned to *device* (default CPU). Left on the
+    default, sentence-transformers auto-selects CUDA and competes with the
+    STT/LLM models for VRAM; a small MiniLM embedder runs fine on CPU and
+    keeps the GPU free, avoiding CUDA out-of-memory during heartbeat recall.
+    """
+    key = f"{name}@{device or 'cpu'}"
+    cached = _models.get(key)
     if cached is not None:
         return cached
     with _models_lock:
-        cached = _models.get(name)
+        cached = _models.get(key)
         if cached is None:
             from sentence_transformers import SentenceTransformer
 
-            cached = SentenceTransformer(name)
-            _models[name] = cached
+            cached = SentenceTransformer(name, device=device or "cpu")
+            _models[key] = cached
     return cached
 
 
-async def embed_text(text: str, model_name: str = EMBEDDING_MODEL_NAME) -> bytes:
+async def embed_text(
+    text: str,
+    model_name: str = EMBEDDING_MODEL_NAME,
+    device: str = "cpu",
+) -> bytes:
     """Encode *text* into a serialized float32 embedding for sqlite-vec."""
 
     def _run() -> bytes:
-        model = _load_model(model_name)
+        model = _load_model(model_name, device)
         vec = model.encode(text, normalize_embeddings=True).tolist()
         import sqlite_vec  # noqa: PLC0415
 
@@ -122,6 +133,7 @@ class VectorMemory:
         self._conn = conn
         self._config = config
         self._model_name = config.embedding_model
+        self._embedding_device = config.embedding_device or "cpu"
         if config.embedding_dim != EMBEDDING_DIM:
             logger.warning(
                 "MemoryConfig.embedding_dim=%d differs from the vec0 schema "
@@ -132,7 +144,7 @@ class VectorMemory:
             )
 
     async def _embed(self, text: str) -> bytes:
-        return await embed_text(text, self._model_name)
+        return await embed_text(text, self._model_name, self._embedding_device)
 
     async def add_semantic(self, entry: MemoryEntry) -> str:
         return await self._insert(entry, layer="semantic")

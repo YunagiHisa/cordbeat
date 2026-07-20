@@ -131,6 +131,10 @@ class MemoryConfig:
     chain_recall_depth_penalty: float = 0.5
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dim: int = 384
+    # Device for the sentence-transformers embedder ("cpu" | "cuda" | "").
+    # Default CPU keeps the small MiniLM embedder off the GPU so it does not
+    # compete for VRAM with STT/LLM models (which caused CUDA OOM in recall).
+    embedding_device: str = "cpu"
     # Near-duplicate memories within this vector distance are merged
     # (strength reinforced) instead of stored again. 0.0 disables dedup.
     # 0.15 ≈ cosine similarity 0.99 on normalized embeddings — merges only

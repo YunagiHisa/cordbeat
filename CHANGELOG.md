@@ -41,6 +41,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   image bytes or feeding visual observations into long-term fact extraction.
 
 ### Fixed
+- **Pin embedding model to CPU by default.** The sentence-transformers
+  embedder used for memory recall now loads on the device set by
+  `memory.embedding_device` (default `cpu`) instead of auto-selecting CUDA.
+  With a GPU-backed STT model resident in VRAM, the embedder's automatic CUDA
+  placement raised `CUDA error: out of memory` and crashed the heartbeat tick
+  during semantic recall; keeping the small MiniLM embedder on CPU leaves the
+  GPU for the STT/LLM models. Models are cached per device.
 - **Preload local STT model at startup.** The `whisper_local` backend now
   downloads and loads its model when the Discord adapter starts, in the
   background, instead of lazily on the first voice utterance. A cold cache

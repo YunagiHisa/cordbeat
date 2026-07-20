@@ -27,6 +27,40 @@ async def memory(tmp_path: Path) -> MemoryStore:
     await store.close()
 
 
+class TestEmbeddingDevice:
+    """The embedder must stay on CPU by default so it does not compete with
+    STT/LLM models for VRAM (production heartbeat CUDA out-of-memory)."""
+
+    def test_config_defaults_embedding_to_cpu(self) -> None:
+        assert MemoryConfig().embedding_device == "cpu"
+
+    def test_load_model_pins_requested_device_and_caches_per_device(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import sys
+        import types
+        from unittest.mock import MagicMock
+
+        from cordbeat.memory import vector as vector_module
+
+        constructed: list[tuple[str, str]] = []
+
+        def fake_ctor(name: str, device: str = "cpu") -> object:
+            constructed.append((name, device))
+            return MagicMock()
+
+        fake_st = types.ModuleType("sentence_transformers")
+        fake_st.SentenceTransformer = fake_ctor  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "sentence_transformers", fake_st)
+        monkeypatch.setattr(vector_module, "_models", {})
+
+        vector_module._load_model("m", "cpu")
+        vector_module._load_model("m", "cpu")  # cached, no second construction
+        vector_module._load_model("m", "cuda")  # different device → new entry
+
+        assert constructed == [("m", "cpu"), ("m", "cuda")]
+
+
 class TestMemoryInitialization:
     async def test_foreign_key_check_warns_but_initializes(
         self,

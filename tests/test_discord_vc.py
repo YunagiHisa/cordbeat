@@ -411,6 +411,94 @@ class TestDiscordAdapterVC:
 
         assert adapter._vc_wake_words == ("cordbeat", "\u30a2\u30c6\u30ca")
 
+    async def test_heartbeat_is_suppressed_while_in_vc(self) -> None:
+        adapter = self._make_adapter()
+        adapter._vc_receivers[999] = MagicMock()
+        adapter._send_to_discord = AsyncMock()  # type: ignore[method-assign]
+
+        await adapter._dispatch_core_message(
+            "u1",
+            "autonomous check-in",
+            [],
+            metadata={"source": "heartbeat", "channel_id": "123"},
+        )
+
+        adapter._send_to_discord.assert_not_called()
+
+    async def test_heartbeat_can_be_delivered_in_vc_when_disabled(self) -> None:
+        adapter = self._make_adapter(options={"vc_pause_heartbeat": False})
+        adapter._vc_receivers[999] = MagicMock()
+        adapter._send_to_discord = AsyncMock()  # type: ignore[method-assign]
+
+        await adapter._dispatch_core_message(
+            "u1",
+            "autonomous check-in",
+            [],
+            metadata={"source": "heartbeat", "channel_id": "123"},
+        )
+
+        adapter._send_to_discord.assert_awaited_once_with(
+            "u1",
+            "autonomous check-in",
+            [],
+            metadata={"source": "heartbeat", "channel_id": "123"},
+        )
+
+    async def test_reminder_heartbeat_bypasses_vc_pause(self) -> None:
+        adapter = self._make_adapter()
+        adapter._vc_receivers[999] = MagicMock()
+        adapter._send_to_discord = AsyncMock()  # type: ignore[method-assign]
+
+        await adapter._dispatch_core_message(
+            "u1",
+            "Reminder: catch the 19:15 bus",
+            [],
+            metadata={"source": "heartbeat", "reminder": True, "channel_id": "123"},
+        )
+
+        adapter._send_to_discord.assert_awaited_once()
+
+    async def test_suppressed_heartbeat_is_delivered_after_leaving_vc(self) -> None:
+        adapter = self._make_adapter()
+        adapter._vc_receivers[999] = MagicMock(stop=AsyncMock())
+        adapter._send_to_discord = AsyncMock()  # type: ignore[method-assign]
+
+        await adapter._dispatch_core_message(
+            "u1",
+            "autonomous check-in",
+            [],
+            metadata={"source": "heartbeat", "channel_id": "123"},
+        )
+        adapter._send_to_discord.assert_not_called()
+
+        await adapter._cleanup_vc_state(999)
+
+        adapter._send_to_discord.assert_awaited_once_with(
+            "u1",
+            "autonomous check-in",
+            [],
+            metadata={"source": "heartbeat", "channel_id": "123"},
+        )
+
+    async def test_deferred_heartbeat_waits_for_all_vc_guilds(self) -> None:
+        adapter = self._make_adapter()
+        adapter._vc_receivers[999] = MagicMock(stop=AsyncMock())
+        adapter._vc_receivers[1000] = MagicMock(stop=AsyncMock())
+        adapter._send_to_discord = AsyncMock()  # type: ignore[method-assign]
+
+        await adapter._dispatch_core_message(
+            "u1",
+            "autonomous check-in",
+            [],
+            metadata={"source": "heartbeat", "channel_id": "123"},
+        )
+
+        await adapter._cleanup_vc_state(999)
+        adapter._send_to_discord.assert_not_called()
+
+        await adapter._cleanup_vc_state(1000)
+        adapter._send_to_discord.assert_awaited_once()
+
     async def test_on_vc_speech_no_ws(self) -> None:
         adapter = self._make_adapter()
         adapter._ws = None

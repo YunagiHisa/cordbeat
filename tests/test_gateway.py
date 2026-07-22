@@ -519,6 +519,36 @@ class TestRetryableConnection:
         await conn._listen_core()
         assert dispatched == [("u1", "hi")]
 
+    async def test_listen_core_marks_heartbeat_messages_for_adapters(self) -> None:
+        conn = _ConcreteConnection()
+        seen_metadata: list[dict[str, Any] | None] = []
+
+        async def fake_dispatch(
+            uid: str,
+            content: str,
+            images: list[str],
+            *,
+            metadata: dict[str, Any] | None = None,
+        ) -> None:
+            seen_metadata.append(metadata)
+
+        conn._dispatch_core_message = fake_dispatch  # type: ignore[assignment]
+        msg = json.dumps(
+            {
+                "type": "heartbeat_message",
+                "platform_user_id": "u1",
+                "content": "proactive",
+                "metadata": {"channel_id": "123"},
+            }
+        )
+        mock_ws = AsyncMock()
+        mock_ws.__aiter__ = lambda self: _AsyncIter([msg])
+        conn._ws = mock_ws
+
+        await conn._listen_core()
+
+        assert seen_metadata == [{"channel_id": "123", "source": "heartbeat"}]
+
     async def test_listen_core_skips_invalid_json(self) -> None:
         conn = _ConcreteConnection()
         dispatched: list[tuple[str, str]] = []

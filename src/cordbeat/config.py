@@ -247,6 +247,10 @@ class STTConfig:
     # large-v3 vs ~3 GB at float16). Empty → CTranslate2 default for the
     # device (float16 on CUDA, int8 on CPU).
     compute_type: str = ""
+    # Maximum number of audio chunks decoded in parallel by faster-whisper's
+    # batched inference pipeline. 1 keeps voice transcription serial and uses
+    # the regular WhisperModel path, which is the lowest-memory option.
+    batch_size: int = 1
 
 
 @dataclass

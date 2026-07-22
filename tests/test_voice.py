@@ -35,6 +35,7 @@ def test_stt_config_defaults() -> None:
     assert cfg.backend == "whisper_openai"
     assert cfg.model == "base"
     assert cfg.device == ""
+    assert cfg.batch_size == 1
 
 
 def test_whisper_local_uses_configured_device() -> None:
@@ -82,6 +83,20 @@ def test_whisper_local_model_kwargs_include_compute_type_and_index() -> None:
     assert captured["device"] == "cuda"
     assert captured["device_index"] == 1
     assert captured["compute_type"] == "int8_float16"
+
+
+def test_whisper_local_uses_configured_batch_size() -> None:
+    backend = WhisperLocalSTT(
+        STTConfig(backend="whisper_local", batch_size=1)
+    )
+    assert backend._batch_size == 1
+
+
+def test_whisper_local_clamps_invalid_batch_size() -> None:
+    backend = WhisperLocalSTT(
+        STTConfig(backend="whisper_local", batch_size=0)
+    )
+    assert backend._batch_size == 1
 
 
 def test_whisper_local_omits_compute_type_when_unset() -> None:

@@ -48,6 +48,7 @@ _VC_BUFFER_MAX_FRAGMENTS = 5
 _VC_CONTEXT_MAX_LINES_DEFAULT = 8
 _VC_FOLLOWUP_SECONDS_DEFAULT = 20.0
 _VC_PENDING_TIMEOUT_SECONDS_DEFAULT = 120.0
+_VC_DEFERRED_HEARTBEAT_MAX = 10
 _VC_WAKE_WORDS_DEFAULT = ("cordbeat",)
 _VC_ACTIVATION_MODES = frozenset({"always", "hybrid", "wake_phrase"})
 _SKILL_CONFIRM_APPROVE_CUSTOM_ID = "cordbeat:skill_confirm:approve"
@@ -111,6 +112,26 @@ def _bounded_int_option(
         return default
 
 
+def _bool_option(
+    options: dict[str, Any],
+    key: str,
+    default: bool,
+) -> bool:
+    """Read a boolean adapter option without treating ``"false"`` as true."""
+
+    value = options.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    logger.warning("Invalid Discord option %s; using %s", key, default)
+    return default
+
+
 class DiscordAdapter(RetryableConnection):
     """Discord bot that forwards messages to CordBeat Core via WebSocket."""
 
@@ -151,6 +172,12 @@ class DiscordAdapter(RetryableConnection):
         self._vc_room_context: dict[int, deque[str]] = {}
         self._vc_followup_until: dict[int, float] = {}
         self._vc_session_ids: dict[int, str] = {}
+        self._vc_pause_heartbeat = _bool_option(
+            config.options,
+            "vc_pause_heartbeat",
+            True,
+        )
+        self._vc_deferred_heartbeats: list[dict[str, Any]] = []
         self._vc_pending_speech: str | None = None
         self._vc_pending_speech_guild_id: int | None = None
         # Strong reference so the replay task cannot be garbage-collected
@@ -460,6 +487,18 @@ class DiscordAdapter(RetryableConnection):
         *,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        if (
+            self._vc_pause_heartbeat
+            and metadata
+            and metadata.get("source") == "heartbeat"
+            and not metadata.get("reminder")
+            and self._vc_receivers
+        ):
+            # Core has already recorded this message as sent, so dropping it
+            # here would desync the bot's memory from what the user actually
+            # saw. Defer delivery until the bot leaves every voice channel.
+            self._defer_heartbeat_during_vc(platform_user_id, content, metadata)
+            return
         self._cache_pending_proposals_from_text(platform_user_id, content)
         if metadata and metadata.get("via_vc"):
             raw_guild_id = metadata.get("guild_id")
@@ -494,6 +533,56 @@ class DiscordAdapter(RetryableConnection):
         await self._send_to_discord(
             platform_user_id, content, images, metadata=metadata
         )
+
+    def _defer_heartbeat_during_vc(
+        self,
+        platform_user_id: str,
+        content: str,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        """Hold a heartbeat message until the bot has left every VC."""
+        if len(self._vc_deferred_heartbeats) >= _VC_DEFERRED_HEARTBEAT_MAX:
+            dropped = self._vc_deferred_heartbeats.pop(0)
+            logger.warning(
+                "Deferred-heartbeat queue full; dropping oldest for user=%s",
+                dropped.get("platform_user_id"),
+            )
+        self._vc_deferred_heartbeats.append(
+            {
+                "platform_user_id": platform_user_id,
+                "content": content,
+                "metadata": dict(metadata or {}),
+            }
+        )
+        logger.info(
+            "Deferring Discord HEARTBEAT while bot is in VC guilds=%s "
+            "(queued=%d)",
+            sorted(self._vc_receivers),
+            len(self._vc_deferred_heartbeats),
+        )
+
+    async def _flush_deferred_heartbeats(self) -> None:
+        """Deliver heartbeats that were held back while the bot was in VC."""
+        if self._vc_receivers or not self._vc_deferred_heartbeats:
+            return
+        pending = self._vc_deferred_heartbeats
+        self._vc_deferred_heartbeats = []
+        for item in pending:
+            try:
+                self._cache_pending_proposals_from_text(
+                    item["platform_user_id"], item["content"]
+                )
+                await self._send_to_discord(
+                    item["platform_user_id"],
+                    item["content"],
+                    [],
+                    metadata=item["metadata"],
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to deliver deferred heartbeat to user=%s",
+                    item.get("platform_user_id"),
+                )
 
     async def _dispatch_skill_confirm(
         self, platform_user_id: str, data: dict[str, Any]
@@ -1505,6 +1594,7 @@ class DiscordAdapter(RetryableConnection):
                 )
 
             vc.play(source, after=after_playback)
+            logger.debug("Started VC TTS playback guild=%d", guild_id)
             return True
         except Exception:
             logger.exception("Failed to play TTS audio in VC guild %d", guild_id)
@@ -1676,6 +1766,7 @@ class DiscordAdapter(RetryableConnection):
         if self._vc_pending_speech_guild_id == guild_id:
             self._vc_pending_speech = None
             self._vc_pending_speech_guild_id = None
+        await self._flush_deferred_heartbeats()
 
     async def _handle_mute(self, interaction: Any) -> None:
         """Slash command: toggle voice mute."""

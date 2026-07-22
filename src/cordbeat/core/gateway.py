@@ -163,6 +163,12 @@ class RetryableConnection(ABC):
                 platform_user_id = data.get("platform_user_id", "")
                 images: list[str] = data.get("images") or []
                 metadata: dict[str, Any] = data.get("metadata") or {}
+                if msg_type == MessageType.HEARTBEAT_MESSAGE.value:
+                    # Adapters may need to suppress autonomous delivery based
+                    # on their local state (for example, Discord VC). Keep
+                    # the wire message type available after dispatch has
+                    # normalised all Core replies through one callback.
+                    metadata = {**metadata, "source": "heartbeat"}
                 if msg_type == "skill_confirm":
                     await self._dispatch_skill_confirm(platform_user_id, data)
                 elif msg_type in ("message", "heartbeat_message", "ack", "error"):

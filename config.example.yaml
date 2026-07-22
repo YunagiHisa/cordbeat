@@ -253,6 +253,7 @@ adapters:
       dm_policy: "reply_only"
       vc_activation_mode: "hybrid" # hybrid | wake_phrase | always
       vc_activation_phrases: ["cordbeat"]  # Soul name is added automatically
+      vc_pause_heartbeat: true  # suppress autonomous HEARTBEAT delivery while in VC
       # guild_id: 123456789012345678 # set for instant slash-command sync (dev/single-server).
       #                              # leave unset for global sync (up to 1 hour to propagate)
     # -- Example: mention-only bot in a busy server --
@@ -339,6 +340,8 @@ stt:
                               # (empty = "https://api.openai.com")
   timeout: 60.0               # HTTP request timeout (seconds)
   device: ""                 # whisper_local inference device: cpu | cuda | auto (empty = cpu)
+  compute_type: ""            # whisper_local: "int8_float16" | "int8" | "" (default)
+  batch_size: 1               # whisper_local: max parallel chunks; 1 = serial/low VRAM
 
 # --- TTS: Text-to-speech ---
 # edge_tts requires `uv sync --extra tts-edge`.

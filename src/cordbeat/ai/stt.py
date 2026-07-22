@@ -95,6 +95,10 @@ class WhisperLocalSTT(STTBackend):
         device = (config.device or "cpu").strip()
         self._device, self._device_index = _parse_device(device)
         self._compute_type = (config.compute_type or "").strip()
+        # A non-positive value would make the batched pipeline invalid. Keep
+        # the config forgiving while ensuring the runtime always has a valid
+        # batch size.
+        self._batch_size = max(1, int(config.batch_size))
         self._model: Any = None  # faster_whisper.WhisperModel, loaded lazily
         self._transcribe_lock = asyncio.Lock()
         self._load_lock = asyncio.Lock()
@@ -113,7 +117,24 @@ class WhisperLocalSTT(STTBackend):
             kwargs["device_index"] = device_index
         if compute_type:
             kwargs["compute_type"] = compute_type
-        return WhisperModel(self._model_size, **kwargs)
+        model = WhisperModel(self._model_size, **kwargs)
+        if self._batch_size <= 1:
+            # WhisperModel's regular path decodes one chunk at a time. This
+            # is equivalent to batch_size=1 without the batched-pipeline
+            # overhead and works with faster-whisper versions before the
+            # BatchedInferencePipeline API was added.
+            return model
+
+        try:
+            from faster_whisper import BatchedInferencePipeline
+        except ImportError:
+            logger.warning(
+                "faster-whisper does not provide BatchedInferencePipeline; "
+                "using serial transcription despite batch_size=%d",
+                self._batch_size,
+            )
+            return model
+        return BatchedInferencePipeline(model)
 
     async def _ensure_model(self) -> Any:
         """Return the loaded model, loading it off-loop under a lock.
@@ -133,10 +154,12 @@ class WhisperLocalSTT(STTBackend):
             if self._device_index is not None:
                 device_desc = f"{self._device}:{self._device_index}"
             logger.info(
-                "Loading faster-whisper model %r on %s (compute_type=%s) ...",
+                "Loading faster-whisper model %r on %s "
+                "(compute_type=%s, batch_size=%d) ...",
                 self._model_size,
                 device_desc,
                 self._compute_type or "default",
+                self._batch_size,
             )
             try:
                 self._model = await loop.run_in_executor(
@@ -205,7 +228,12 @@ class WhisperLocalSTT(STTBackend):
                 f.write(audio_bytes)
                 tmp_path = f.name
             try:
-                segments, _ = model.transcribe(tmp_path, language=lang)
+                transcribe_kwargs: dict[str, Any] = {"language": lang}
+                if self._batch_size > 1:
+                    # batch_size is accepted by BatchedInferencePipeline,
+                    # which is returned from _load_model_sync above.
+                    transcribe_kwargs["batch_size"] = self._batch_size
+                segments, _ = model.transcribe(tmp_path, **transcribe_kwargs)
                 return "".join(seg.text for seg in segments).strip()
             finally:
                 Path(tmp_path).unlink(missing_ok=True)

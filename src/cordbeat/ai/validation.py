@@ -69,6 +69,16 @@ def validate_heartbeat_decision(data: dict[str, Any]) -> ValidationResult:
             )
         )
 
+    target_channel_id = data.get("target_channel_id")
+    if target_channel_id is not None and not isinstance(target_channel_id, str):
+        errors.append(
+            ValidationError(
+                field="target_channel_id",
+                message="must be a string when provided",
+                value=target_channel_id,
+            )
+        )
+
     minutes = data.get("next_heartbeat_minutes")
     if minutes is not None and not _is_clampable_interval(minutes):
         errors.append(

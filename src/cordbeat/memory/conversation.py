@@ -177,6 +177,35 @@ class ConversationStore:
             )
         return messages
 
+    async def get_recent_channels(
+        self,
+        user_id: str,
+        adapter_id: str,
+        limit: int = 4,
+    ) -> list[dict[str, object]]:
+        """Return channels the user recently talked in, most recent first.
+
+        Each item has ``channel_id``, ``is_dm``, and ``last_message_at``.
+        Rows without a channel id (legacy messages) are skipped.
+        """
+        cursor = await self._db.execute(
+            "SELECT channel_id, is_dm, MAX(created_at) AS last_message_at "
+            "FROM conversation_messages "
+            "WHERE user_id = ? AND adapter_id = ? AND channel_id != '' "
+            "GROUP BY channel_id, is_dm "
+            "ORDER BY last_message_at DESC LIMIT ?",
+            (user_id, adapter_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "channel_id": row["channel_id"],
+                "is_dm": bool(row["is_dm"]),
+                "last_message_at": row["last_message_at"],
+            }
+            for row in rows
+        ]
+
     async def get_todays_messages(
         self,
         user_id: str,

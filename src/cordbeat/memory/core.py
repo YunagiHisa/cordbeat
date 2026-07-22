@@ -408,6 +408,16 @@ class MemoryStore:
             adapter_id=adapter_id,
         )
 
+    async def get_recent_channels(
+        self,
+        user_id: str,
+        adapter_id: str,
+        limit: int = 4,
+    ) -> list[dict[str, object]]:
+        return await self._conversations.get_recent_channels(
+            user_id, adapter_id, limit
+        )
+
     async def get_todays_messages(
         self,
         user_id: str,

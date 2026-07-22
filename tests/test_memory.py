@@ -233,6 +233,48 @@ class TestConversationHistory:
         assert msgs[0]["content"] == "msg7"
         assert msgs[2]["content"] == "msg9"
 
+    async def test_get_recent_channels_orders_and_limits(
+        self, memory: MemoryStore
+    ) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        base = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
+        for index, channel in enumerate(["chan-a", "chan-b", "chan-c"]):
+            await memory.add_message(
+                "u1",
+                "user",
+                f"hello {channel}",
+                "discord",
+                channel,
+                False,
+                created_at=base + timedelta(minutes=index),
+            )
+        # Legacy message without a channel id must be skipped.
+        await memory.add_message(
+            "u1",
+            "user",
+            "legacy",
+            "discord",
+            "",
+            True,
+            created_at=base + timedelta(minutes=10),
+        )
+
+        channels = await memory.get_recent_channels("u1", "discord", limit=2)
+
+        assert [c["channel_id"] for c in channels] == ["chan-c", "chan-b"]
+        assert channels[0]["is_dm"] is False
+
+    async def test_get_recent_channels_scoped_to_adapter(
+        self, memory: MemoryStore
+    ) -> None:
+        await memory.get_or_create_user("u1", "Test")
+        await memory.add_message("u1", "user", "hi", "discord", "chan-a", False)
+        await memory.add_message("u1", "user", "hi", "telegram", "tg-1", True)
+
+        channels = await memory.get_recent_channels("u1", "discord")
+
+        assert [c["channel_id"] for c in channels] == ["chan-a"]
+
     async def test_messages_isolated_per_user(self, memory: MemoryStore) -> None:
         await memory.get_or_create_user("u1", "Alice")
         await memory.get_or_create_user("u2", "Bob")

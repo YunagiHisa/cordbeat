@@ -2000,6 +2000,124 @@ class TestLayer2Evaluate:
         assert "Never add details that are not in the recorded result" in system
         assert "results worth sharing may be" in system
 
+    async def test_evaluate_routes_message_to_chosen_candidate_channel(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """The decision may pick a non-primary destination whose topic fits."""
+        await memory.get_or_create_user("u1", "Alice")
+        base = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
+        await memory.add_message(
+            "u1",
+            "user",
+            "Planning curry for dinner tonight",
+            "discord",
+            "chan-b",
+            False,
+            created_at=base,
+        )
+        await memory.add_message(
+            "u1",
+            "user",
+            "That boss fight was brutal",
+            "discord",
+            "chan-a",
+            False,
+            created_at=base + timedelta(minutes=5),
+        )
+        await memory.record_last_seen_channel("u1", "discord", "chan-a", False)
+        mock_ai.generate_json = AsyncMock(
+            return_value={
+                "action": "message",
+                "content": "Enjoy the curry tonight!",
+                "target_adapter_id": "discord",
+                "target_channel_id": "chan-b",
+                "next_heartbeat_minutes": 30,
+            }
+        )
+        user = UserSummary(
+            user_id="u1", display_name="Alice", last_platform="discord"
+        )
+
+        decision = await heartbeat._layer2_evaluate(user, "dinner follow-up")
+
+        assert decision.history_channel_id == "chan-b"
+        assert decision.history_is_dm is False
+        prompt = mock_ai.generate_json.await_args.args[0]
+        assert "[BEGIN CANDIDATE DESTINATIONS" in prompt
+        assert "chan-b" in prompt
+        assert "Planning curry for dinner tonight" in prompt
+        system = mock_ai.generate_json.await_args.kwargs["system"]
+        assert "target_channel_id" in system
+
+    async def test_dm_primary_excludes_public_channels_from_candidates(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """A DM-drafted message must not be redirectable to a public channel."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.add_message(
+            "u1", "user", "private plans", "discord", "dm-1", True
+        )
+        await memory.add_message(
+            "u1", "user", "public chatter", "discord", "guild-1", False
+        )
+        await memory.record_last_seen_channel("u1", "discord", "dm-1", True)
+        mock_ai.generate_json = AsyncMock(
+            return_value={
+                "action": "message",
+                "content": "hi",
+                "target_adapter_id": "discord",
+                "target_channel_id": "guild-1",
+                "next_heartbeat_minutes": 30,
+            }
+        )
+        user = UserSummary(
+            user_id="u1", display_name="Alice", last_platform="discord"
+        )
+
+        decision = await heartbeat._layer2_evaluate(user, "check in")
+
+        # guild-1 is not an eligible candidate, so routing stays on the DM.
+        assert decision.history_channel_id == "dm-1"
+        assert decision.history_is_dm is True
+        prompt = mock_ai.generate_json.await_args.args[0]
+        assert "public chatter" not in prompt
+
+    async def test_evaluate_ignores_unknown_candidate_channel(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """A hallucinated channel id falls back to the primary destination."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.add_message(
+            "u1", "user", "hello", "discord", "chan-a", False
+        )
+        await memory.record_last_seen_channel("u1", "discord", "chan-a", False)
+        mock_ai.generate_json = AsyncMock(
+            return_value={
+                "action": "message",
+                "content": "hi",
+                "target_adapter_id": "discord",
+                "target_channel_id": "chan-made-up",
+                "next_heartbeat_minutes": 30,
+            }
+        )
+        user = UserSummary(
+            user_id="u1", display_name="Alice", last_platform="discord"
+        )
+
+        decision = await heartbeat._layer2_evaluate(user, "check in")
+
+        assert decision.history_channel_id == "chan-a"
+        assert decision.history_is_dm is False
+
     async def test_evaluate_fallback_on_validation_failure(
         self,
         heartbeat: HeartbeatLoop,

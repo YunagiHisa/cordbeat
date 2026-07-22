@@ -101,14 +101,43 @@ def sanitize_tool_artifacts(text: str) -> str:
     return text.strip()
 
 
+def _memory_origin_label(
+    metadata: Any,
+    current_channel_id: str | None,
+) -> str:
+    """Label a recalled memory that originated somewhere else.
+
+    Returns an empty string when the origin is unknown, matches the current
+    channel, or the caller did not say where the conversation is happening.
+    """
+    if not current_channel_id or not isinstance(metadata, dict):
+        return ""
+    source_id = str(metadata.get("source_channel_id") or "")
+    if not source_id or source_id == current_channel_id:
+        return ""
+    if metadata.get("source_is_dm"):
+        return "(from a direct message) "
+    name = sanitize(
+        str(metadata.get("source_channel_name") or ""), strict=True, max_len=80
+    )
+    if name:
+        return f"(from #{name}) "
+    return "(from another channel) "
+
+
 def _prepare_recalled_episodes(
     episodic_memories: list[dict[str, Any]],
     *,
     limit: int,
-) -> list[str]:
-    """Remove assistant-response imitation and near-duplicates from recall."""
+    current_channel_id: str | None = None,
+) -> list[tuple[str, str]]:
+    """Remove assistant-response imitation and near-duplicates from recall.
 
-    prepared: list[str] = []
+    Returns ``(origin_label, content)`` pairs; the label is rendered outside
+    the strict sanitizer so channel markers like ``#`` survive.
+    """
+
+    prepared: list[tuple[str, str]] = []
     normalized: list[str] = []
     for mem in episodic_memories:
         content = sanitize_tool_artifacts(
@@ -122,7 +151,8 @@ def _prepare_recalled_episodes(
             continue
         if any(_episodes_are_near_duplicates(candidate, item) for item in normalized):
             continue
-        prepared.append(content)
+        label = _memory_origin_label(mem.get("metadata"), current_channel_id)
+        prepared.append((label, content))
         normalized.append(candidate)
         if len(prepared) >= limit:
             break
@@ -333,6 +363,15 @@ def build_soul_system_prompt(
         " continuity is uncertain. A calendar-date change alone does not end"
         " an ongoing conversation; judge continuity from elapsed time and the"
         " nature of the state."
+        "\n\nContext fidelity: before replying, re-check the conversation"
+        " history for concrete details the user already stated — times,"
+        " places, plans, names, means of transport, decisions. Never"
+        " contradict or silently replace such a stated detail with a guess."
+        " When your assumption conflicts with the history, follow the"
+        " history, or ask instead of guessing."
+        "\n\nWhen you got something wrong, acknowledge it once, briefly, and"
+        " move straight to the correct answer. Do not stack repeated"
+        " apologies or long emotional preambles; they bury the actual point."
     )
 
     if user_message_count is not None:
@@ -427,6 +466,10 @@ def build_context(
     timezone_name: str = "UTC",
     previous_interaction_at: datetime | None = None,
     server_shared_notes: list[dict[str, Any]] | None = None,
+    conversation_is_dm: bool | None = None,
+    conversation_channel_id: str | None = None,
+    conversation_channel_name: str | None = None,
+    conversation_guild_name: str | None = None,
 ) -> str:
     """Assemble the context block from memory and conversation data.
 
@@ -455,6 +498,33 @@ def build_context(
         )
 
     parts.append("[END USER CONTEXT]")
+
+    if conversation_is_dm is not None:
+        if conversation_is_dm:
+            location = "a private direct message"
+        else:
+            channel = sanitize(
+                conversation_channel_name or "", strict=True, max_len=100
+            )
+            guild = sanitize(conversation_guild_name or "", strict=True, max_len=100)
+            location = "a public channel"
+            if channel:
+                location = f'the public channel "#{channel}"'
+            if guild:
+                location += f' of the server "{guild}"'
+        parts.append("\n[BEGIN CONVERSATION LOCATION]")
+        parts.append(f"You are currently talking in {location}.")
+        parts.append(
+            "The conversation history below happened in this same location "
+            "and is the active conversation. Recalled facts, episodes, and "
+            "hints may come from other channels or direct messages; treat "
+            "them as background knowledge about the user, not as something "
+            "said here. You may draw on that knowledge when it is relevant "
+            "to what the user is saying here, but do not spontaneously "
+            "switch this location's conversation to a topic that lives in "
+            "another channel or DM unless the user brings it up here."
+        )
+        parts.append("[END CONVERSATION LOCATION]")
 
     if current_message_at is not None:
         sent_at = _format_context_timestamp(current_message_at, timezone_name)
@@ -532,18 +602,26 @@ def build_context(
                 sanitize_reasoning_artifacts(str(mem["content"]))
             )
             if content:
-                parts.append(f"  - {sanitize(content, strict=True, max_len=500)}")
+                label = _memory_origin_label(
+                    mem.get("metadata"), conversation_channel_id
+                )
+                parts.append(
+                    f"  - {label}{sanitize(content, strict=True, max_len=500)}"
+                )
         parts.append("[END RECALLED FACTS]")
 
     if episodic_memories:
         episodes = _prepare_recalled_episodes(
             episodic_memories,
             limit=max(0, recalled_episode_limit),
+            current_channel_id=conversation_channel_id,
         )
         if episodes:
             parts.append("\n[BEGIN RECALLED EPISODES]")
-            for content in episodes:
-                parts.append(f"  - {sanitize(content, strict=True, max_len=500)}")
+            for label, content in episodes:
+                parts.append(
+                    f"  - {label}{sanitize(content, strict=True, max_len=500)}"
+                )
             parts.append("[END RECALLED EPISODES]")
 
     if recall_hints:
@@ -740,6 +818,11 @@ def build_tool_system_prompt(
         " bridge or phrase a follow-up as if you consumed it. If an inference"
         " is useful, qualify it naturally; otherwise state the unavailable"
         " scope without adding rigid labels to every response."
+        "\n\nDigest before answering: never paste raw tool output or a bare"
+        " list of search snippets as the reply. Cross-check results against"
+        " each other and the user's actual question, drop what does not"
+        " answer it, and phrase the answer in your own words at the level"
+        " of detail the user asked for."
     )
 
     if web_search_available:

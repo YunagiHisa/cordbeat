@@ -4617,6 +4617,56 @@ class TestSendHeartbeatMessagePlatformLink:
         mock_gateway.send_to_adapter.assert_not_awaited()
         assert await memory.resolve_platform_user("uid-1", "fake_adapter") is None
 
+    async def test_send_uses_channel_pinned_by_evaluation(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """The message goes to the channel the draft was evaluated against,
+        even if the user moved to another channel while the LLM ran."""
+        await memory.link_platform("uid-1", "discord", "snowflake-123")
+        await memory.record_last_seen_channel(
+            "uid-1", "discord", "channel-new", False
+        )
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.MESSAGE,
+            content="drafted against the old channel",
+            target_user_id="uid-1",
+            target_adapter_id="discord",
+            history_channel_id="channel-old",
+            history_is_dm=False,
+        )
+
+        await heartbeat._send_heartbeat_message(decision)
+
+        mock_gateway.send_to_adapter.assert_awaited_once()
+        _, sent_msg = mock_gateway.send_to_adapter.await_args.args
+        assert sent_msg.metadata["channel_id"] == "channel-old"
+
+    async def test_reminder_send_marks_metadata(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        await memory.link_platform("uid-1", "discord", "snowflake-123")
+        await memory.record_last_seen_channel(
+            "uid-1", "discord", "channel-1", False
+        )
+        decision = HeartbeatDecision(
+            action=HeartbeatAction.MESSAGE,
+            content="Reminder: catch the 19:15 bus",
+            target_user_id="uid-1",
+            target_adapter_id="discord",
+        )
+
+        await heartbeat._send_heartbeat_message(decision, reminder=True)
+
+        mock_gateway.send_to_adapter.assert_awaited_once()
+        _, sent_msg = mock_gateway.send_to_adapter.await_args.args
+        assert sent_msg.metadata["reminder"] is True
+
     async def test_missing_target_skips_send(
         self,
         heartbeat: HeartbeatLoop,

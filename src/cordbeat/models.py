@@ -137,6 +137,10 @@ class HeartbeatDecision:
     proposed_skill: dict[str, Any] = field(default_factory=dict)
     target_user_id: str | None = None
     target_adapter_id: str | None = None
+    # Channel the Layer-2 evaluation loaded conversation history from; the
+    # send path reuses it so the message lands where it was drafted for.
+    history_channel_id: str | None = None
+    history_is_dm: bool | None = None
     next_heartbeat_minutes: int = 60
 
 

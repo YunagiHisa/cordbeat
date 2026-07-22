@@ -207,6 +207,42 @@ class TestExtractAndStoreMemories:
         assert "/no_think" not in mock_ai.generate.await_args.kwargs["system"]
 
     @pytest.mark.anyio
+    async def test_stores_channel_provenance_in_metadata(
+        self,
+        extractor: MemoryExtractor,
+        mock_ai: AsyncMock,
+        memory: MemoryStore,
+    ) -> None:
+        mock_ai.generate = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "topic": "dinner",
+                    "emotional_tone": "relaxed",
+                    "facts": ["User plans curry for dinner"],
+                    "episode_summary": "User discussed tonight's dinner plan.",
+                }
+            )
+        )
+        await memory.get_or_create_user("u1", "Alice")
+        await extractor.extract_and_store_memories(
+            "u1",
+            "Alice",
+            "Curry tonight",
+            "Sounds good!",
+            source_channel_id="chan-b",
+            source_channel_name="dinner",
+            source_is_dm=False,
+        )
+
+        facts = await memory.search_semantic("u1", "curry", n_results=5)
+        episodes = await memory.search_episodic("u1", "dinner", n_results=5)
+        assert facts and episodes
+        for result in (facts[0], episodes[0]):
+            assert result["metadata"]["source_channel_id"] == "chan-b"
+            assert result["metadata"]["source_channel_name"] == "dinner"
+            assert result["metadata"]["source_is_dm"] is False
+
+    @pytest.mark.anyio
     async def test_accepts_fenced_json(
         self,
         extractor: MemoryExtractor,

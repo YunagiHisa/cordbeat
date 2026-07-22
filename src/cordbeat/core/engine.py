@@ -1213,13 +1213,21 @@ class CoreEngine:
                 " actions requiring confirmation are unavailable in shared voice"
                 " channels; never emit [DRAW: ...] tags."
             )
-        elif message.is_voice:
+        if message.is_voice:
             system_prompt += (
-                "\n\nYour reply will be spoken aloud via text-to-speech."
-                " Use plain conversational sentences only: no markdown,"
-                " bullet lists, code blocks, URLs, emojis, or bracketed tags"
-                " such as [DRAW: ...]. Keep the spoken reply short and"
-                " natural, usually one or two sentences."
+                "\n\nVoice transcript caution: this message came through speech"
+                " recognition and may contain homophones, missing punctuation,"
+                " misheard names or numbers, and occasional dropped words."
+                " Interpret it using the surrounding context and speaker labels;"
+                " do not over-literalise an obviously garbled phrase. If the"
+                " intended meaning remains unclear, ask one short clarification"
+                " instead of guessing. Before any irreversible or external"
+                " action, confirm details that could have been misrecognised."
+                "\n\nYour reply will be spoken aloud via text-to-speech. Use plain"
+                " conversational sentences only: no markdown, bullet lists,"
+                " code blocks, URLs, emojis, or bracketed tags such as"
+                " [DRAW: ...]. Keep the spoken reply short and natural, usually"
+                " one or two sentences."
             )
         draw_skill = self._skills.get("draw")
         if (
@@ -1398,6 +1406,10 @@ class CoreEngine:
             timezone_name=self._timezone_name,
             previous_interaction_at=last_talked_at_before_update,
             server_shared_notes=server_shared_notes or None,
+            conversation_is_dm=None if shared_voice else is_dm,
+            conversation_channel_id=None if shared_voice else channel_id,
+            conversation_channel_name=str(md.get("channel_name") or "") or None,
+            conversation_guild_name=str(md.get("guild_name") or "") or None,
         )
 
         safe_content = sanitize(
@@ -1639,7 +1651,17 @@ class CoreEngine:
                     user_id, stored_user_content, stored_response
                 )
                 await self._extractor.extract_and_store_memories(
-                    user_id, user.display_name, stored_user_content, stored_response
+                    user_id,
+                    user.display_name,
+                    stored_user_content,
+                    stored_response,
+                    source_channel_id=str(md.get("channel_id") or ""),
+                    source_channel_name=str(md.get("channel_name") or ""),
+                    source_is_dm=(
+                        bool(md.get("is_dm"))
+                        if md.get("is_dm") is not None
+                        else None
+                    ),
                 )
                 await self._store_server_shared_note(
                     user_id, message, stored_user_content

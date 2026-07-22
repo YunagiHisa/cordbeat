@@ -160,6 +160,9 @@ Choose next_heartbeat_minutes yourself based on urgency: shorter when there is
 a reason to check back soon, longer when no near-term follow-up is useful. The
 system will clamp the value to configured min/max safety bounds.
 
+Destination rule:
+{destination_rule}
+
 Relevance rule:
 Treat conversation history and memories as background, not as a request to
 continue an old task. Do not revive a completed topic or ask for feedback about
@@ -728,6 +731,8 @@ class HeartbeatLoop:
             history=history or None,
             soul_name=soul_snap["name"],
             max_user_input_len=self._memory_config.max_user_input_len,
+            conversation_is_dm=history_is_dm,
+            conversation_channel_id=history_channel_id,
         )
         private_context = await self._build_private_continuity_context(user.user_id)
 
@@ -737,7 +742,34 @@ class HeartbeatLoop:
             sec_int = soul_snap["emotion"]["secondary_intensity"]
             secondary_line = f"Secondary emotion: {sec} (intensity: {sec_int})"
 
+        if history_channel_id is not None and history_is_dm is False:
+            destination_rule = (
+                "If you choose action=message, it will be posted in the same "
+                "public channel that the conversation history below comes "
+                "from. Other people read that channel. The message must "
+                "continue that channel's own recent conversation naturally. "
+                "Recalled memories and private notes may originate from other "
+                "channels or direct messages; never move a topic from another "
+                "channel or DM into this one. If what you want to say does "
+                "not fit that channel's current conversation, choose a "
+                "private action or action=none instead."
+            )
+        elif history_is_dm is True:
+            destination_rule = (
+                "If you choose action=message, it will be delivered as a "
+                "private direct message to this user, in the same DM that "
+                "the conversation history below comes from. Keep it "
+                "consistent with that DM's recent conversation."
+            )
+        else:
+            destination_rule = (
+                "The exact delivery destination is not known. If you choose "
+                "action=message, keep it self-contained and avoid referring "
+                "to a specific earlier channel conversation."
+            )
+
         system = _DECISION_SYSTEM_PROMPT.format(
+            destination_rule=destination_rule,
             name=soul_snap["name"],
             pronoun=self._soul.pronoun,
             traits=", ".join(soul_snap["traits"]),
@@ -776,6 +808,9 @@ class HeartbeatLoop:
                 fallback=fallback,
             )
 
+        decided_adapter_id = decision_data.get(
+            "target_adapter_id", target_adapter_id
+        )
         return HeartbeatDecision(
             action=HeartbeatAction(decision_data.get("action", "none")),
             content=decision_data.get("content", ""),
@@ -792,8 +827,18 @@ class HeartbeatLoop:
             # Always use the code-level user_id — the AI sometimes echoes the
             # platform user ID (e.g. Discord snowflake) instead of the internal UUID.
             target_user_id=user.user_id,
-            target_adapter_id=decision_data.get(
-                "target_adapter_id", target_adapter_id
+            target_adapter_id=decided_adapter_id,
+            # Only pin the drafted-against channel when the message stays on
+            # the adapter the history was loaded from.
+            history_channel_id=(
+                history_channel_id
+                if decided_adapter_id == history_adapter_id
+                else None
+            ),
+            history_is_dm=(
+                history_is_dm
+                if decided_adapter_id == history_adapter_id
+                else None
             ),
             next_heartbeat_minutes=int(
                 decision_data.get(
@@ -1201,15 +1246,30 @@ class HeartbeatLoop:
             )
             return False
 
-        try:
-            last_seen = await self._memory.get_last_seen_channel(
-                decision.target_user_id, decision.target_adapter_id
-            )
-        except Exception:
-            logger.exception("get_last_seen_channel failed")
-            last_seen = None
+        last_seen: tuple[str, bool] | None
+        if (
+            decision.history_channel_id is not None
+            and decision.history_is_dm is not None
+        ):
+            # Reuse the channel the Layer-2 evaluation drafted the message
+            # against. Re-reading last-seen here could race with the user
+            # moving to another channel while the LLM call was in flight,
+            # posting content written for one channel into another.
+            last_seen = (decision.history_channel_id, decision.history_is_dm)
+        else:
+            try:
+                last_seen = await self._memory.get_last_seen_channel(
+                    decision.target_user_id, decision.target_adapter_id
+                )
+            except Exception:
+                logger.exception("get_last_seen_channel failed")
+                last_seen = None
 
         metadata: dict[str, Any] = {"allow_dm_fallback": False}
+        if reminder:
+            # Reminders are explicit user requests with a due time; adapters
+            # must never suppress or defer them (e.g. Discord VC pause).
+            metadata["reminder"] = True
         if last_seen is not None:
             last_channel_id, last_is_dm = last_seen
             if decision.target_adapter_id == "discord" and last_channel_id == "vc":

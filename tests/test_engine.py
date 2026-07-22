@@ -775,6 +775,7 @@ class TestCoreEngine:
             "Safe skills explicitly enabled for shared voice may be used"
             in (call.kwargs["system"])
         )
+        assert "Voice transcript caution" in call.kwargs["system"]
         reply = mock_gateway.send_to_adapter.call_args.args[1]
         assert reply.content == "Understood."
         assert reply.images == []

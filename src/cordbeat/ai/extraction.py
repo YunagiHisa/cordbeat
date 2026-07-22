@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from typing import Any
 
 from cordbeat.agent.soul import Soul
 from cordbeat.config import MemoryConfig
@@ -240,8 +241,17 @@ class MemoryExtractor:
         user_name: str,
         user_message: str,
         ai_response: str,
+        *,
+        source_channel_id: str = "",
+        source_channel_name: str = "",
+        source_is_dm: bool | None = None,
     ) -> None:
-        """Extract topic, facts, and episodes from conversation via AI."""
+        """Extract topic, facts, and episodes from conversation via AI.
+
+        ``source_*`` describe where the conversation happened so recalled
+        memories can be labelled with their origin and not mistaken for the
+        current channel's conversation.
+        """
         prompt = _MEMORY_EXTRACTION_PROMPT.format(
             user_name=user_name[:50],
             user_message=user_message[:500],
@@ -272,6 +282,16 @@ class MemoryExtractor:
                 user.emotional_tone = str(tone)[:50]
             await self._memory.update_user_summary(user)
 
+        base_metadata: dict[str, Any] = {}
+        if tone:
+            base_metadata["emotional_tone"] = tone
+        if source_channel_id:
+            base_metadata["source_channel_id"] = source_channel_id
+        if source_channel_name:
+            base_metadata["source_channel_name"] = source_channel_name
+        if source_is_dm is not None:
+            base_metadata["source_is_dm"] = source_is_dm
+
         # Store semantic facts (preferences, knowledge)
         facts = data.get("facts", [])
         if isinstance(facts, list):
@@ -283,7 +303,7 @@ class MemoryExtractor:
                     user_id=user_id,
                     layer=MemoryLayer.SEMANTIC,
                     content=fact.strip()[:_MAX_MEMORY_CONTENT_CHARS],
-                    metadata={"emotional_tone": tone} if tone else {},
+                    metadata=dict(base_metadata),
                 )
                 await self._memory.add_semantic_memory(entry)
                 logger.debug("Semantic memory stored for %s: %s", user_id, fact)
@@ -296,7 +316,7 @@ class MemoryExtractor:
                 user_id=user_id,
                 layer=MemoryLayer.EPISODIC,
                 content=episode.strip()[:_MAX_MEMORY_CONTENT_CHARS],
-                metadata={"emotional_tone": tone} if tone else {},
+                metadata=dict(base_metadata),
             )
             await self._memory.add_episodic_memory(entry)
             logger.debug("Episodic memory stored for %s", user_id)

@@ -453,7 +453,7 @@ def build_context(
     profile: dict[str, str] | None = None,
     semantic_memories: list[dict[str, Any]] | None = None,
     episodic_memories: list[dict[str, Any]] | None = None,
-    recall_hints: list[str] | None = None,
+    recall_hints: list[str | dict[str, Any]] | None = None,
     verified_actions: list[dict[str, Any]] | None = None,
     history: list[dict[str, Any]] | None = None,
     soul_name: str = "",
@@ -467,6 +467,7 @@ def build_context(
     previous_interaction_at: datetime | None = None,
     server_shared_notes: list[dict[str, Any]] | None = None,
     conversation_is_dm: bool | None = None,
+    history_is_channel_wide: bool = False,
     conversation_channel_id: str | None = None,
     conversation_channel_name: str | None = None,
     conversation_guild_name: str | None = None,
@@ -478,9 +479,12 @@ def build_context(
     ledger, so emitting it empty by default would falsely assert that no tools
     ran.
     """
+    current_speaker = sanitize(
+        user_display_name, strict=True, max_len=max_user_input_len
+    )
     parts = [
         "[BEGIN USER CONTEXT]",
-        f"User: {sanitize(user_display_name, strict=True, max_len=max_user_input_len)}",
+        f"User: {current_speaker}",
     ]
 
     if profile:
@@ -524,6 +528,25 @@ def build_context(
             "switch this location's conversation to a topic that lives in "
             "another channel or DM unless the user brings it up here."
         )
+        if history_is_channel_wide:
+            parts.append(
+                "Several people share this channel, so the history is the "
+                "room's transcript and each line is labelled with who said "
+                "it. Your own lines addressed to someone else are marked "
+                '"you -> name"; everyone here could read them, so treat '
+                "them as things you actually said in front of this user. "
+                "Reply to the person whose message you are answering now, "
+                "and do not assume an earlier line was addressed to them."
+            )
+        elif conversation_is_dm is False:
+            parts.append(
+                "Note: the history below contains only your exchanges with "
+                "this one user. Other people may have spoken in this channel "
+                "without appearing here, so you may be missing messages that "
+                "this user can see. If they refer to something you have no "
+                "record of, say you cannot see it rather than guessing, and "
+                "never claim you ignored or forgot it."
+            )
         parts.append("[END CONVERSATION LOCATION]")
 
     if current_message_at is not None:
@@ -627,9 +650,22 @@ def build_context(
     if recall_hints:
         parts.append("\n[BEGIN RECALL HINTS]")
         for hint in recall_hints:
-            content = sanitize_tool_artifacts(sanitize_reasoning_artifacts(str(hint)))
+            # Hints quote what the user said on an earlier day, which may have
+            # been in another channel or a DM.  Label the origin exactly as
+            # recalled memories are, so it cannot read as said here.
+            if isinstance(hint, dict):
+                raw = str(hint.get("content") or "")
+                origin = _memory_origin_label(
+                    hint.get("metadata"), conversation_channel_id
+                )
+            else:
+                raw = str(hint)
+                origin = ""
+            content = sanitize_tool_artifacts(sanitize_reasoning_artifacts(raw))
             if content:
-                parts.append(f"  - {sanitize(content, strict=True, max_len=500)}")
+                parts.append(
+                    f"  - {origin}{sanitize(content, strict=True, max_len=500)}"
+                )
         parts.append("[END RECALL HINTS]")
 
     if include_verified_actions:
@@ -673,8 +709,17 @@ def build_context(
     if history:
         parts.append("\n[BEGIN CONVERSATION HISTORY]")
         parts.append("Conversation history:")
+        assistant_label = soul_name or "AI"
         for msg in history:
-            prefix = "User" if msg["role"] == "user" else (soul_name or "AI")
+            # ``speaker`` is the display name attached to the row's user id:
+            # the author for user turns, the addressee for our own turns.
+            speaker = sanitize(str(msg.get("speaker") or ""), strict=True, max_len=100)
+            if msg["role"] == "user":
+                prefix = speaker if history_is_channel_wide and speaker else "User"
+            elif history_is_channel_wide and speaker and speaker != current_speaker:
+                prefix = f"{assistant_label} -> {speaker}"
+            else:
+                prefix = assistant_label
             recorded_at = _format_context_timestamp(
                 msg.get("created_at"), timezone_name
             )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from cordbeat.ai.backend import internal_context_scope
 from cordbeat.ai.prompt import sanitize
@@ -91,7 +91,7 @@ class ConversationCompressor:
 
     async def compress_chunk_to_text(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         soul_name: str = "AI",
     ) -> str | None:
         """Summarise *messages* and return summary text, or None on failure."""
@@ -99,14 +99,14 @@ class ConversationCompressor:
 
     async def _summarise_chunk(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         soul_name: str,
     ) -> str | None:
         if not messages:
             return None
 
-        first_ts = messages[0].get("created_at", "")
-        last_ts = messages[-1].get("created_at", "")
+        first_ts = str(messages[0].get("created_at", ""))
+        last_ts = str(messages[-1].get("created_at", ""))
         time_range = f" ({first_ts[:10]} ~ {last_ts[:10]})" if first_ts else ""
 
         lines: list[str] = []

@@ -1172,6 +1172,11 @@ class CoreEngine:
             if message.is_voice
             else self._memory_config.conversation_history_limit
         )
+        # A shared channel is one conversation, not one thread per person: the
+        # people in it can see every message, so scoping history to the current
+        # speaker would hide the room's own transcript (including our own
+        # proactive messages addressed to someone else).  DMs stay per-user.
+        channel_wide = is_dm is False and bool(channel_id)
         if shared_voice:
             history: list[dict[str, Any]] = []
         elif hasattr(type(self._memory), "get_recent_messages_with_media"):
@@ -1181,6 +1186,7 @@ class CoreEngine:
                 channel_id=channel_id,
                 is_dm=is_dm,
                 adapter_id=adapter_id,
+                channel_wide=channel_wide,
             )
         else:
             history = await self._memory.get_recent_messages(
@@ -1189,6 +1195,7 @@ class CoreEngine:
                 channel_id=channel_id,
                 is_dm=is_dm,
                 adapter_id=adapter_id,
+                channel_wide=channel_wide,
             )
         message_count = (
             None
@@ -1355,11 +1362,23 @@ class CoreEngine:
                 logger.debug("Chain recall failed for user %s", user_id)
 
         # Phase 4b: Precomputed temporal recall hints
-        hints: list[str] = []
+        hints: list[str | dict[str, Any]] = []
         if not shared_voice:
             try:
                 raw_hints = await self._memory.get_recall_hints(user_id)
-                hints = [h["content"] for h in raw_hints if h.get("content")]
+                for raw_hint in raw_hints:
+                    if not raw_hint.get("content"):
+                        continue
+                    try:
+                        hint_meta = json.loads(raw_hint.get("metadata") or "{}")
+                    except json.JSONDecodeError:
+                        hint_meta = {}
+                    hints.append(
+                        {
+                            "content": raw_hint["content"],
+                            "metadata": hint_meta,
+                        }
+                    )
             except Exception:
                 logger.debug("Recall hints lookup failed for user %s", user_id)
 
@@ -1407,6 +1426,7 @@ class CoreEngine:
             previous_interaction_at=last_talked_at_before_update,
             server_shared_notes=server_shared_notes or None,
             conversation_is_dm=None if shared_voice else is_dm,
+            history_is_channel_wide=channel_wide and not shared_voice,
             conversation_channel_id=None if shared_voice else channel_id,
             conversation_channel_name=str(md.get("channel_name") or "") or None,
             conversation_guild_name=str(md.get("guild_name") or "") or None,

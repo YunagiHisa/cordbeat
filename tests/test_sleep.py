@@ -155,6 +155,109 @@ async def test_compress_old_messages_creates_episodic_and_deletes() -> None:
     memory.delete_messages_with_ids.assert_awaited_once_with(["1"])
 
 
+async def test_compress_old_messages_scopes_chunk_to_one_conversation() -> None:
+    """A summary spanning a DM and a public channel cannot be labelled with an
+    origin, so it could later be recalled into the wrong room."""
+    memory = MagicMock()
+    memory.count_messages = AsyncMock(return_value=100_000)
+    memory.get_oldest_messages = AsyncMock(
+        return_value=[
+            {
+                "id": "1",
+                "role": "user",
+                "content": "hello",
+                "channel_id": "dm-1",
+                "is_dm": True,
+            }
+        ]
+    )
+    memory.add_episodic_memory = AsyncMock()
+    memory.delete_messages_with_ids = AsyncMock(return_value=1)
+    ai = MagicMock()
+    ai.generate = AsyncMock(return_value="A concise summary of the chat.")
+    sleep = _compress_sleep(memory, ai)
+
+    await sleep._compress_old_messages(
+        MagicMock(user_id="u1", display_name="U"), {"name": "Aria"}
+    )
+
+    chunk_call = memory.get_oldest_messages.await_args_list[1]
+    assert chunk_call.kwargs["channel_id"] == "dm-1"
+    assert chunk_call.kwargs["is_dm"] is True
+
+
+async def test_compress_old_messages_records_origin_for_recall_labelling() -> None:
+    memory = MagicMock()
+    memory.count_messages = AsyncMock(return_value=100_000)
+    memory.get_oldest_messages = AsyncMock(
+        return_value=[
+            {
+                "id": "1",
+                "role": "user",
+                "content": "hello",
+                "channel_id": "dm-1",
+                "is_dm": True,
+            }
+        ]
+    )
+    memory.add_episodic_memory = AsyncMock()
+    memory.delete_messages_with_ids = AsyncMock(return_value=1)
+    ai = MagicMock()
+    ai.generate = AsyncMock(return_value="A concise summary of the chat.")
+    sleep = _compress_sleep(memory, ai)
+
+    await sleep._compress_old_messages(
+        MagicMock(user_id="u1", display_name="U"), {"name": "Aria"}
+    )
+
+    entry = memory.add_episodic_memory.await_args.args[0]
+    assert entry.metadata["source_channel_id"] == "dm-1"
+    assert entry.metadata["source_is_dm"] is True
+
+
+async def test_temporal_recall_hints_are_split_per_conversation() -> None:
+    """Hints quote the user verbatim and are injected into every channel, so
+    a hint must never blend DM topics with public-channel ones."""
+    memory = MagicMock()
+    memory.get_messages_on_date = AsyncMock(
+        return_value=[
+            {
+                "role": "user",
+                "content": "the public boss fight was brutal",
+                "channel_id": "chan-a",
+                "is_dm": False,
+            },
+            {
+                "role": "user",
+                "content": "my private medical appointment is friday",
+                "channel_id": "dm-1",
+                "is_dm": True,
+            },
+        ]
+    )
+    memory.store_recall_hint = AsyncMock()
+    sleep = SleepPhase(
+        memory=memory,
+        ai=MagicMock(),
+        soul=MagicMock(),
+        memory_config=MemoryConfig(),
+    )
+
+    await sleep._precompute_temporal_recall(MagicMock(user_id="u1", display_name="U"))
+
+    stored = [call.kwargs for call in memory.store_recall_hint.await_args_list]
+    assert stored, "expected at least one hint"
+    for hint in stored:
+        has_public = "boss fight" in hint["content"]
+        has_private = "medical appointment" in hint["content"]
+        assert not (has_public and has_private), "DM and channel topics merged"
+        assert "source_channel_id" in hint["metadata"]
+    dm_hints = [h for h in stored if h["metadata"]["source_is_dm"]]
+    assert dm_hints and all(
+        h["metadata"]["source_channel_id"] == "dm-1" for h in dm_hints
+    )
+
+
 async def test_compress_old_messages_skips_below_threshold() -> None:
     memory = MagicMock()
     memory.count_messages = AsyncMock(return_value=0)  # nothing to compress

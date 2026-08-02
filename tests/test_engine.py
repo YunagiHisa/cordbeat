@@ -105,6 +105,65 @@ def engine(
     )
 
 
+class TestChannelWideHistoryWiring:
+    """Guild channels are shared rooms; DMs are not.  The engine decides which
+    of the two the history query gets scoped as."""
+
+    async def _channel_wide_flag_for(
+        self,
+        engine: CoreEngine,
+        memory: MemoryStore,
+        metadata: dict[str, object],
+    ) -> object:
+        await memory.get_or_create_user("u1", "Alice")
+        user = await memory.get_or_create_user("u1", "Alice")
+        recorded: dict[str, object] = {}
+        original = memory.get_recent_messages_with_media
+
+        async def _spy(*args: object, **kwargs: object) -> object:
+            recorded.update(kwargs)
+            return await original(*args, **kwargs)
+
+        memory.get_recent_messages_with_media = _spy  # type: ignore[method-assign]
+        try:
+            await engine._generate_response(
+                "u1",
+                user,
+                GatewayMessage(
+                    type=MessageType.MESSAGE,
+                    adapter_id="discord",
+                    platform_user_id="user1",
+                    content="hello",
+                    metadata=metadata,
+                ),
+            )
+        finally:
+            memory.get_recent_messages_with_media = original  # type: ignore[method-assign]
+        return recorded.get("channel_wide")
+
+    async def test_guild_channel_reads_the_whole_room(
+        self, engine: CoreEngine, memory: MemoryStore
+    ) -> None:
+        flag = await self._channel_wide_flag_for(
+            engine, memory, {"channel_id": "c1", "is_dm": False}
+        )
+        assert flag is True
+
+    async def test_dm_stays_scoped_to_the_user(
+        self, engine: CoreEngine, memory: MemoryStore
+    ) -> None:
+        flag = await self._channel_wide_flag_for(
+            engine, memory, {"channel_id": "d1", "is_dm": True}
+        )
+        assert flag is False
+
+    async def test_missing_channel_id_stays_scoped_to_the_user(
+        self, engine: CoreEngine, memory: MemoryStore
+    ) -> None:
+        flag = await self._channel_wide_flag_for(engine, memory, {"is_dm": False})
+        assert flag is False
+
+
 class TestCoreEngine:
     async def test_server_shared_note_scope_requires_public_non_excluded_channel(
         self,

@@ -146,7 +146,11 @@ memory:
   sqlite_path: "data/cordbeat.db"
   decay_rate: 0.1
   archive_threshold: 0.05
-  conversation_history_limit: 20     # recent messages loaded into context
+  conversation_history_limit: 20     # recent messages loaded into context.
+                                     # In a shared channel this covers every
+                                     # participant, so busy multi-person
+                                     # channels need a higher value to reach
+                                     # as far back in time.
   image_summary_enabled: true        # retain text-only visual observations in history
   memory_search_results: 3           # vector search results per query
   recalled_episode_context_limit: 4  # max deduplicated episodes injected per reply

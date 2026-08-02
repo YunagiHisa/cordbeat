@@ -383,6 +383,7 @@ class MemoryStore:
         channel_id: str | None = None,
         is_dm: bool | None = None,
         adapter_id: str | None = None,
+        channel_wide: bool = False,
     ) -> list[dict[str, str]]:
         return await self._conversations.get_recent_messages(
             user_id,
@@ -390,6 +391,7 @@ class MemoryStore:
             channel_id=channel_id,
             is_dm=is_dm,
             adapter_id=adapter_id,
+            channel_wide=channel_wide,
         )
 
     async def get_recent_messages_with_media(
@@ -399,6 +401,7 @@ class MemoryStore:
         channel_id: str | None = None,
         is_dm: bool | None = None,
         adapter_id: str | None = None,
+        channel_wide: bool = False,
     ) -> list[dict[str, object]]:
         return await self._conversations.get_recent_messages_with_media(
             user_id,
@@ -406,6 +409,7 @@ class MemoryStore:
             channel_id=channel_id,
             is_dm=is_dm,
             adapter_id=adapter_id,
+            channel_wide=channel_wide,
         )
 
     async def get_recent_channels(
@@ -422,7 +426,7 @@ class MemoryStore:
         self,
         user_id: str,
         timezone: str | tzinfo | None = UTC,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, object]]:
         return await self._conversations.get_todays_messages(user_id, timezone)
 
     async def get_messages_between(
@@ -430,7 +434,7 @@ class MemoryStore:
         user_id: str,
         start_iso: str,
         end_iso: str,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, object]]:
         return await self._conversations.get_messages_between(
             user_id, start_iso, end_iso
         )
@@ -440,7 +444,7 @@ class MemoryStore:
         user_id: str,
         date_str: str,
         timezone: str | tzinfo | None = UTC,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, object]]:
         return await self._conversations.get_messages_on_date(
             user_id, date_str, timezone
         )
@@ -463,10 +467,16 @@ class MemoryStore:
         return await self._conversations.count_messages(user_id)
 
     async def get_oldest_messages(
-        self, user_id: str, limit: int
-    ) -> list[dict[str, str]]:
+        self,
+        user_id: str,
+        limit: int,
+        channel_id: str | None = None,
+        is_dm: bool | None = None,
+    ) -> list[dict[str, object]]:
         """Return the *limit* oldest conversation messages (ascending)."""
-        return await self._conversations.get_oldest_messages(user_id, limit)
+        return await self._conversations.get_oldest_messages(
+            user_id, limit, channel_id=channel_id, is_dm=is_dm
+        )
 
     async def delete_messages_with_ids(self, ids: list[str]) -> int:
         """Delete conversation messages by ID.  Returns deleted count."""

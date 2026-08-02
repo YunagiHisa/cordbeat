@@ -405,6 +405,94 @@ class TestConversationHistory:
         assert [m["content"] for m in only_telegram_guild] == ["telegram guild #1"]
 
 
+class TestChannelWideHistory:
+    """A shared channel is one conversation, so history must not be sliced
+    per user: that hid our own proactive messages addressed to someone else
+    and made the assistant deny saying things everyone could see."""
+
+    async def _populate(self, memory: MemoryStore) -> None:
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.get_or_create_user("u2", "Bob")
+        await memory.add_message(
+            "u1", "user", "alice asks", "discord", channel_id="c1", is_dm=False
+        )
+        await memory.add_message(
+            "u2",
+            "assistant",
+            "greeting for bob",
+            "discord",
+            channel_id="c1",
+            is_dm=False,
+        )
+
+    async def test_channel_wide_returns_every_participant(
+        self, memory: MemoryStore
+    ) -> None:
+        await self._populate(memory)
+
+        scoped = await memory.get_recent_messages(
+            "u1", channel_id="c1", is_dm=False, adapter_id="discord"
+        )
+        assert [m["content"] for m in scoped] == ["alice asks"]
+
+        wide = await memory.get_recent_messages(
+            "u1",
+            channel_id="c1",
+            is_dm=False,
+            adapter_id="discord",
+            channel_wide=True,
+        )
+        assert [m["content"] for m in wide] == ["alice asks", "greeting for bob"]
+
+    async def test_channel_wide_labels_the_speaker(
+        self, memory: MemoryStore
+    ) -> None:
+        await self._populate(memory)
+
+        wide = await memory.get_recent_messages(
+            "u1", channel_id="c1", is_dm=False, channel_wide=True
+        )
+        assert [m["speaker"] for m in wide] == ["Alice", "Bob"]
+
+    async def test_channel_wide_carries_media_observations(
+        self, memory: MemoryStore
+    ) -> None:
+        await self._populate(memory)
+
+        wide = await memory.get_recent_messages_with_media(
+            "u1", channel_id="c1", is_dm=False, channel_wide=True
+        )
+        assert [m["speaker"] for m in wide] == ["Alice", "Bob"]
+        assert all("media_observations" in m for m in wide)
+
+    async def test_channel_wide_ignored_without_a_channel(
+        self, memory: MemoryStore
+    ) -> None:
+        """Without a channel there is no room to widen to, so dropping the
+        user filter would return every user's DMs instead."""
+        await self._populate(memory)
+        await memory.add_message(
+            "u2", "user", "bob's private dm", "discord", channel_id="", is_dm=True
+        )
+
+        leaked = await memory.get_recent_messages("u1", channel_wide=True)
+        assert [m["content"] for m in leaked] == ["alice asks"]
+
+    async def test_dm_history_stays_per_user(self, memory: MemoryStore) -> None:
+        """Group-DM style rooms must not expose one user's turns to another."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.get_or_create_user("u2", "Bob")
+        await memory.add_message(
+            "u1", "user", "alice dm", "discord", channel_id="d1", is_dm=True
+        )
+        await memory.add_message(
+            "u2", "user", "bob dm", "discord", channel_id="d1", is_dm=True
+        )
+
+        alice = await memory.get_recent_messages("u1", channel_id="d1", is_dm=True)
+        assert [m["content"] for m in alice] == ["alice dm"]
+
+
 class TestFlashbulbMemory:
     async def test_add_flashbulb_memory(self, memory: MemoryStore) -> None:
         await memory.get_or_create_user("u1", "Test")

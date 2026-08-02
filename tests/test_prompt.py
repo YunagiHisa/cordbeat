@@ -491,6 +491,123 @@ class TestBuildContext:
         assert 'the server "Game Server"' in result
         assert "switch this location's conversation to a topic" in result
 
+    def test_channel_wide_history_labels_each_speaker(self) -> None:
+        """Regression: in a shared channel the assistant denied having sent a
+        greeting it had posted to another member, because the history gave it
+        no way to see or attribute that message."""
+        result = build_context(
+            user_display_name="Bernolight",
+            soul_name="Athena",
+            conversation_is_dm=False,
+            conversation_channel_name="athena",
+            history_is_channel_wide=True,
+            history=[
+                {
+                    "role": "user",
+                    "content": "what can you see",
+                    "speaker": "Bernolight",
+                },
+                {
+                    "role": "assistant",
+                    "content": "good to see you again",
+                    "speaker": "Emuhana",
+                },
+            ],
+        )
+
+        assert "Bernolight: what can you see" in result
+        assert "Athena -> Emuhana: good to see you again" in result
+        assert "each line is labelled with who said it" in result
+
+    def test_channel_wide_history_does_not_mark_replies_to_current_user(
+        self,
+    ) -> None:
+        result = build_context(
+            user_display_name="Bernolight",
+            soul_name="Athena",
+            conversation_is_dm=False,
+            history_is_channel_wide=True,
+            history=[
+                {
+                    "role": "assistant",
+                    "content": "sure thing",
+                    "speaker": "Bernolight",
+                },
+            ],
+        )
+
+        assert "Athena: sure thing" in result
+        assert "->" not in result.split("[BEGIN CONVERSATION HISTORY]")[1]
+
+    def test_per_user_history_keeps_plain_user_label(self) -> None:
+        """DMs are single-speaker, so the old rendering must be untouched."""
+        result = build_context(
+            user_display_name="Alice",
+            soul_name="Athena",
+            conversation_is_dm=True,
+            history=[
+                {"role": "user", "content": "hello", "speaker": "Alice"},
+                {"role": "assistant", "content": "hi", "speaker": "Alice"},
+            ],
+        )
+
+        assert "User: hello" in result
+        assert "Athena: hi" in result
+        assert "Alice: hello" not in result
+
+    def test_public_channel_without_channel_wide_history_warns_of_gaps(
+        self,
+    ) -> None:
+        """If we could not widen the history, say so rather than let the model
+        apologise for 'ignoring' messages it was never given."""
+        result = build_context(
+            user_display_name="Alice",
+            conversation_is_dm=False,
+            history_is_channel_wide=False,
+        )
+
+        assert "Other people may have spoken in this channel" in result
+        assert "never claim you ignored or forgot it" in result
+
+    def test_dm_location_does_not_warn_of_gaps(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            conversation_is_dm=True,
+        )
+
+        assert "Other people may have spoken" not in result
+
+    def test_recall_hints_label_other_channel_origin(self) -> None:
+        """Hints quote the user verbatim from an earlier day and are injected
+        everywhere, so a DM-sourced hint must not read as said here."""
+        result = build_context(
+            user_display_name="Alice",
+            conversation_is_dm=False,
+            conversation_channel_id="chan-a",
+            recall_hints=[
+                {
+                    "content": "yesterday, Alice talked about: the clinic visit",
+                    "metadata": {"source_channel_id": "dm-1", "source_is_dm": True},
+                },
+                {
+                    "content": "yesterday, Alice talked about: the boss fight",
+                    "metadata": {"source_channel_id": "chan-a"},
+                },
+            ],
+        )
+
+        assert "(from a direct message) yesterday" in result
+        assert "- yesterday, Alice talked about: the boss fight" in result
+
+    def test_recall_hints_accept_plain_strings(self) -> None:
+        result = build_context(
+            user_display_name="Alice",
+            conversation_channel_id="chan-a",
+            recall_hints=["a legacy hint with no metadata"],
+        )
+
+        assert "a legacy hint with no metadata" in result
+
     def test_recalled_memories_label_other_channel_origin(self) -> None:
         result = build_context(
             user_display_name="Alice",

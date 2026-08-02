@@ -170,7 +170,20 @@ class SleepPhase:
                 return
 
             chunk_size = self._memory_config.context_compression_chunk
-            oldest = await self._memory.get_oldest_messages(user.user_id, chunk_size)
+            probe = await self._memory.get_oldest_messages(user.user_id, 1)
+            if not probe:
+                return
+            # Compress one conversation at a time.  A summary spanning a DM
+            # and a public channel cannot carry a single origin, and an
+            # unlabelled memory is free to be recalled into the wrong room.
+            source_channel_id = str(probe[0].get("channel_id") or "")
+            source_is_dm = bool(probe[0].get("is_dm"))
+            oldest = await self._memory.get_oldest_messages(
+                user.user_id,
+                chunk_size,
+                channel_id=source_channel_id,
+                is_dm=source_is_dm,
+            )
             if not oldest:
                 return
 
@@ -193,15 +206,23 @@ class SleepPhase:
                 user_id=user.user_id,
                 layer=MemoryLayer.EPISODIC,
                 content=summary,
+                metadata={
+                    "source": "sleep_compression",
+                    "source_channel_id": source_channel_id,
+                    "source_is_dm": source_is_dm,
+                },
             )
             await self._memory.add_episodic_memory(entry)
 
-            ids = [m["id"] for m in oldest]
+            ids = [str(m["id"]) for m in oldest]
             deleted = await self._memory.delete_messages_with_ids(ids)
             logger.info(
-                "Compressed %d msgs → episodic for user %s (deleted %d rows)",
+                "Compressed %d msgs → episodic for user %s "
+                "(channel=%s dm=%s, deleted %d rows)",
                 len(oldest),
                 user.user_id,
+                source_channel_id or "-",
+                source_is_dm,
                 deleted,
             )
         except Exception:
@@ -327,34 +348,47 @@ class SleepPhase:
                 if not messages:
                     continue
 
-                topics: list[str] = []
+                # One hint per conversation.  Merging channels into a single
+                # hint would quote DM topics in a string that later gets
+                # injected into every channel with no way to label its origin.
+                by_channel: dict[tuple[str, bool], list[str]] = {}
                 for msg in messages:
-                    if msg["role"] == "user" and len(msg["content"]) > 10:
-                        topics.append(msg["content"][:100])
-                if not topics:
+                    content_text = str(msg.get("content") or "")
+                    if msg.get("role") != "user" or len(content_text) <= 10:
+                        continue
+                    origin = (
+                        str(msg.get("channel_id") or ""),
+                        bool(msg.get("is_dm")),
+                    )
+                    by_channel.setdefault(origin, []).append(content_text[:100])
+                if not by_channel:
                     continue
 
-                summary = "; ".join(topics[:3])
-                content = (
-                    f"{label} ({target_date}), "
-                    f"{user.display_name} talked about: {summary}"
-                )
-                await self._memory.store_recall_hint(
-                    user_id=user.user_id,
-                    hint_type="temporal",
-                    content=content,
-                    metadata={
-                        "date": local_date_for_timezone(self._timezone),
-                        "original_date": target_date,
-                        "days_ago": days_ago,
-                    },
-                )
-                logger.debug(
-                    "Temporal recall hint stored for %s (%s): %s",
-                    user.user_id,
-                    label,
-                    content[:80],
-                )
+                for (source_channel_id, source_is_dm), topics in by_channel.items():
+                    summary = "; ".join(topics[:3])
+                    content = (
+                        f"{label} ({target_date}), "
+                        f"{user.display_name} talked about: {summary}"
+                    )
+                    await self._memory.store_recall_hint(
+                        user_id=user.user_id,
+                        hint_type="temporal",
+                        content=content,
+                        metadata={
+                            "date": local_date_for_timezone(self._timezone),
+                            "original_date": target_date,
+                            "days_ago": days_ago,
+                            "source_channel_id": source_channel_id,
+                            "source_is_dm": source_is_dm,
+                        },
+                    )
+                    logger.debug(
+                        "Temporal recall hint stored for %s (%s, channel=%s): %s",
+                        user.user_id,
+                        label,
+                        source_channel_id or "-",
+                        content[:80],
+                    )
             except Exception:
                 logger.exception(
                     "Temporal recall (%s) failed for user %s",

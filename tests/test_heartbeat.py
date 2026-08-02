@@ -2052,6 +2052,158 @@ class TestLayer2Evaluate:
         system = mock_ai.generate_json.await_args.kwargs["system"]
         assert "target_channel_id" in system
 
+    async def test_public_destination_history_shows_the_whole_room(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """The destination rule asks the draft to continue the channel's own
+        conversation, so the draft has to be shown that conversation — not
+        just this user's thread inside it."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.get_or_create_user("u2", "Bob")
+        base = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
+        await memory.add_message(
+            "u1", "user", "alice mentions the festival", "discord",
+            "chan-a", False, created_at=base,
+        )
+        await memory.add_message(
+            "u2", "user", "bob asks about the boss fight", "discord",
+            "chan-a", False, created_at=base + timedelta(minutes=1),
+        )
+        await memory.record_last_seen_channel("u1", "discord", "chan-a", False)
+        user = UserSummary(
+            user_id="u1", display_name="Alice", last_platform="discord"
+        )
+
+        await heartbeat._layer2_evaluate(user, "check in")
+
+        prompt = mock_ai.generate_json.await_args.args[0]
+        assert "bob asks about the boss fight" in prompt
+        assert "Bob: bob asks about the boss fight" in prompt
+        assert "Alice: alice mentions the festival" in prompt
+
+    async def test_quiet_user_is_not_crowded_out_of_the_room_history(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """The draft is about one user, so busy participants must not be able
+        to push that user's own turns out of the loaded window."""
+        heartbeat._memory_config.conversation_history_limit = 4
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.get_or_create_user("u2", "Bob")
+        base = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
+        await memory.add_message(
+            "u1", "user", "alice said this days ago", "discord",
+            "chan-a", False, created_at=base,
+        )
+        for i in range(6):
+            await memory.add_message(
+                "u2", "user", f"bob chatters {i}", "discord",
+                "chan-a", False, created_at=base + timedelta(minutes=i + 1),
+            )
+        await memory.record_last_seen_channel("u1", "discord", "chan-a", False)
+        user = UserSummary(
+            user_id="u1", display_name="Alice", last_platform="discord"
+        )
+
+        await heartbeat._layer2_evaluate(user, "check in")
+
+        prompt = mock_ai.generate_json.await_args.args[0]
+        assert "bob chatters 5" in prompt
+        assert "alice said this days ago" in prompt
+
+    async def test_public_destination_rule_pins_the_addressee(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Showing the whole room risks drafting a reply to the wrong person,
+        so the rule has to name who the message is for."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.add_message(
+            "u1", "user", "hello", "discord", "chan-a", False
+        )
+        await memory.record_last_seen_channel("u1", "discord", "chan-a", False)
+        user = UserSummary(
+            user_id="u1", display_name="Alice", last_platform="discord"
+        )
+
+        await heartbeat._layer2_evaluate(user, "check in")
+
+        system = mock_ai.generate_json.await_args.kwargs["system"]
+        assert "You are writing to Alice, and only to them" in system
+        assert "do not answer a question another participant asked" in system
+
+    async def test_dm_destination_history_stays_private(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Widening must never reach into a DM: another user's messages in the
+        same DM id are not part of this user's conversation."""
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.get_or_create_user("u2", "Bob")
+        await memory.add_message(
+            "u1", "user", "alice private plans", "discord", "dm-1", True
+        )
+        await memory.add_message(
+            "u2", "user", "bob private secret", "discord", "dm-1", True
+        )
+        await memory.record_last_seen_channel("u1", "discord", "dm-1", True)
+        user = UserSummary(
+            user_id="u1", display_name="Alice", last_platform="discord"
+        )
+
+        await heartbeat._layer2_evaluate(user, "check in")
+
+        prompt = mock_ai.generate_json.await_args.args[0]
+        assert "alice private plans" in prompt
+        assert "bob private secret" not in prompt
+
+    async def test_candidate_snippet_shows_other_participants(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        mock_ai: AsyncMock,
+    ) -> None:
+        """Snippets decide whether a topic fits a channel, so they must
+        reflect what the channel is actually talking about.
+
+        Candidacy itself stays per-user: a channel only qualifies because
+        this user is active there, which is why Alice speaks in chan-b too.
+        """
+        await memory.get_or_create_user("u1", "Alice")
+        await memory.get_or_create_user("u2", "Bob")
+        base = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
+        await memory.add_message(
+            "u1", "user", "alice says hi", "discord",
+            "chan-b", False, created_at=base,
+        )
+        await memory.add_message(
+            "u2", "user", "bob is planning curry", "discord",
+            "chan-b", False, created_at=base + timedelta(minutes=1),
+        )
+        await memory.add_message(
+            "u1", "user", "alice on the boss fight", "discord",
+            "chan-a", False, created_at=base + timedelta(minutes=5),
+        )
+        await memory.record_last_seen_channel("u1", "discord", "chan-a", False)
+        user = UserSummary(
+            user_id="u1", display_name="Alice", last_platform="discord"
+        )
+
+        await heartbeat._layer2_evaluate(user, "check in")
+
+        prompt = mock_ai.generate_json.await_args.args[0]
+        assert "[BEGIN CANDIDATE DESTINATIONS" in prompt
+        assert "Bob: bob is planning curry" in prompt
+
     async def test_dm_primary_excludes_public_channels_from_candidates(
         self,
         heartbeat: HeartbeatLoop,

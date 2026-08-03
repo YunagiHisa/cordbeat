@@ -824,6 +824,7 @@ class CoreEngine:
         react_config: ReActConfig | None = None,
         soul_config: SoulConfig | None = None,
         vision_enabled: bool = False,
+        video_enabled: bool = False,
         timezone_name: str = "UTC",
         adapters_options: dict[str, dict[str, Any]] | None = None,
     ) -> None:
@@ -836,6 +837,7 @@ class CoreEngine:
         self._react_config = react_config or ReActConfig()
         self._soul_config = soul_config or SoulConfig()
         self._vision_enabled = vision_enabled
+        self._video_enabled = video_enabled
         self._timezone_name = timezone_name
         self._adapters_options = adapters_options or {}
         self._extractor = MemoryExtractor(ai, soul, memory, self._memory_config)
@@ -1461,16 +1463,30 @@ class CoreEngine:
                     len(message.images),
                     message.adapter_id,
                 )
-            if self._vision_enabled and message.images:
+            if message.videos and not self._video_enabled:
+                logger.warning(
+                    "Ignoring %d video(s) from %s because "
+                    "ai_backend.video_enabled is false",
+                    len(message.videos),
+                    message.adapter_id,
+                )
+            # Both travel as image_url content parts; the backend picks the
+            # MIME type per item from its magic bytes.
+            media = (message.images if self._vision_enabled else []) + (
+                message.videos if self._video_enabled else []
+            )
+            if media:
                 try:
                     logger.debug(
-                        "Generating vision response with %d image(s) from %s",
-                        len(message.images),
+                        "Generating vision response with %d image(s) and "
+                        "%d video(s) from %s",
+                        len(message.images) if self._vision_enabled else 0,
+                        len(message.videos) if self._video_enabled else 0,
                         message.adapter_id,
                     )
                     raw = await self._ai.generate_with_vision(
                         prompt=prompt,
-                        images=message.images,
+                        images=media,
                         system=system_prompt,
                     )
                     cleaned = sanitize_reasoning_artifacts(raw)
@@ -1479,9 +1495,9 @@ class CoreEngine:
                     return cleaned, system_prompt, prompt
                 except Exception:
                     logger.warning(
-                        "Vision generation failed for %d image(s), "
+                        "Vision generation failed for %d media item(s), "
                         "falling back to text-only response",
-                        len(message.images),
+                        len(media),
                         exc_info=True,
                     )
             raw = await self._generate_text_with_timeout_retry(prompt, system_prompt)

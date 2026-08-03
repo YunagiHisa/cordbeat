@@ -43,6 +43,10 @@ _PENDING_SKILL_CONFIRM_MAX = 1_000
 _MAX_IMAGES_PER_MESSAGE = 4
 _IMAGE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024
 _AUDIO_SIZE_LIMIT_BYTES = 25 * 1024 * 1024
+# One video per message, and a limit well under the gateway's frame cap:
+# base64 inflates by 4/3, so 20 MiB of video is ~27 MiB on the wire.
+_MAX_VIDEOS_PER_MESSAGE = 1
+_VIDEO_SIZE_LIMIT_BYTES = 20 * 1024 * 1024
 _DISCORD_MESSAGE_LIMIT = 2000
 _VC_BUFFER_MAX_FRAGMENTS = 5
 _VC_CONTEXT_MAX_LINES_DEFAULT = 8
@@ -872,17 +876,27 @@ class DiscordAdapter(RetryableConnection):
         # Show typing indicator while core is processing
         self._start_typing(channel_id, message.channel)
 
-        async def _fetch_attachment_images(src_msg: Any, buf: list[str]) -> None:
+        async def _fetch_attachments(
+            src_msg: Any,
+            buf: list[str],
+            *,
+            mime_prefix: str,
+            max_items: int,
+            size_limit: int,
+        ) -> None:
+            kind = mime_prefix.rstrip("/")
             for att in getattr(src_msg, "attachments", []):
-                if len(buf) >= _MAX_IMAGES_PER_MESSAGE:
+                if len(buf) >= max_items:
                     break
                 ct = getattr(att, "content_type", "") or ""
-                if not ct.startswith("image/"):
+                if not ct.startswith(mime_prefix):
                     continue
                 size = getattr(att, "size", 0) or 0
-                if size > _IMAGE_SIZE_LIMIT_BYTES:
+                if size > size_limit:
                     logger.warning(
-                        "Skipping oversized Discord image attachment: %d bytes", size
+                        "Skipping oversized Discord %s attachment: %d bytes",
+                        kind,
+                        size,
                     )
                     continue
                 try:
@@ -891,17 +905,39 @@ class DiscordAdapter(RetryableConnection):
                         resp.raise_for_status()
                         buf.append(base64.b64encode(resp.content).decode("ascii"))
                         logger.debug(
-                            "Downloaded Discord image attachment: %s (%d bytes)",
+                            "Downloaded Discord %s attachment: %s (%d bytes)",
+                            kind,
                             getattr(att, "filename", att.url),
                             len(resp.content),
                         )
                 except Exception:
                     logger.warning(
-                        "Failed to download Discord image attachment: %s", att.url
+                        "Failed to download Discord %s attachment: %s", kind, att.url
                     )
+
+        async def _fetch_attachment_images(src_msg: Any, buf: list[str]) -> None:
+            await _fetch_attachments(
+                src_msg,
+                buf,
+                mime_prefix="image/",
+                max_items=_MAX_IMAGES_PER_MESSAGE,
+                size_limit=_IMAGE_SIZE_LIMIT_BYTES,
+            )
 
         images: list[str] = []
         await _fetch_attachment_images(message, images)
+
+        # Videos are large, so only collect them when Core said it will
+        # actually send them to the model.
+        videos: list[str] = []
+        if self.core_supports("video_input"):
+            await _fetch_attachments(
+                message,
+                videos,
+                mime_prefix="video/",
+                max_items=_MAX_VIDEOS_PER_MESSAGE,
+                size_limit=_VIDEO_SIZE_LIMIT_BYTES,
+            )
 
         ref = getattr(message, "reference", None)
         reply_context: dict[str, Any] | None = None
@@ -1015,6 +1051,7 @@ class DiscordAdapter(RetryableConnection):
                 "content": content,
                 "timestamp": sent_at.isoformat(),
                 "images": images,
+                "videos": videos,
                 "is_voice": is_voice,
                 "metadata": {
                     "channel_id": str(message.channel.id),

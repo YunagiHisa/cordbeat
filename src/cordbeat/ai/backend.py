@@ -230,16 +230,27 @@ def _downscale_image_b64(b64data: str) -> str:
 
 
 async def _downscale_images(images: list[str]) -> list[str]:
-    """Downscale off-loop: a 12MP decode+resize is tens of milliseconds."""
+    """Downscale off-loop: a 12MP decode+resize is tens of milliseconds.
+
+    Non-image media passes through untouched: PIL cannot open a video, and
+    letting it try only costs a decode attempt and a misleading warning.
+    """
     if not images:
         return images
     return await asyncio.to_thread(
-        lambda: [_downscale_image_b64(image) for image in images]
+        lambda: [
+            _downscale_image_b64(item) if _is_image_mime(item) else item
+            for item in images
+        ]
     )
 
 
-def _detect_image_mime(b64data: str) -> str:
-    """Detect image MIME type from base64-encoded data magic bytes."""
+def _detect_media_mime(b64data: str) -> str:
+    """Detect the MIME type of base64-encoded media from its magic bytes.
+
+    Video matters here as much as image: a clip labelled ``image/jpeg``
+    is rejected by backends that would otherwise decode it.
+    """
     try:
         raw = base64.b64decode(b64data[:20] + "==")
         if raw[:3] == b"\xff\xd8\xff":
@@ -250,9 +261,18 @@ def _detect_image_mime(b64data: str) -> str:
             return "image/gif"
         if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
             return "image/webp"
+        if raw[4:8] == b"ftyp":
+            # ISO base media: MP4 and QuickTime share the container.
+            return "video/quicktime" if raw[8:12] == b"qt  " else "video/mp4"
+        if raw[:4] == b"\x1aE\xdf\xa3":
+            return "video/webm"  # EBML: WebM or Matroska
     except Exception:
         pass
     return "image/jpeg"
+
+
+def _is_image_mime(b64data: str) -> bool:
+    return _detect_media_mime(b64data).startswith("image/")
 
 
 class AIBackend(ABC):
@@ -1036,7 +1056,7 @@ class OpenAICompatBackend(AIBackend):
 
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for b64img in images:
-            mime = _detect_image_mime(b64img)
+            mime = _detect_media_mime(b64img)
             content.append(
                 {
                     "type": "image_url",
@@ -1220,7 +1240,7 @@ class OpenAICompatBackend(AIBackend):
             else:
                 content = [{"type": "text", "text": str(original)}]
             for b64img in images:
-                mime = _detect_image_mime(b64img)
+                mime = _detect_media_mime(b64img)
                 content.append(
                     {
                         "type": "image_url",

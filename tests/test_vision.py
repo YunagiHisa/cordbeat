@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from cordbeat.ai.backend import (
     OllamaBackend,
     OpenAICompatBackend,
-    _detect_image_mime,
+    _detect_media_mime,
 )
 from cordbeat.config import AIBackendConfig
 from cordbeat.core.engine import CoreEngine
@@ -30,16 +30,56 @@ def _make_b64(magic: bytes) -> str:
 
 class TestDetectImageMime:
     def test_jpeg(self) -> None:
-        assert _detect_image_mime(_make_b64(b"\xff\xd8\xff")) == "image/jpeg"
+        assert _detect_media_mime(_make_b64(b"\xff\xd8\xff")) == "image/jpeg"
 
     def test_png(self) -> None:
-        assert _detect_image_mime(_make_b64(b"\x89PNG")) == "image/png"
+        assert _detect_media_mime(_make_b64(b"\x89PNG")) == "image/png"
 
     def test_gif(self) -> None:
-        assert _detect_image_mime(_make_b64(b"GIF8")) == "image/gif"
+        assert _detect_media_mime(_make_b64(b"GIF8")) == "image/gif"
 
     def test_default_unknown(self) -> None:
-        assert _detect_image_mime(_make_b64(b"\x00\x00\x00\x00")) == "image/jpeg"
+        assert _detect_media_mime(_make_b64(b"\x00\x00\x00\x00")) == "image/jpeg"
+
+    def test_mp4(self) -> None:
+        """A clip labelled image/jpeg is rejected by backends that would
+        otherwise decode it, so the container has to be recognised."""
+        assert _detect_media_mime(_make_b64(b"\x00\x00\x00\x20ftypisom")) == "video/mp4"
+
+    def test_quicktime(self) -> None:
+        assert (
+            _detect_media_mime(_make_b64(b"\x00\x00\x00\x14ftypqt  "))
+            == "video/quicktime"
+        )
+
+    def test_webm(self) -> None:
+        assert _detect_media_mime(_make_b64(b"\x1aE\xdf\xa3")) == "video/webm"
+
+
+class TestDownscaleSkipsVideo:
+    async def test_video_is_not_handed_to_pil(self) -> None:
+        """PIL cannot open a video; attempting it costs a decode and logs a
+        warning that reads like a broken image."""
+        from cordbeat.ai.backend import _downscale_images
+
+        video = _make_b64(b"\x00\x00\x00\x20ftypisom")
+        with patch("cordbeat.ai.backend._downscale_image_b64") as downscale:
+            result = await _downscale_images([video])
+
+        downscale.assert_not_called()
+        assert result == [video]
+
+    async def test_images_still_downscaled(self) -> None:
+        from cordbeat.ai.backend import _downscale_images
+
+        image = _make_b64(b"\x89PNG")
+        with patch(
+            "cordbeat.ai.backend._downscale_image_b64", return_value="smaller"
+        ) as downscale:
+            result = await _downscale_images([image])
+
+        downscale.assert_called_once_with(image)
+        assert result == ["smaller"]
 
 
 # ── GatewayMessage.images field ───────────────────────────────────────
@@ -244,7 +284,9 @@ class TestOpenAIVision:
 
 
 class TestCoreEngineVision:
-    def _make_engine(self, vision_enabled: bool = True) -> tuple[CoreEngine, MagicMock]:
+    def _make_engine(
+        self, vision_enabled: bool = True, video_enabled: bool = False
+    ) -> tuple[CoreEngine, MagicMock]:
         from cordbeat.config import MemoryConfig
 
         ai = MagicMock()
@@ -305,6 +347,7 @@ class TestCoreEngineVision:
             gateway=gateway,
             memory_config=MemoryConfig(),
             vision_enabled=vision_enabled,
+            video_enabled=video_enabled,
         )
         engine._extractor = extractor
         return engine, ai
@@ -348,6 +391,54 @@ class TestCoreEngineVision:
         await engine.handle_message(msg)
         ai.generate.assert_called_once()
         ai.generate_with_vision.assert_not_called()
+
+    async def test_sends_video_when_video_enabled(self) -> None:
+        """Video reaches the model through the same content part as images."""
+        engine, ai = self._make_engine(vision_enabled=True, video_enabled=True)
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="u1",
+            content="What happens here?",
+            images=["imgdata"],
+            videos=["viddata"],
+        )
+        await engine.handle_message(msg)
+        ai.generate_with_vision.assert_called_once()
+        assert ai.generate_with_vision.call_args.kwargs["images"] == [
+            "imgdata",
+            "viddata",
+        ]
+
+    async def test_drops_video_when_video_disabled(self, caplog: Any) -> None:
+        """Only some backends decode video, so it is opt-in and its absence
+        must not silently look like the model ignoring the clip."""
+        engine, ai = self._make_engine(vision_enabled=True, video_enabled=False)
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="u1",
+            content="What happens here?",
+            images=["imgdata"],
+            videos=["viddata"],
+        )
+        with caplog.at_level(logging.WARNING):
+            await engine.handle_message(msg)
+        assert ai.generate_with_vision.call_args.kwargs["images"] == ["imgdata"]
+        assert "ai_backend.video_enabled is false" in caplog.text
+
+    async def test_video_alone_still_reaches_the_model(self) -> None:
+        engine, ai = self._make_engine(vision_enabled=False, video_enabled=True)
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="u1",
+            content="What happens here?",
+            videos=["viddata"],
+        )
+        await engine.handle_message(msg)
+        ai.generate_with_vision.assert_called_once()
+        assert ai.generate_with_vision.call_args.kwargs["images"] == ["viddata"]
 
     async def test_falls_back_to_text_when_vision_fails(self) -> None:
         """If generate_with_vision raises, engine falls back to text-only generate."""

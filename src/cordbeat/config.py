@@ -199,6 +199,12 @@ class AIBackendConfig:
     options: dict[str, Any] = field(default_factory=dict)
     cache: LLMCacheConfig = field(default_factory=LLMCacheConfig)
     vision_enabled: bool = False
+    # Send video attachments to the model as-is.  Only some backends decode
+    # video (Gemini's OpenAI-compatible endpoint does; a local llama.cpp
+    # vision model generally does not), so this is off by default and is
+    # separate from vision_enabled.  Video is delivered through the same
+    # image_url content part, so it also requires a vision-capable path.
+    video_enabled: bool = False
 
 
 @dataclass

@@ -104,6 +104,12 @@ ai_backend:
   #   api_key: "sk-..."
 
   vision_enabled: false  # Enable image input for vision-capable models
+  # Enable video input.  Video is sent as-is through the same content part
+  # as images, so it needs a backend that decodes video (Gemini's
+  # OpenAI-compatible endpoint does; a local llama.cpp vision model
+  # generally does not).  Adapters only download video attachments while
+  # this is on, so leaving it off costs nothing.
+  video_enabled: false
 
   cache:
     enabled: false       # Cache identical LLM requests (deterministic-ish only)

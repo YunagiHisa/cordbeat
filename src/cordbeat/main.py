@@ -280,7 +280,11 @@ async def main(
     logger.info("SKILL registry: %d skills loaded", len(skills.available_skills))
 
     queue = MessageQueue()
-    gateway = GatewayServer(config.gateway, queue)
+    gateway = GatewayServer(
+        config.gateway,
+        queue,
+        capabilities={"video_input": config.ai_backend.video_enabled},
+    )
 
     engine = CoreEngine(
         ai=ai,
@@ -292,6 +296,7 @@ async def main(
         react_config=config.react,
         soul_config=config.soul,
         vision_enabled=config.ai_backend.vision_enabled,
+        video_enabled=config.ai_backend.video_enabled,
         timezone_name=config.heartbeat.timezone,
         adapters_options={name: dict(a.options) for name, a in config.adapters.items()},
     )

@@ -266,6 +266,65 @@ class TestGatewayServer:
         ack = json.loads(mock_ws.send.call_args_list[0][0][0])
         assert ack["type"] == "ack"
 
+    async def test_ack_advertises_core_capabilities(self) -> None:
+        """Adapters decide whether to collect heavy media from this, so it has
+        to travel with the handshake rather than be configured twice."""
+        server = GatewayServer(
+            GatewayConfig(), MessageQueue(), capabilities={"video_input": True}
+        )
+
+        mock_ws = AsyncMock()
+        mock_ws.recv = AsyncMock(return_value=json.dumps({"adapter_id": "a1"}))
+        mock_ws.__aiter__ = lambda self: _AsyncIter([])
+        mock_ws.send = AsyncMock()
+        mock_ws.close = AsyncMock()
+
+        await server._handle_connection(mock_ws)
+
+        ack = json.loads(mock_ws.send.call_args_list[0][0][0])
+        assert ack["capabilities"] == {"video_input": True}
+
+    async def test_ack_capabilities_default_to_empty(self) -> None:
+        server = GatewayServer(GatewayConfig(), MessageQueue())
+
+        mock_ws = AsyncMock()
+        mock_ws.recv = AsyncMock(return_value=json.dumps({"adapter_id": "a1"}))
+        mock_ws.__aiter__ = lambda self: _AsyncIter([])
+        mock_ws.send = AsyncMock()
+        mock_ws.close = AsyncMock()
+
+        await server._handle_connection(mock_ws)
+
+        ack = json.loads(mock_ws.send.call_args_list[0][0][0])
+        assert ack["capabilities"] == {}
+
+    async def test_inbound_message_carries_videos(self) -> None:
+        queue = AsyncMock()
+        server = GatewayServer(GatewayConfig(), queue)
+
+        mock_ws = AsyncMock()
+        mock_ws.recv = AsyncMock(return_value=json.dumps({"adapter_id": "a1"}))
+        mock_ws.__aiter__ = lambda self: _AsyncIter(
+            [
+                json.dumps(
+                    {
+                        "type": "message",
+                        "adapter_id": "a1",
+                        "platform_user_id": "u1",
+                        "content": "look",
+                        "videos": ["viddata"],
+                    }
+                )
+            ]
+        )
+        mock_ws.send = AsyncMock()
+        mock_ws.close = AsyncMock()
+
+        await server._handle_connection(mock_ws)
+
+        message = queue.put.await_args.args[0]
+        assert message.videos == ["viddata"]
+
     async def test_handle_connection_closes_previous_adapter_socket(self) -> None:
         config = GatewayConfig()
         queue = MessageQueue()
@@ -606,6 +665,20 @@ class TestRetryableConnection:
 
         await conn._listen_core()
         assert dispatched == [("u1", "🔧 ReAct 1/3: web_search()")]
+
+    async def test_core_supports_is_false_before_any_handshake(self) -> None:
+        """Defaulting to False keeps an adapter from downloading heavy media
+        for a Core that never said it wants it."""
+        conn = _ConcreteConnection()
+
+        assert conn.core_supports("video_input") is False
+
+    async def test_core_supports_reads_handshake_capabilities(self) -> None:
+        conn = _ConcreteConnection()
+        conn._core_capabilities = {"video_input": True}
+
+        assert conn.core_supports("video_input") is True
+        assert conn.core_supports("something_else") is False
 
     async def test_listen_core_ignores_unknown_types(self) -> None:
         conn = _ConcreteConnection()

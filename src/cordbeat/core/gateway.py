@@ -70,7 +70,19 @@ class RetryableConnection(ABC):
     _ws_url: str
     _auth_token: str
     _pending_outbox: deque[str]
+    _core_capabilities: dict[str, Any]
     adapter_id: str
+
+    def core_supports(self, capability: str) -> bool:
+        """Return whether Core advertised *capability* in its handshake ACK.
+
+        Lets an adapter skip work Core would only discard — downloading a
+        20 MiB video for a backend that cannot read it, for instance —
+        without duplicating Core's configuration on the adapter side.
+        Unknown until the first ACK, and false until then.
+        """
+        caps: dict[str, Any] = getattr(self, "_core_capabilities", {})
+        return bool(caps.get(capability))
 
     async def _connect_to_core(self) -> None:
         """Maintain a persistent WebSocket connection to Core with retry."""
@@ -90,7 +102,12 @@ class RetryableConnection(ABC):
                     handshake["auth_token"] = self._auth_token
                 await self._ws.send(json.dumps(handshake))
                 ack = json.loads(await self._ws.recv())
-                logger.info("Connected to Core: %s", ack.get("content", "OK"))
+                self._core_capabilities = ack.get("capabilities") or {}
+                logger.info(
+                    "Connected to Core: %s (capabilities: %s)",
+                    ack.get("content", "OK"),
+                    ", ".join(sorted(self._core_capabilities)) or "none",
+                )
                 backoff = 1
                 await self._flush_outbox()
                 await self._listen_core()
@@ -286,9 +303,17 @@ class MessageQueue:
 class GatewayServer:
     """WebSocket server that adapters connect to."""
 
-    def __init__(self, config: GatewayConfig, queue: MessageQueueProtocol) -> None:
+    def __init__(
+        self,
+        config: GatewayConfig,
+        queue: MessageQueueProtocol,
+        capabilities: dict[str, Any] | None = None,
+    ) -> None:
         self._config = config
         self._queue = queue
+        # Advertised to adapters in the handshake ACK so they can skip
+        # collecting media Core is configured to drop.
+        self._capabilities = capabilities or {}
         self._connections: dict[str, ServerConnection] = {}
         self._server: Server | None = None
 
@@ -381,6 +406,7 @@ class GatewayServer:
                         "type": MessageType.ACK.value,
                         "adapter_id": "core",
                         "content": f"Welcome {adapter_id}",
+                        "capabilities": self._capabilities,
                     }
                 )
             )
@@ -399,6 +425,7 @@ class GatewayServer:
                         received_at=datetime.now(tz=UTC),
                         metadata=msg_data.get("metadata", {}),
                         images=msg_data.get("images", []),
+                        videos=msg_data.get("videos", []),
                         is_voice=bool(msg_data.get("is_voice", False)),
                     )
                     await self._queue.put(message)

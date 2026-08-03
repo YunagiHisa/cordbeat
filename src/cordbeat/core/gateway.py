@@ -103,10 +103,15 @@ class RetryableConnection(ABC):
                 await self._ws.send(json.dumps(handshake))
                 ack = json.loads(await self._ws.recv())
                 self._core_capabilities = ack.get("capabilities") or {}
+                # List what is switched on, not what was mentioned: a
+                # disabled capability in this line reads as an enabled one.
+                enabled = sorted(
+                    name for name, on in self._core_capabilities.items() if on
+                )
                 logger.info(
                     "Connected to Core: %s (capabilities: %s)",
                     ack.get("content", "OK"),
-                    ", ".join(sorted(self._core_capabilities)) or "none",
+                    ", ".join(enabled) or "none",
                 )
                 backoff = 1
                 await self._flush_outbox()

@@ -12,7 +12,7 @@ import pytest
 
 from cordbeat.agent.react_types import ToolCallResult
 from cordbeat.agent.soul import Soul
-from cordbeat.config import MemoryConfig, ReActConfig, SoulConfig
+from cordbeat.config import MemoryConfig, ReActConfig, SoulConfig, TTSConfig
 from cordbeat.core.engine import CoreEngine, _find_skill_tags
 from cordbeat.memory import MemoryStore
 from cordbeat.models import (
@@ -103,6 +103,54 @@ def engine(
         skills=skills,
         gateway=mock_gateway,
     )
+
+
+async def test_voice_reply_gets_independent_speech_direction_metadata(
+    engine: CoreEngine,
+    mock_ai: AsyncMock,
+    mock_gateway: AsyncMock,
+) -> None:
+    engine._tts_config = TTSConfig(enabled=True, backend="voice_design")
+
+    async def generate(**kwargs: object) -> str:
+        system = str(kwargs.get("system") or "")
+        if "speech director" in system.casefold():
+            return json.dumps(
+                {
+                    "intent": "reassure",
+                    "tone": "gentle and confident",
+                    "pace": "slightly_slow",
+                    "energy": 0.35,
+                    "direction": "Speak gently and make the conclusion clear.",
+                }
+            )
+        return "Everything is ready."
+
+    mock_ai.generate = AsyncMock(side_effect=generate)
+    message = GatewayMessage(
+        type=MessageType.MESSAGE,
+        adapter_id="discord",
+        platform_user_id="vc:42",
+        content="Is it ready?",
+        is_voice=True,
+        metadata={"shared_voice": True, "via_vc": True},
+    )
+
+    await engine.handle_message(message)
+
+    reply = mock_gateway.send_to_adapter.await_args.args[1]
+    direction = reply.metadata["speech_direction"]
+    assert reply.content == "Everything is ready."
+    assert direction["intent"] == "reassure"
+    assert direction["pace"] == "slightly_slow"
+    assert direction["language"] == "en"
+    director_call = next(
+        call
+        for call in mock_ai.generate.await_args_list
+        if "speech director" in str(call.kwargs.get("system", "")).casefold()
+    )
+    assert director_call.kwargs["max_tokens"] == 128
+    assert director_call.kwargs["temperature"] == 0.2
 
 
 class TestChannelWideHistoryWiring:

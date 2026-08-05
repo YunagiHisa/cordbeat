@@ -19,6 +19,7 @@
 |---|---|
 | [Engine](engine.md) | CoreEngine message processing flow |
 | [AI Backends](ai-backends.md) | Provider configuration (Ollama, llama.cpp, OpenAI-compatible) |
+| [Voice](voice.md) | Whisper STT, content-aware TTS, and chunked voice playback |
 | [Config Reference](config-reference.md) | All `config.yaml` fields and defaults |
 | [Deployment](deployment.md) | Local and Docker deployment guide |
 

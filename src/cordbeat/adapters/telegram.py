@@ -114,6 +114,11 @@ class TelegramAdapter(RetryableConnection):
             )
             return
 
+        if self._tts is not None:
+            preload = getattr(self._tts, "preload", None)
+            if callable(preload):
+                await preload()
+
         if not self._token:
             logger.error(
                 "Telegram bot token not configured in adapters.telegram.options.token"
@@ -408,6 +413,10 @@ class TelegramAdapter(RetryableConnection):
             await self._app.updater.stop()
             await self._app.stop()
             await self._app.shutdown()
+        if self._tts is not None:
+            close = getattr(self._tts, "aclose", None)
+            if callable(close):
+                await close()
 
     async def _dispatch_skill_confirm(
         self, platform_user_id: str, data: dict[str, Any]
@@ -491,7 +500,17 @@ class TelegramAdapter(RetryableConnection):
         metadata: dict[str, Any] | None = None,
     ) -> None:
         if self._tts is not None and platform_user_id in self._voice_users:
-            await self._send_voice_to_telegram(platform_user_id, content)
+            from cordbeat.ai.speech import SpeechStyle
+
+            style = SpeechStyle.from_metadata(metadata)
+            if style is None:
+                await self._send_voice_to_telegram(platform_user_id, content)
+            else:
+                await self._send_voice_to_telegram(
+                    platform_user_id,
+                    content,
+                    style=style,
+                )
         elif images:
             await self._send_images_to_telegram(platform_user_id, content, images)
         else:
@@ -501,6 +520,8 @@ class TelegramAdapter(RetryableConnection):
         self,
         platform_user_id: str,
         content: str,
+        *,
+        style: Any = None,
     ) -> None:
         """Synthesize *content* via TTS and send as voice/audio to Telegram."""
         if not self._app or not self._tts:
@@ -515,17 +536,22 @@ class TelegramAdapter(RetryableConnection):
                 return
 
         try:
-            audio_bytes = await self._tts.synthesize(content)
+            if style is None:
+                audio_bytes = await self._tts.synthesize(content)
+            else:
+                audio_bytes = await self._tts.synthesize(content, style=style)
             if not audio_bytes:
                 await self._send_to_telegram(platform_user_id, content)
                 return
 
             audio_io = io.BytesIO(audio_bytes)
-            audio_io.name = (
-                "response.ogg"
-                if self._tts.content_type == "audio/ogg"
-                else "response.mp3"
-            )
+            extension = {
+                "audio/ogg": "ogg",
+                "audio/wav": "wav",
+                "audio/x-wav": "wav",
+                "audio/mpeg": "mp3",
+            }.get(self._tts.content_type, "bin")
+            audio_io.name = f"response.{extension}"
 
             if self._tts.content_type == "audio/ogg":
                 await self._app.bot.send_voice(chat_id=chat_id, voice=audio_io)

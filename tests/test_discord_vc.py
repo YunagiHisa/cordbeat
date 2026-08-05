@@ -968,6 +968,52 @@ class TestDiscordAdapterVC:
         assert vc_mock.play.call_args.args == (ffmpeg_source,)
         assert callable(vc_mock.play.call_args.kwargs["after"])
 
+    async def test_voice_design_streams_chunks_during_vc_playback(self) -> None:
+        import sys
+
+        adapter = self._make_adapter()
+        tts = MagicMock()
+        tts.supports_chunked_playback = True
+        tts.playback_queue_size = 2
+
+        async def chunks(text: str, *, style: object = None) -> Any:
+            assert text == "first. second."
+            yield b"RIFF-one"
+            yield b"RIFF-two"
+
+        tts.synthesize_chunks = chunks
+        adapter._tts = tts
+        vc_mock = MagicMock()
+        vc_mock.is_connected.return_value = True
+        vc_mock.is_playing.return_value = False
+
+        def play(source: object, *, after: Any) -> None:
+            asyncio.get_running_loop().call_soon(after, None)
+
+        vc_mock.play.side_effect = play
+        guild_mock = MagicMock(voice_client=vc_mock)
+        adapter._bot = MagicMock()
+        adapter._bot.get_guild.return_value = guild_mock
+        discord_mock = MagicMock()
+        discord_mock.FFmpegPCMAudio.side_effect = lambda stream, pipe: stream.read()
+        old = sys.modules.get("discord")
+        sys.modules["discord"] = discord_mock
+        try:
+            assert await adapter._speak_in_vc(111, "first. second.") is True
+            session = adapter._vc_chunk_sessions[111]
+            assert session.runner is not None
+            await session.runner
+        finally:
+            if old is None:
+                sys.modules.pop("discord", None)
+            else:
+                sys.modules["discord"] = old
+
+        assert vc_mock.play.call_count == 2
+        assert vc_mock.play.call_args_list[0].args == (b"RIFF-one",)
+        assert vc_mock.play.call_args_list[1].args == (b"RIFF-two",)
+        assert 111 not in adapter._vc_chunk_sessions
+
     async def test_speak_in_vc_queues_latest_while_audio_is_playing(
         self,
         caplog: pytest.LogCaptureFixture,

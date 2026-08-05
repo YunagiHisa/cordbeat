@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import threading
 import time
+import wave
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,9 +22,10 @@ from cordbeat.ai.tts import (
     EdgeTTSBackend,
     OpenAICompatTTS,
     OpenAITTS,
+    VoiceDesignTTS,
     create_tts_backend,
 )
-from cordbeat.config import STTConfig, TTSConfig
+from cordbeat.config import STTConfig, TTSConfig, TTSStreamingConfig
 
 # ---------------------------------------------------------------------------
 # Config defaults
@@ -265,6 +268,12 @@ def test_create_tts_backend_openai_compat() -> None:
     cfg = TTSConfig(backend="openai_compat")
     backend = create_tts_backend(cfg)
     assert isinstance(backend, OpenAICompatTTS)
+
+
+def test_create_tts_backend_voice_design() -> None:
+    cfg = TTSConfig(backend="voice_design", api_url="http://localhost:8088")
+    backend = create_tts_backend(cfg)
+    assert isinstance(backend, VoiceDesignTTS)
 
 
 def test_create_tts_backend_unknown_falls_back(caplog: Any) -> None:
@@ -533,6 +542,157 @@ async def test_openai_compat_tts_synthesizes() -> None:
     assert result == b"audio_bytes"
 
 
+def _test_wav(sample_count: int = 16) -> bytes:
+    output = io.BytesIO()
+    with wave.open(output, "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(48_000)
+        writer.writeframes(b"\x00\x00" * sample_count)
+    return output.getvalue()
+
+
+async def test_voice_design_tts_chunks_and_uses_prompt_extension() -> None:
+    mock_client = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.content = _test_wav()
+    mock_client.post = AsyncMock(return_value=mock_response)
+    mock_client.aclose = AsyncMock()
+    config = TTSConfig(
+        backend="voice_design",
+        api_url="http://localhost:8088",
+        model="irodori-tts",
+        streaming=TTSStreamingConfig(
+            enabled=True,
+            chunk_min_chars=1,
+            chunk_max_chars=8,
+        ),
+        backend_options={"num_steps": 16},
+    )
+
+    with patch("cordbeat.ai.tts.httpx.AsyncClient", return_value=mock_client):
+        tts = VoiceDesignTTS(config)
+        chunks = [
+            chunk
+            async for chunk in tts.synthesize_chunks("こんにちは。次です。")
+        ]
+        await tts.aclose()
+
+    assert len(chunks) == 2
+    payload = mock_client.post.call_args_list[0].kwargs["json"]
+    assert payload["model"] == "irodori-tts"
+    assert payload["voice"] == "none"
+    assert payload["response_format"] == "wav"
+    assert payload["irodori"]["num_steps"] == 16
+    assert "caption" in payload["irodori"]
+    assert "seconds" not in payload["irodori"]
+
+
+async def test_voice_design_tts_merges_wav_for_non_streaming_consumers() -> None:
+    mock_client = AsyncMock()
+    response = MagicMock(status_code=200, content=_test_wav(10))
+    mock_client.post = AsyncMock(return_value=response)
+    mock_client.aclose = AsyncMock()
+    config = TTSConfig(
+        backend="voice_design",
+        api_url="http://localhost:8088",
+        streaming=TTSStreamingConfig(
+            enabled=True,
+            chunk_min_chars=1,
+            chunk_max_chars=6,
+        ),
+    )
+
+    with patch("cordbeat.ai.tts.httpx.AsyncClient", return_value=mock_client):
+        tts = VoiceDesignTTS(config)
+        audio = await tts.synthesize("一つです。二つです。")
+        await tts.aclose()
+
+    with wave.open(io.BytesIO(audio), "rb") as reader:
+        assert reader.getnframes() == 20
+
+
+async def test_voice_design_tts_does_not_retry_validation_error() -> None:
+    mock_client = AsyncMock()
+    response = MagicMock(status_code=422, text='{"error":{"type":"invalid_request"}}')
+    mock_client.post = AsyncMock(return_value=response)
+    mock_client.aclose = AsyncMock()
+    config = TTSConfig(
+        backend="voice_design",
+        api_url="http://localhost:8088",
+        backend_options={"retries": 2},
+    )
+
+    with patch("cordbeat.ai.tts.httpx.AsyncClient", return_value=mock_client):
+        tts = VoiceDesignTTS(config)
+        audio = await tts.synthesize("hello")
+        await tts.aclose()
+
+    assert audio == b""
+    mock_client.post.assert_awaited_once()
+
+
+async def test_voice_design_tts_retries_server_error_once() -> None:
+    mock_client = AsyncMock()
+    failed = MagicMock(status_code=500, text="temporary failure")
+    succeeded = MagicMock(status_code=200, content=_test_wav())
+    mock_client.post = AsyncMock(side_effect=[failed, succeeded])
+    mock_client.aclose = AsyncMock()
+    config = TTSConfig(
+        backend="voice_design",
+        api_url="http://localhost:8088",
+        backend_options={"retries": 1},
+    )
+
+    with (
+        patch("cordbeat.ai.tts.httpx.AsyncClient", return_value=mock_client),
+        patch("cordbeat.ai.tts.asyncio.sleep", new=AsyncMock()),
+    ):
+        tts = VoiceDesignTTS(config)
+        audio = await tts.synthesize("hello")
+        await tts.aclose()
+
+    assert audio.startswith(b"RIFF")
+    assert mock_client.post.await_count == 2
+
+
+async def test_voice_design_tts_rejects_invalid_wav() -> None:
+    mock_client = AsyncMock()
+    response = MagicMock(status_code=200, content=b"not a wav")
+    mock_client.post = AsyncMock(return_value=response)
+    mock_client.aclose = AsyncMock()
+    config = TTSConfig(backend="voice_design", api_url="http://localhost:8088")
+
+    with patch("cordbeat.ai.tts.httpx.AsyncClient", return_value=mock_client):
+        tts = VoiceDesignTTS(config)
+        audio = await tts.synthesize("hello")
+        await tts.aclose()
+
+    assert audio == b""
+
+
+async def test_voice_design_health_check_uses_short_timeout() -> None:
+    mock_client = AsyncMock()
+    response = MagicMock()
+    response.json.return_value = {"status": "ok"}
+    response.raise_for_status = MagicMock()
+    mock_client.get = AsyncMock(return_value=response)
+    mock_client.aclose = AsyncMock()
+    config = TTSConfig(
+        backend="voice_design",
+        api_url="http://localhost:8088",
+        timeout=120.0,
+    )
+
+    with patch("cordbeat.ai.tts.httpx.AsyncClient", return_value=mock_client):
+        tts = VoiceDesignTTS(config)
+        await tts.preload()
+        await tts.aclose()
+
+    assert mock_client.get.await_args.kwargs["timeout"] == 5.0
+
+
 # ---------------------------------------------------------------------------
 # EdgeTTS
 # ---------------------------------------------------------------------------
@@ -624,6 +784,37 @@ def test_load_config_stt_tts_from_yaml(tmp_path: Any) -> None:
     assert cfg.stt.backend == "openai_compat"
     assert cfg.tts.enabled is True
     assert cfg.tts.backend == "openai"
+
+
+def test_load_config_voice_design_nested_sections(tmp_path: Any) -> None:
+    from cordbeat.config import load_config
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        "tts:\n"
+        "  enabled: true\n"
+        "  backend: voice_design\n"
+        "  voice_profile:\n"
+        "    description: A playful neutral voice.\n"
+        "    language_source: fixed\n"
+        "    language: ja\n"
+        "  speech_direction:\n"
+        "    timeout: 1.5\n"
+        "  streaming:\n"
+        "    chunk_max_chars: 32\n"
+        "  backend_options:\n"
+        "    num_steps: 16\n",
+        encoding="utf-8",
+    )
+
+    cfg = load_config(cfg_path)
+
+    assert cfg.tts.backend == "voice_design"
+    assert cfg.tts.voice_profile.description == "A playful neutral voice."
+    assert cfg.tts.voice_profile.language == "ja"
+    assert cfg.tts.speech_direction.timeout == 1.5
+    assert cfg.tts.streaming.chunk_max_chars == 32
+    assert cfg.tts.backend_options["num_steps"] == 16
 
 
 # ---------------------------------------------------------------------------

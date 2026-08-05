@@ -12,6 +12,7 @@ import re
 import unicodedata
 import uuid
 from collections import OrderedDict, deque
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import monotonic
 from typing import TYPE_CHECKING, Any
@@ -25,6 +26,7 @@ from cordbeat.adapters._utils import (
     split_message,
 )
 from cordbeat.ai.prompt import format_skill_params_for_display
+from cordbeat.ai.speech import SpeechStyle
 from cordbeat.config import AdapterConfig, RVCConfig, STTConfig, TTSConfig
 from cordbeat.core.gateway import RetryableConnection
 
@@ -63,6 +65,14 @@ _REQUIRED_VOICE_PERMISSIONS = (
     ("view_channel", "View Channel"),
     ("connect", "Connect"),
 )
+
+
+@dataclass
+class _VCChunkSession:
+    generation_id: str
+    queue: asyncio.Queue[bytes | None]
+    runner: asyncio.Task[None] | None = None
+    producer: asyncio.Task[None] | None = None
 _CORE_SLASH_COMMAND_NAMES = (
     "approve",
     "reject",
@@ -187,6 +197,8 @@ class DiscordAdapter(RetryableConnection):
         # Strong reference so the replay task cannot be garbage-collected
         # mid-flight; only one pending replay exists at a time.
         self._vc_pending_speech_task: asyncio.Task[bool] | None = None
+        self._vc_chunk_sessions: dict[int, _VCChunkSession] = {}
+        self._vc_chunk_playback_locks: dict[int, asyncio.Lock] = {}
         self._vc_participation_judge_lock = asyncio.Lock()
         raw_activation_mode = str(
             config.options.get("vc_activation_mode", "hybrid")
@@ -277,6 +289,10 @@ class DiscordAdapter(RetryableConnection):
         # utterance is not stalled behind a multi-gigabyte model download.
         if self._stt is not None:
             self._stt_preload_task = asyncio.ensure_future(self._stt.preload())
+        if self._tts is not None:
+            preload = getattr(self._tts, "preload", None)
+            if callable(preload):
+                await preload()
 
         intents = discord.Intents.default()
         intents.message_content = True
@@ -478,10 +494,15 @@ class DiscordAdapter(RetryableConnection):
 
     async def stop(self) -> None:
         self._running = False
+        await self._cancel_all_chunked_vc_speech()
         if self._ws:
             await self._ws.close()
         if self._bot:
             await self._bot.close()
+        if self._tts is not None:
+            close = getattr(self._tts, "aclose", None)
+            if callable(close):
+                await close()
 
     async def _dispatch_core_message(
         self,
@@ -516,9 +537,18 @@ class DiscordAdapter(RetryableConnection):
                 logger.info("Dropping stale VC reply for guild=%d", guild_id)
                 return
 
-            if guild_id in self._vc_receivers and await self._speak_in_vc(
-                guild_id, content
-            ):
+            spoken = False
+            if guild_id in self._vc_receivers:
+                style = SpeechStyle.from_metadata(metadata)
+                if style is None:
+                    spoken = await self._speak_in_vc(guild_id, content)
+                else:
+                    spoken = await self._speak_in_vc(
+                        guild_id,
+                        content,
+                        style=style,
+                    )
+            if spoken:
                 self._vc_followup_until[guild_id] = (
                     monotonic() + self._vc_followup_seconds
                 )
@@ -1580,7 +1610,13 @@ class DiscordAdapter(RetryableConnection):
                     return name.replace("\n", " ")[:80]
         return f"participant-{user_id}"
 
-    async def _speak_in_vc(self, guild_id: int, text: str) -> bool:
+    async def _speak_in_vc(
+        self,
+        guild_id: int,
+        text: str,
+        *,
+        style: SpeechStyle | None = None,
+    ) -> bool:
         """Synthesise *text* to audio and play it in the guild's voice channel."""
         if not self._tts or not self._bot:
             return False
@@ -1592,6 +1628,8 @@ class DiscordAdapter(RetryableConnection):
         vc = guild.voice_client
         if not vc or not vc.is_connected():
             return False
+        if self._tts.supports_chunked_playback is True:
+            return self._start_chunked_vc_speech(guild_id, text, style=style)
         if vc.is_playing():
             self._queue_pending_vc_speech(guild_id, text)
             return True
@@ -1636,6 +1674,170 @@ class DiscordAdapter(RetryableConnection):
         except Exception:
             logger.exception("Failed to play TTS audio in VC guild %d", guild_id)
             return False
+
+    def _start_chunked_vc_speech(
+        self,
+        guild_id: int,
+        text: str,
+        *,
+        style: SpeechStyle | None,
+    ) -> bool:
+        """Start producer/consumer pseudo-streaming for one VC response."""
+
+        if self._tts is None or not text.strip():
+            return False
+        previous = self._vc_chunk_sessions.get(guild_id)
+        if previous is not None:
+            if previous.producer is not None:
+                previous.producer.cancel()
+            while not previous.queue.empty():
+                try:
+                    previous.queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            try:
+                previous.queue.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
+
+        generation_id = uuid.uuid4().hex
+        queue_size = max(1, int(self._tts.playback_queue_size))
+        session = _VCChunkSession(
+            generation_id=generation_id,
+            queue=asyncio.Queue(maxsize=queue_size),
+        )
+        self._vc_chunk_sessions[guild_id] = session
+        session.producer = asyncio.create_task(
+            self._produce_vc_audio_chunks(guild_id, session, text, style)
+        )
+        session.runner = asyncio.create_task(
+            self._consume_vc_audio_chunks(guild_id, session)
+        )
+        logger.debug(
+            "Started chunked VC TTS guild=%d generation=%s queue_size=%d",
+            guild_id,
+            generation_id,
+            queue_size,
+        )
+        return True
+
+    async def _produce_vc_audio_chunks(
+        self,
+        guild_id: int,
+        session: _VCChunkSession,
+        text: str,
+        style: SpeechStyle | None,
+    ) -> None:
+        assert self._tts is not None
+        try:
+            async for audio in self._tts.synthesize_chunks(text, style=style):
+                current = self._vc_chunk_sessions.get(guild_id)
+                if current is not session:
+                    return
+                await session.queue.put(audio)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Chunked VC TTS generation failed guild=%d generation=%s",
+                guild_id,
+                session.generation_id,
+            )
+        finally:
+            if self._vc_chunk_sessions.get(guild_id) is session:
+                await session.queue.put(None)
+
+    async def _consume_vc_audio_chunks(
+        self,
+        guild_id: int,
+        session: _VCChunkSession,
+    ) -> None:
+        lock = self._vc_chunk_playback_locks.setdefault(guild_id, asyncio.Lock())
+        try:
+            async with lock:
+                while self._vc_chunk_sessions.get(guild_id) is session:
+                    audio = await session.queue.get()
+                    if audio is None:
+                        break
+                    if not await self._play_vc_audio_chunk(
+                        guild_id,
+                        session,
+                        audio,
+                    ):
+                        break
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if session.producer is not None and not session.producer.done():
+                session.producer.cancel()
+                await asyncio.gather(session.producer, return_exceptions=True)
+            if self._vc_chunk_sessions.get(guild_id) is session:
+                self._vc_chunk_sessions.pop(guild_id, None)
+
+    async def _play_vc_audio_chunk(
+        self,
+        guild_id: int,
+        session: _VCChunkSession,
+        audio: bytes,
+    ) -> bool:
+        if self._bot is None:
+            return False
+        guild = self._bot.get_guild(guild_id)
+        vc = guild.voice_client if guild is not None else None
+        if not vc or not vc.is_connected():
+            return False
+        while vc.is_playing():
+            if self._vc_chunk_sessions.get(guild_id) is not session:
+                return False
+            await asyncio.sleep(0.05)
+        if self._vc_chunk_sessions.get(guild_id) is not session:
+            return False
+        try:
+            import discord
+
+            source = discord.FFmpegPCMAudio(io.BytesIO(audio), pipe=True)
+            loop = asyncio.get_running_loop()
+            completed: asyncio.Future[Exception | None] = loop.create_future()
+
+            def after_playback(error: Exception | None) -> None:
+                def resolve() -> None:
+                    if not completed.done():
+                        completed.set_result(error)
+
+                loop.call_soon_threadsafe(resolve)
+
+            vc.play(source, after=after_playback)
+            error = await completed
+            if error is not None:
+                logger.warning(
+                    "VC chunk playback failed guild=%d: %s", guild_id, error
+                )
+                return False
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to play VC audio chunk guild=%d", guild_id)
+            return False
+
+    async def _cancel_chunked_vc_speech(self, guild_id: int) -> None:
+        session = self._vc_chunk_sessions.pop(guild_id, None)
+        if session is None:
+            return
+        tasks = [
+            task
+            for task in (session.producer, session.runner)
+            if task is not None
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._vc_chunk_playback_locks.pop(guild_id, None)
+
+    async def _cancel_all_chunked_vc_speech(self) -> None:
+        for guild_id in list(self._vc_chunk_sessions):
+            await self._cancel_chunked_vc_speech(guild_id)
 
     def _queue_pending_vc_speech(self, guild_id: int, text: str) -> None:
         if self._vc_pending_speech is not None:
@@ -1783,6 +1985,7 @@ class DiscordAdapter(RetryableConnection):
 
     async def _cleanup_vc_state(self, guild_id: int) -> None:
         """Stop receiving and clear shared-room state for one VC guild."""
+        await self._cancel_chunked_vc_speech(guild_id)
         receiver = self._vc_receivers.pop(guild_id, None)
         if receiver is not None:
             try:

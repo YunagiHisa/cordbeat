@@ -355,18 +355,47 @@ stt:
 
 # --- TTS: Text-to-speech ---
 # edge_tts requires `uv sync --extra tts-edge`.
-# openai / openai_compat use the built-in HTTP client; set API keys/URLs below.
+# voice_design uses a prompt-capable OpenAI-compatible speech endpoint.
 tts:
   enabled: false
-  backend: "edge_tts"         # edge_tts | openai | openai_compat
-  voice: "ja-JP-NanamiNeural" # edge_tts voice name (see edge-tts --list-voices)
-  speed: 1.0                  # playback speed multiplier
-  model: "tts-1"              # OpenAI TTS model (openai / openai_compat)
-  api_url: ""                 # openai_compat endpoint
-  api_key: ""                 # API key for openai / openai_compat
-  base_url: ""                # override official OpenAI URL for openai backend
-                              # (empty = "https://api.openai.com")
-  timeout: 60.0               # HTTP request timeout (seconds)
+  backend: "edge_tts"         # edge_tts | openai | openai_compat | voice_design
+  voice: "ja-JP-NanamiNeural" # edge_tts voice name
+  speed: 1.0
+  model: "tts-1"
+  api_url: ""                 # e.g. http://127.0.0.1:8088 for voice_design
+  api_key: ""
+  base_url: ""
+  timeout: 60.0
+  response_format: ""         # voice_design defaults to wav
+
+  # Stable identity. Gender, age, pitch, and personality are free-form.
+  voice_profile:
+    description: >
+      A calm, approachable adult voice with a warm and conversational personality.
+    language_source: "soul"   # soul | fixed | auto
+    language: ""              # used only when language_source is fixed
+
+  # A separate non-thinking LLM request creates a content-aware delivery cue.
+  speech_direction:
+    enabled: true
+    history_turns: 3
+    max_tokens: 128
+    temperature: 0.2
+    timeout: 3.0
+    max_direction_chars: 180
+    fallback: "Speak in a natural, conversational manner."
+
+  streaming:
+    enabled: true
+    chunk_min_chars: 15
+    chunk_max_chars: 45
+    max_queue_size: 20
+
+  # Generic escape hatch for provider-specific generation knobs.
+  backend_options:
+    num_steps: 16
+    retries: 1
+    voice: "none"
 
 # --- RVC: Voice conversion post-processor (requires uv sync --extra rvc) ---
 # RVC checkpoints are loaded with PyTorch's safe weights-only mode. Use only

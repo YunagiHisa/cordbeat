@@ -260,6 +260,40 @@ class STTConfig:
 
 
 @dataclass
+class VoiceProfileConfig:
+    """Stable speaker identity shared by prompt-capable TTS backends."""
+
+    description: str = "A calm, approachable adult voice with a natural tone."
+    # soul: use Soul.identity.language; fixed: use ``language``; auto: omit a
+    # language instruction and let the synthesis backend infer it from text.
+    language_source: str = "soul"
+    language: str = ""
+
+
+@dataclass
+class SpeechDirectionConfig:
+    """Content-aware delivery direction generated independently from replies."""
+
+    enabled: bool = True
+    history_turns: int = 3
+    max_tokens: int = 128
+    temperature: float = 0.2
+    timeout: float = 3.0
+    max_direction_chars: int = 180
+    fallback: str = "Speak in a natural, conversational manner."
+
+
+@dataclass
+class TTSStreamingConfig:
+    """Chunked synthesis and playback controls."""
+
+    enabled: bool = True
+    chunk_min_chars: int = 15
+    chunk_max_chars: int = 45
+    max_queue_size: int = 20
+
+
+@dataclass
 class TTSConfig:
     """Text-to-speech configuration.
 
@@ -269,6 +303,7 @@ class TTSConfig:
     * ``edge_tts``      — Microsoft Edge TTS (free, extra: ``tts-edge``)
     * ``openai``        — OpenAI TTS API
     * ``openai_compat`` — any OpenAI-compatible speech endpoint
+    * ``voice_design``  — prompt-capable OpenAI-compatible speech endpoint
     """
 
     enabled: bool = False
@@ -283,6 +318,15 @@ class TTSConfig:
     base_url: str = ""
     # HTTP request timeout for cloud TTS calls (openai / openai_compat).
     timeout: float = 60.0
+    response_format: str = ""
+    voice_profile: VoiceProfileConfig = field(default_factory=VoiceProfileConfig)
+    speech_direction: SpeechDirectionConfig = field(
+        default_factory=SpeechDirectionConfig
+    )
+    streaming: TTSStreamingConfig = field(default_factory=TTSStreamingConfig)
+    # Provider-specific knobs are deliberately kept behind a generic mapping.
+    # The voice_design backend currently understands num_steps, retries, and voice.
+    backend_options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -767,6 +811,19 @@ def load_config(path: str | Path) -> Config:
     if not isinstance(tts_raw, dict):
         tts_raw = {}
     tts = _build_dataclass(TTSConfig, tts_raw)
+    voice_profile_raw = tts_raw.get("voice_profile", {})
+    if isinstance(voice_profile_raw, dict):
+        tts.voice_profile = _build_dataclass(VoiceProfileConfig, voice_profile_raw)
+    speech_direction_raw = tts_raw.get("speech_direction", {})
+    if isinstance(speech_direction_raw, dict):
+        tts.speech_direction = _build_dataclass(
+            SpeechDirectionConfig, speech_direction_raw
+        )
+    streaming_raw = tts_raw.get("streaming", {})
+    if isinstance(streaming_raw, dict):
+        tts.streaming = _build_dataclass(TTSStreamingConfig, streaming_raw)
+    if not isinstance(tts.backend_options, dict):
+        tts.backend_options = {}
 
     rvc_raw = raw.get("rvc", {})
     if not isinstance(rvc_raw, dict):

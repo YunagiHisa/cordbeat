@@ -42,7 +42,15 @@ from cordbeat.ai.prompt import (
     format_skill_params_for_display as _format_react_params,
 )
 from cordbeat.ai.reasoning import sanitize_reasoning_artifacts
-from cordbeat.config import MemoryConfig, ReActConfig, SoulConfig
+from cordbeat.ai.speech import (
+    SPEECH_DIRECTOR_SYSTEM_PROMPT,
+    SpeechStyle,
+    build_speech_director_prompt,
+    fallback_speech_style,
+    parse_speech_direction,
+    resolve_speech_language,
+)
+from cordbeat.config import MemoryConfig, ReActConfig, SoulConfig, TTSConfig
 from cordbeat.memory.common import ensure_aware
 from cordbeat.memory.core import MemoryStore
 from cordbeat.models import (
@@ -825,6 +833,7 @@ class CoreEngine:
         soul_config: SoulConfig | None = None,
         vision_enabled: bool = False,
         video_enabled: bool = False,
+        tts_config: TTSConfig | None = None,
         timezone_name: str = "UTC",
         adapters_options: dict[str, dict[str, Any]] | None = None,
     ) -> None:
@@ -838,6 +847,7 @@ class CoreEngine:
         self._soul_config = soul_config or SoulConfig()
         self._vision_enabled = vision_enabled
         self._video_enabled = video_enabled
+        self._tts_config = tts_config or TTSConfig()
         self._timezone_name = timezone_name
         self._adapters_options = adapters_options or {}
         self._extractor = MemoryExtractor(ai, soul, memory, self._memory_config)
@@ -1036,13 +1046,21 @@ class CoreEngine:
             else:
                 # Phase 4: Send reply immediately — do NOT wait for post-processing
                 clean_response, draw_images = await self._maybe_draw(response)
+            speech_style = await self._create_speech_style(
+                user_id=user_id,
+                message=message,
+                response=clean_response,
+            )
+        reply_metadata = self._reply_metadata(message)
+        if speech_style is not None:
+            reply_metadata["speech_direction"] = speech_style.as_metadata()
         reply = GatewayMessage(
             type=MessageType.MESSAGE,
             adapter_id=message.adapter_id,
             platform_user_id=message.platform_user_id,
             content=clean_response,
             images=draw_images,
-            metadata=self._reply_metadata(message),
+            metadata=reply_metadata,
         )
         await self._gateway.send_to_adapter(message.adapter_id, reply)
 
@@ -1059,6 +1077,86 @@ class CoreEngine:
         )
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+
+    async def _create_speech_style(
+        self,
+        *,
+        user_id: str,
+        message: GatewayMessage,
+        response: str,
+    ) -> SpeechStyle | None:
+        """Create independent, content-aware TTS direction for voice replies."""
+
+        if (
+            not self._tts_config.enabled
+            or not message.is_voice
+            or message.adapter_id not in {"discord", "telegram"}
+        ):
+            return None
+        profile = self._tts_config.voice_profile
+        direction_config = self._tts_config.speech_direction
+        soul_snapshot = self._soul.get_soul_snapshot()
+        language = resolve_speech_language(
+            profile,
+            str(soul_snapshot.get("language") or ""),
+        )
+        fallback = fallback_speech_style(
+            language=language,
+            soul_snapshot=soul_snapshot,
+            assistant_response=response,
+            fallback=direction_config.fallback,
+        )
+        if not direction_config.enabled:
+            return fallback
+
+        recent: list[dict[str, Any]] = []
+        history_turns = max(0, direction_config.history_turns)
+        if history_turns and not message.metadata.get("shared_voice"):
+            try:
+                recent = await self._memory.get_recent_messages(
+                    user_id,
+                    limit=history_turns,
+                )
+            except Exception:
+                logger.debug("Speech director history lookup failed", exc_info=True)
+        prompt = build_speech_director_prompt(
+            voice_profile=profile.description,
+            soul_snapshot=soul_snapshot,
+            recent_conversation=recent[-history_turns:] if history_turns else [],
+            user_message=message.content,
+            assistant_response=response,
+        )
+        started_at = asyncio.get_running_loop().time()
+        try:
+            raw = await asyncio.wait_for(
+                self._ai.generate(
+                    prompt=prompt,
+                    system=SPEECH_DIRECTOR_SYSTEM_PROMPT,
+                    temperature=direction_config.temperature,
+                    max_tokens=direction_config.max_tokens,
+                ),
+                timeout=max(0.1, direction_config.timeout),
+            )
+            style = parse_speech_direction(
+                raw,
+                language=language,
+                config=direction_config,
+            )
+            logger.debug(
+                "Speech direction generated intent=%s pace=%s elapsed=%.3fs",
+                style.intent,
+                style.pace,
+                asyncio.get_running_loop().time() - started_at,
+            )
+            return style
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                "Speech direction generation failed; using Soul fallback",
+                exc_info=True,
+            )
+            return fallback
 
     @staticmethod
     def _reply_metadata(message: GatewayMessage) -> dict[str, Any]:

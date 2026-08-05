@@ -1590,6 +1590,22 @@ class TestTelegramAdapter:
         await adapter._send_voice_to_telegram("u1", "hello")
         adapter._app.bot.send_audio.assert_awaited_once()
 
+    async def test_send_voice_wav_uses_wav_filename(self) -> None:
+        from cordbeat.adapters.telegram import TelegramAdapter
+
+        adapter = TelegramAdapter(AdapterConfig(options={"token": "t"}))
+        adapter._app = MagicMock()
+        adapter._app.bot.send_audio = AsyncMock()
+        adapter._tts = MagicMock()
+        adapter._tts.synthesize = AsyncMock(return_value=b"RIFF")
+        adapter._tts.content_type = "audio/wav"
+        adapter._chat_map["u1"] = 888
+
+        await adapter._send_voice_to_telegram("u1", "hello")
+
+        sent = adapter._app.bot.send_audio.await_args.kwargs["audio"]
+        assert sent.name == "response.wav"
+
     async def test_send_voice_empty_audio_falls_back_to_text(self) -> None:
         from cordbeat.adapters.telegram import TelegramAdapter
 

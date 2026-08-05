@@ -297,6 +297,7 @@ async def main(
         soul_config=config.soul,
         vision_enabled=config.ai_backend.vision_enabled,
         video_enabled=config.ai_backend.video_enabled,
+        tts_config=config.tts,
         timezone_name=config.heartbeat.timezone,
         adapters_options={name: dict(a.options) for name, a in config.adapters.items()},
     )

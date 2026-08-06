@@ -42,12 +42,16 @@ class TestVoiceReceiver:
                 noise_rms_threshold=60.0,
                 noise_active_ratio=0.2,
                 speech_queue_max=3,
+                speech_start_sec=0.3,
+                speech_start_rms_threshold=75.0,
             )
             assert receiver._silence_sec == 1.2
             assert receiver._min_speech_sec == 0.4
             assert receiver._noise_rms_threshold == 60.0
             assert receiver._noise_active_ratio == 0.2
             assert receiver._speech_queue_max == 3
+            assert receiver._speech_start_sec == 0.3
+            assert receiver._speech_start_rms_threshold == 75.0
             assert not receiver._running
             assert receiver.vc is vc
 
@@ -59,6 +63,67 @@ class TestVoiceReceiver:
             cb = AsyncMock()
             receiver.on_speech_end(cb)
             assert cb in receiver._callbacks
+
+    def test_on_speech_start_registers_callback(self) -> None:
+        with patch("cordbeat.voice_recv._OpusDecoder"):
+            from cordbeat.voice_recv import VoiceReceiver
+
+            receiver = VoiceReceiver(MagicMock())
+            cb = AsyncMock()
+            receiver.on_speech_start(cb)
+            assert cb in receiver._speech_start_callbacks
+
+    async def test_sustained_pcm_fires_speech_start_once(self) -> None:
+        with patch("cordbeat.voice_recv._OpusDecoder"):
+            from cordbeat.voice_recv import CHANNELS, FRAME_SIZE, VoiceReceiver
+
+            receiver = VoiceReceiver(
+                MagicMock(),
+                speech_start_sec=0.04,
+                speech_start_rms_threshold=50.0,
+            )
+            receiver._running = True
+            receiver._loop = asyncio.get_running_loop()
+            pcm = (1000).to_bytes(2, "little", signed=True) * (
+                FRAME_SIZE * CHANNELS
+            )
+            receiver._decoder.decode.return_value = pcm
+            callback = AsyncMock()
+            receiver.on_speech_start(callback)
+            user = MagicMock(id=123, bot=False)
+            data = MagicMock(opus=b"opus")
+
+            receiver._on_voice_data(user, data)
+            callback.assert_not_awaited()
+            receiver._on_voice_data(user, data)
+            receiver._on_voice_data(user, data)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+            callback.assert_awaited_once_with(123)
+
+    async def test_quiet_pcm_does_not_fire_speech_start(self) -> None:
+        with patch("cordbeat.voice_recv._OpusDecoder"):
+            from cordbeat.voice_recv import CHANNELS, FRAME_SIZE, VoiceReceiver
+
+            receiver = VoiceReceiver(
+                MagicMock(),
+                speech_start_sec=0.02,
+                speech_start_rms_threshold=50.0,
+            )
+            receiver._running = True
+            receiver._loop = asyncio.get_running_loop()
+            pcm = (10).to_bytes(2, "little", signed=True) * (FRAME_SIZE * CHANNELS)
+            receiver._decoder.decode.return_value = pcm
+            callback = AsyncMock()
+            receiver.on_speech_start(callback)
+
+            receiver._on_voice_data(
+                MagicMock(id=123, bot=False), MagicMock(opus=b"opus")
+            )
+            await asyncio.sleep(0)
+
+            callback.assert_not_awaited()
 
     async def test_start_without_voice_recv_installed(self) -> None:
         with patch("cordbeat.voice_recv._OpusDecoder"):
@@ -400,6 +465,7 @@ class TestDiscordAdapterVC:
         assert adapter._vc_followup_seconds == 20.0
         assert adapter._vc_context_max_lines == 8
         assert adapter._vc_pending_timeout_seconds == 120.0
+        assert adapter._vc_barge_in is True
 
     def test_soul_name_is_added_as_activation_phrase(self) -> None:
         from cordbeat.adapters.discord import DiscordAdapter
@@ -907,6 +973,54 @@ class TestDiscordAdapterVC:
         adapter = self._make_adapter()
         adapter._tts = None
         assert await adapter._speak_in_vc(111, "test") is False
+
+    async def test_vc_speech_start_interrupts_current_reply(self) -> None:
+        adapter = self._make_adapter()
+        vc = MagicMock()
+        vc.is_connected.return_value = True
+        vc.is_playing.return_value = True
+        guild = MagicMock(voice_client=vc)
+        adapter._bot = MagicMock()
+        adapter._bot.get_guild.return_value = guild
+        adapter._vc_pending_speech = "queued reply"
+        adapter._vc_pending_speech_guild_id = 111
+
+        before = monotonic()
+        await adapter._on_vc_speech_start(111, 222)
+
+        vc.stop.assert_called_once_with()
+        assert adapter._vc_pending_speech is None
+        assert adapter._vc_pending_speech_guild_id is None
+        assert adapter._vc_followup_until[111] >= before
+
+    async def test_vc_speech_start_cancels_chunk_generation(self) -> None:
+        adapter = self._make_adapter()
+        vc = MagicMock()
+        vc.is_connected.return_value = True
+        vc.is_playing.return_value = False
+        guild = MagicMock(voice_client=vc)
+        adapter._bot = MagicMock()
+        adapter._bot.get_guild.return_value = guild
+        adapter._vc_chunk_sessions[111] = MagicMock()
+        adapter._cancel_chunked_vc_speech = AsyncMock()  # type: ignore[method-assign]
+
+        await adapter._on_vc_speech_start(111, 222)
+
+        adapter._cancel_chunked_vc_speech.assert_awaited_once_with(111)
+        vc.stop.assert_not_called()
+
+    async def test_vc_speech_start_does_not_interrupt_when_disabled(self) -> None:
+        adapter = self._make_adapter(options={"vc_barge_in": False})
+        vc = MagicMock()
+        vc.is_connected.return_value = True
+        vc.is_playing.return_value = True
+        guild = MagicMock(voice_client=vc)
+        adapter._bot = MagicMock()
+        adapter._bot.get_guild.return_value = guild
+
+        await adapter._on_vc_speech_start(111, 222)
+
+        vc.stop.assert_not_called()
 
     async def test_speak_in_vc_no_bot(self) -> None:
         adapter = self._make_adapter()

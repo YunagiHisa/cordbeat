@@ -18,6 +18,7 @@ import asyncio
 import ctypes
 import io
 import logging
+import math
 import time
 import wave
 from collections import defaultdict
@@ -30,6 +31,17 @@ CHANNELS = 2
 SAMPLE_WIDTH = 2  # int16
 FRAME_SIZE = 960  # 20 ms @ 48 kHz
 DEFAULT_MAX_SPEECH_SEC = 60.0
+
+
+def _pcm_rms(pcm: bytes) -> float:
+    """Return the RMS energy of little-endian int16 PCM without numpy."""
+    if len(pcm) < SAMPLE_WIDTH:
+        return 0.0
+    samples = memoryview(pcm[: len(pcm) - (len(pcm) % SAMPLE_WIDTH)]).cast("h")
+    if not samples:
+        return 0.0
+    mean_square = sum(int(sample) * int(sample) for sample in samples) / len(samples)
+    return math.sqrt(mean_square)
 
 
 def _is_non_speech_noise(
@@ -226,6 +238,8 @@ class VoiceReceiver:
         noise_active_ratio: float = 0.15,
         speech_queue_max: int = 5,
         max_speech_sec: float = DEFAULT_MAX_SPEECH_SEC,
+        speech_start_sec: float = 0.24,
+        speech_start_rms_threshold: float | None = None,
     ) -> None:
         self.vc = voice_client
         self._decoder = _OpusDecoder()
@@ -233,16 +247,28 @@ class VoiceReceiver:
         self._last_time: dict[int, float] = {}
         self._running = False
         self._callbacks: list[Any] = []
+        self._speech_start_callbacks: list[Any] = []
         self._silence_sec = silence_sec
         self._min_speech_sec = min_speech_sec
         self._noise_rms_threshold = noise_rms_threshold
         self._noise_active_ratio = noise_active_ratio
         self._speech_queue_max = speech_queue_max
+        self._speech_start_sec = max(0.02, speech_start_sec)
+        self._speech_start_rms_threshold = max(
+            0.0,
+            noise_rms_threshold
+            if speech_start_rms_threshold is None
+            else speech_start_rms_threshold,
+        )
         self._max_buffer_bytes = int(
             max_speech_sec * SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH
         )
         self._detector_task: asyncio.Task[None] | None = None
         self._speech_tasks: set[asyncio.Task[None]] = set()
+        self._speech_start_tasks: set[asyncio.Task[None]] = set()
+        self._speech_start_active_sec: dict[int, float] = {}
+        self._speech_start_notified: set[int] = set()
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._force_flush: set[int] = set()
         # Diagnostics
         self._pkt_count = 0
@@ -263,9 +289,19 @@ class VoiceReceiver:
         """
         self._callbacks.append(callback)
 
+    def on_speech_start(self, callback: Any) -> None:
+        """Register an async callback fired once per sustained utterance.
+
+        Signature: ``async def callback(user_id: int) -> None``. The short
+        sustained-audio gate keeps isolated packets and comfort noise from
+        interrupting VC playback.
+        """
+        self._speech_start_callbacks.append(callback)
+
     async def start(self) -> None:
         """Start receiving audio. The voice client must already be connected."""
         self._running = True
+        self._loop = asyncio.get_running_loop()
         self._init_dave()
 
         try:
@@ -305,9 +341,18 @@ class VoiceReceiver:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             self._speech_tasks.clear()
+        if self._speech_start_tasks:
+            tasks = list(self._speech_start_tasks)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self._speech_start_tasks.clear()
         self._buffers.clear()
         self._last_time.clear()
         self._force_flush.clear()
+        self._speech_start_active_sec.clear()
+        self._speech_start_notified.clear()
+        self._loop = None
 
     def _log_detector_failure(self, task: asyncio.Task[None]) -> None:
         if task.cancelled():
@@ -364,6 +409,8 @@ class VoiceReceiver:
         else:
             self._decode_ok += 1
 
+        self._detect_speech_start(user.id, pcm)
+
         self._buffers[user.id].extend(pcm)
         self._last_time[user.id] = time.monotonic()
         if (
@@ -379,6 +426,42 @@ class VoiceReceiver:
                 self._max_buffer_bytes / (SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH),
                 user.id,
             )
+
+    def _detect_speech_start(self, user_id: int, pcm: bytes) -> None:
+        """Notify after sustained user audio, once per utterance."""
+        if (
+            not self._speech_start_callbacks
+            or user_id in self._speech_start_notified
+        ):
+            return
+        duration = len(pcm) / (SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH)
+        if _pcm_rms(pcm) < self._speech_start_rms_threshold:
+            self._speech_start_active_sec.pop(user_id, None)
+            return
+        active = self._speech_start_active_sec.get(user_id, 0.0) + duration
+        self._speech_start_active_sec[user_id] = active
+        if active < self._speech_start_sec:
+            return
+        self._speech_start_notified.add(user_id)
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        loop.call_soon_threadsafe(self._queue_speech_start, user_id)
+
+    def _queue_speech_start(self, user_id: int) -> None:
+        task = asyncio.create_task(self._dispatch_speech_start(user_id))
+        self._speech_start_tasks.add(task)
+        task.add_done_callback(self._speech_start_tasks.discard)
+        task.add_done_callback(
+            lambda done: self._log_speech_task_failure(done, user_id)
+        )
+
+    async def _dispatch_speech_start(self, user_id: int) -> None:
+        for callback in self._speech_start_callbacks:
+            try:
+                await callback(user_id)
+            except Exception:
+                logger.exception("Speech-start callback error for user %d", user_id)
 
     # ── DAVE encryption ──────────────────────────────────────────────────────
 
@@ -469,6 +552,8 @@ class VoiceReceiver:
 
     def _finish_user_buffer(self, user_id: int) -> tuple[int, bytes] | None:
         self._force_flush.discard(user_id)
+        self._speech_start_active_sec.pop(user_id, None)
+        self._speech_start_notified.discard(user_id)
         if user_id not in self._buffers:
             self._last_time.pop(user_id, None)
             return None

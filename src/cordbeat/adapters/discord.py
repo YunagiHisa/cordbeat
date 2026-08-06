@@ -54,6 +54,8 @@ _VC_BUFFER_MAX_FRAGMENTS = 5
 _VC_CONTEXT_MAX_LINES_DEFAULT = 8
 _VC_FOLLOWUP_SECONDS_DEFAULT = 20.0
 _VC_PENDING_TIMEOUT_SECONDS_DEFAULT = 120.0
+_VC_BARGE_IN_SPEECH_SECONDS_DEFAULT = 0.24
+_VC_BARGE_IN_RMS_THRESHOLD_DEFAULT = 50.0
 _VC_DEFERRED_HEARTBEAT_MAX = 10
 _VC_WAKE_WORDS_DEFAULT = ("cordbeat",)
 _VC_ACTIVATION_MODES = frozenset({"always", "hybrid", "wake_phrase"})
@@ -190,6 +192,19 @@ class DiscordAdapter(RetryableConnection):
             config.options,
             "vc_pause_heartbeat",
             True,
+        )
+        self._vc_barge_in = _bool_option(config.options, "vc_barge_in", True)
+        self._vc_barge_in_speech_seconds = _bounded_float_option(
+            config.options,
+            "vc_barge_in_speech_seconds",
+            _VC_BARGE_IN_SPEECH_SECONDS_DEFAULT,
+            minimum=0.02,
+        )
+        self._vc_barge_in_rms_threshold = _bounded_float_option(
+            config.options,
+            "vc_barge_in_rms_threshold",
+            _VC_BARGE_IN_RMS_THRESHOLD_DEFAULT,
+            minimum=0.0,
         )
         self._vc_deferred_heartbeats: list[dict[str, Any]] = []
         self._vc_pending_speech: str | None = None
@@ -1488,6 +1503,49 @@ class DiscordAdapter(RetryableConnection):
         room_context.clear()
         await self._forward_vc_transcript(guild_id, transcript)
 
+    async def _on_vc_speech_start(self, guild_id: int, user_id: int) -> None:
+        """Stop an in-flight VC reply when a participant starts speaking."""
+        if not self._vc_barge_in or self._bot is None:
+            return
+        guild = self._bot.get_guild(guild_id)
+        vc = guild.voice_client if guild is not None else None
+        if not vc or not vc.is_connected():
+            return
+
+        chunked = guild_id in self._vc_chunk_sessions
+        playing = bool(vc.is_playing())
+        if not chunked and not playing:
+            return
+
+        # An interruption is an explicit continuation of the active voice
+        # turn, even if a long spoken reply outlived the normal follow-up window.
+        self._vc_followup_until[guild_id] = monotonic() + self._vc_followup_seconds
+
+        if self._vc_pending_speech_guild_id == guild_id:
+            self._vc_pending_speech = None
+            self._vc_pending_speech_guild_id = None
+        pending_task = self._vc_pending_speech_task
+        if pending_task is not None and not pending_task.done():
+            pending_task.cancel()
+        self._vc_pending_speech_task = None
+
+        # Stop FFmpeg and cancel the chunk producer. Doing only one would let
+        # the next already-synthesised chunk resume after the interruption.
+        if playing:
+            try:
+                vc.stop()
+            except Exception:
+                logger.debug("VC playback stop failed during barge-in", exc_info=True)
+        if chunked:
+            await self._cancel_chunked_vc_speech(guild_id)
+
+        logger.info(
+            "Interrupted VC TTS on participant speech guild=%d user=%d chunked=%s",
+            guild_id,
+            user_id,
+            chunked,
+        )
+
     async def _vc_should_join_conversation(
         self,
         speech_line: str,
@@ -1949,7 +2007,15 @@ class DiscordAdapter(RetryableConnection):
             )
             return
 
-        receiver = VoiceReceiver(vc)
+        receiver = VoiceReceiver(
+            vc,
+            speech_start_sec=self._vc_barge_in_speech_seconds,
+            speech_start_rms_threshold=self._vc_barge_in_rms_threshold,
+        )
+        if self._vc_barge_in:
+            receiver.on_speech_start(
+                lambda uid: self._on_vc_speech_start(guild_id, uid)
+            )
         receiver.on_speech_end(
             lambda uid, wav: asyncio.ensure_future(
                 self._on_vc_speech(guild_id, uid, wav)

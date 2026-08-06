@@ -258,6 +258,9 @@ adapters:
       vc_activation_mode: "hybrid" # hybrid | wake_phrase | always
       vc_activation_phrases: ["cordbeat"]  # Soul name is added automatically
       vc_pause_heartbeat: true  # suppress autonomous HEARTBEAT delivery while in VC
+      vc_barge_in: true  # stop the current VC reply when a participant speaks
+      vc_barge_in_speech_seconds: 0.24  # sustained audio required before interrupting
+      vc_barge_in_rms_threshold: 50  # ignore very quiet PCM/noise
       vc_followup_seconds: 20
       vc_context_max_lines: 8
       vc_pending_timeout_seconds: 120

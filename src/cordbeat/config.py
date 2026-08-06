@@ -199,12 +199,41 @@ class AIBackendConfig:
     options: dict[str, Any] = field(default_factory=dict)
     cache: LLMCacheConfig = field(default_factory=LLMCacheConfig)
     vision_enabled: bool = False
-    # Send video attachments to the model as-is.  Only some backends decode
-    # video (Gemini's OpenAI-compatible endpoint does; a local llama.cpp
-    # vision model generally does not), so this is off by default and is
-    # separate from vision_enabled.  Video is delivered through the same
-    # image_url content part, so it also requires a vision-capable path.
+    # Send video attachments to the model.  Off by default: it needs a
+    # backend that decodes video, and it costs a lot of context.
     video_enabled: bool = False
+    # Which content part carries the video.  Backends disagree, and each
+    # rejects the other's shape outright (measured 2026-08-05):
+    #   llama.cpp  accepts input_video, answers 500 to a video data URI
+    #   Gemini     accepts the data URI, answers 400 to input_video
+    # "auto" picks input_video for llama.cpp compatibility mode and the
+    # image_url data URI otherwise.
+    video_content_part: str = "auto"
+    # How many frames of a video to show the model.  Frames are sampled
+    # across the whole accepted duration, so this trades context cost against
+    # detail rather than against length:
+    #   conservative   6 frames @ 448px
+    #   balanced       8 frames @ 448px  (default)
+    #   detail        12 frames @ 448px
+    # Setting video_max_seconds, video_fps or video_max_edge_px explicitly
+    # overrides the preset for that value.
+    video_quality: str = "balanced"
+    # A frame costs roughly 2000 prompt tokens, so a dozen of them fills a
+    # 32k context on their own. The frame budget is video_max_seconds *
+    # video_fps; raise it only if the backend's context can afford it.
+    video_max_seconds: float = 8.0
+    video_fps: float = 1.0
+    video_max_edge_px: int = 448
+    # How different two frames must look to count as a cut worth keeping.
+    video_scene_threshold: float = 0.3
+    # Input guardrails are applied by adapters before the Core WebSocket. The
+    # raw file is never base64-forwarded: only the sampled visual clip is.
+    video_max_input_bytes: int = 20 * 1024 * 1024
+    video_max_input_seconds: float = 600.0
+    # Video audio is extracted as mono 16 kHz WAV and passed through the same
+    # STT backend as voice messages in timestamped chunks.
+    video_transcribe_audio: bool = True
+    video_audio_chunk_seconds: float = 60.0
 
 
 @dataclass
@@ -406,6 +435,52 @@ class Config:
     def soul_dir(self) -> str:
         """Backward-compatible accessor for soul directory path."""
         return self.soul.soul_dir
+
+
+# Frame count is what costs context, not resolution: a local llama.cpp
+# vision model spent ~2100 prompt tokens per frame whether the frames were
+# 224px, 336px or 448px (measured 2026-08-06). So these presets vary the
+# budget and hold the resolution, and they are sized to leave room for the
+# conversation inside a 32k context.
+_VIDEO_QUALITY_PRESETS: dict[str, dict[str, float | int]] = {
+    "conservative": {
+        "video_max_seconds": 6.0,
+        "video_fps": 1.0,
+        "video_max_edge_px": 448,
+    },
+    "balanced": {
+        "video_max_seconds": 8.0,
+        "video_fps": 1.0,
+        "video_max_edge_px": 448,
+    },
+    "detail": {
+        "video_max_seconds": 12.0,
+        "video_fps": 1.0,
+        "video_max_edge_px": 448,
+    },
+}
+
+
+def _apply_video_quality_preset(
+    ai_backend: AIBackendConfig,
+    raw_ai_backend: dict[str, Any],
+) -> None:
+    """Expand video_quality into frame budget and resolution.
+
+    Applied only to values the config did not state: a preset is a starting
+    point, not an override of something the operator wrote down.
+    """
+    name = str(ai_backend.video_quality or "balanced").strip().lower()
+    preset = _VIDEO_QUALITY_PRESETS.get(name)
+    if preset is None:
+        logging.getLogger(__name__).warning(
+            "Unknown ai_backend.video_quality=%r; using balanced",
+            ai_backend.video_quality,
+        )
+        preset = _VIDEO_QUALITY_PRESETS["balanced"]
+    for key, value in preset.items():
+        if key not in raw_ai_backend:
+            setattr(ai_backend, key, value)
 
 
 def _build_dataclass(cls: type, data: dict[str, Any]) -> Any:
@@ -633,10 +708,51 @@ def validate_config(cfg: Config) -> None:
     for name, adapter in cfg.adapters.items():
         _check_options(f"adapters.{name}", adapter.options)
 
+    video_part = cfg.ai_backend.video_content_part
+    if not isinstance(video_part, str) or video_part.strip().lower() not in {
+        "auto",
+        "image_url",
+        "input_video",
+    }:
+        errors.append(
+            "ai_backend.video_content_part must be one of: auto, image_url, input_video"
+        )
+
+    def _check_positive_number(label: str, value: Any) -> None:
+        if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+            errors.append(f"{label} must be a number greater than 0")
+
+    _check_positive_number(
+        "ai_backend.video_max_seconds", cfg.ai_backend.video_max_seconds
+    )
+    _check_positive_number("ai_backend.video_fps", cfg.ai_backend.video_fps)
+    _check_positive_number(
+        "ai_backend.video_max_input_seconds",
+        cfg.ai_backend.video_max_input_seconds,
+    )
+    _check_positive_number(
+        "ai_backend.video_audio_chunk_seconds",
+        cfg.ai_backend.video_audio_chunk_seconds,
+    )
+    if (
+        isinstance(cfg.ai_backend.video_max_edge_px, bool)
+        or not isinstance(cfg.ai_backend.video_max_edge_px, int)
+        or cfg.ai_backend.video_max_edge_px < 2
+    ):
+        errors.append("ai_backend.video_max_edge_px must be an integer >= 2")
+    if (
+        isinstance(cfg.ai_backend.video_max_input_bytes, bool)
+        or not isinstance(cfg.ai_backend.video_max_input_bytes, int)
+        or cfg.ai_backend.video_max_input_bytes < 1
+    ):
+        errors.append("ai_backend.video_max_input_bytes must be an integer >= 1")
+    if not isinstance(cfg.ai_backend.video_transcribe_audio, bool):
+        errors.append("ai_backend.video_transcribe_audio must be a boolean")
+
     if cfg.gateway.max_message_bytes < 1_048_576:
         errors.append(
             "gateway.max_message_bytes must be at least 1048576 "
-            "(1 MiB). Increase it for image attachments."
+            "(1 MiB). Increase it for media attachments."
         )
     if not cfg.gateway.auth_token and not _is_loopback_host(cfg.gateway.host):
         errors.append(
@@ -743,6 +859,7 @@ def load_config(path: str | Path) -> Config:
         AIBackendConfig,
         raw.get("ai_backend", {}),
     )
+    _apply_video_quality_preset(ai_backend, raw.get("ai_backend", {}) or {})
     ai_cache_raw = raw.get("ai_backend", {}).get("cache")
     if isinstance(ai_cache_raw, dict):
         ai_backend.cache = _build_dataclass(LLMCacheConfig, ai_cache_raw)

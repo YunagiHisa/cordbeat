@@ -556,6 +556,22 @@ class TestValidateConfig:
         assert "ai_backend.options" in str(excinfo.value)
         assert "missing space after a colon" in str(excinfo.value)
 
+    def test_rejects_invalid_video_settings(self) -> None:
+        cfg = Config()
+        cfg.ai_backend.video_content_part = "video_url"
+        cfg.ai_backend.video_max_seconds = 0
+        cfg.ai_backend.video_fps = -1
+        cfg.ai_backend.video_max_edge_px = 1
+
+        with pytest.raises(ConfigValidationError) as excinfo:
+            validate_config(cfg)
+
+        message = str(excinfo.value)
+        assert "video_content_part" in message
+        assert "video_max_seconds" in message
+        assert "video_fps" in message
+        assert "video_max_edge_px" in message
+
     def test_rejects_string_options_in_adapter(self) -> None:
         cfg = Config()
         cfg.adapters["discord"] = AdapterConfig(options="token:foo")  # type: ignore[arg-type]

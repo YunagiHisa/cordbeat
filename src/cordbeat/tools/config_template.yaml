@@ -21,7 +21,7 @@ gateway:
   host: "127.0.0.1"
   port: 8765
   handshake_timeout: 10.0  # seconds to wait for adapter handshake
-  max_message_bytes: 67108864  # 64 MiB; needed for base64 image attachments
+  max_message_bytes: 67108864  # 64 MiB; needed for base64 media attachments
 
 log:
   level: "INFO"                                            # DEBUG | INFO | WARNING | ERROR
@@ -102,6 +102,18 @@ ai_backend:
   #   api_key: "sk-..."
 
   vision_enabled: false  # Enable image input for vision-capable models
+  # Enable video attachments for a video-capable model. ffmpeg/ffprobe must be
+  # on PATH. Frames are sampled across the full accepted duration; audio is
+  # transcribed by the configured STT backend in timestamped chunks.
+  video_enabled: false
+  video_content_part: "auto"  # auto | image_url | input_video
+  # conservative (6 frames @ 448px) | balanced (8 @ 448) | detail (12 @ 448)
+  video_quality: "balanced"
+  video_scene_threshold: 0.3   # how different a frame must be to count as a cut
+  video_max_input_bytes: 20971520   # 20 MiB; rejected before Core transfer
+  video_max_input_seconds: 600.0    # 10 minutes
+  video_transcribe_audio: true
+  video_audio_chunk_seconds: 60.0
 
   cache:
     enabled: false       # Cache identical LLM requests (deterministic-ish only)

@@ -96,6 +96,18 @@ adapters:
 | `timeout` | float | `120.0` | HTTP request timeout in seconds |
 | `max_tokens` | int | `1024` | Maximum tokens for AI generation |
 | `options` | dict | `{}` | Provider-specific options (passed directly to API) |
+| `vision_enabled` | bool | `false` | Enable image attachments for vision-capable models |
+| `video_enabled` | bool | `false` | Enable video attachments. Requires a video-capable model plus `ffmpeg` and `ffprobe` on `PATH`. |
+| `video_content_part` | string | `"auto"` | Video request shape: `auto`, `image_url`, or `input_video`. `auto` uses `input_video` for llama.cpp compatibility and `image_url` otherwise. |
+| `video_quality` | str | `balanced` | Frame budget preset: `conservative` (6 frames @ 448px), `balanced` (8 @ 448), `detail` (12 @ 448). A frame costs roughly 2000 prompt tokens, so these are sized to leave room for the conversation inside a 32k context. The three values below override it individually |
+| `video_max_seconds` | float | `8.0` | Frame budget of the sampled clip (`video_max_seconds * video_fps`) |
+| `video_fps` | float | `1.0` | Playback rate of the sampled clip |
+| `video_max_edge_px` | int | `448` | Maximum width or height of the sampled frames |
+| `video_scene_threshold` | float | `0.3` | How different two frames must look to count as a cut worth keeping. Frames are chosen as: first and last, then scene changes, then even spacing |
+| `video_max_input_bytes` | int | `20971520` | Maximum source attachment size (20 MiB); larger files are rejected before download/Core transfer |
+| `video_max_input_seconds` | float | `600.0` | Maximum accepted source duration (10 minutes) |
+| `video_transcribe_audio` | bool | `true` | Extract video audio and transcribe it using the configured STT backend |
+| `video_audio_chunk_seconds` | float | `60.0` | Audio chunk duration; each transcript chunk receives an approximate timestamp range |
 
 Common options for Ollama:
 

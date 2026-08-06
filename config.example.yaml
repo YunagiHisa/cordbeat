@@ -104,12 +104,29 @@ ai_backend:
   #   api_key: "sk-..."
 
   vision_enabled: false  # Enable image input for vision-capable models
-  # Enable video input.  Video is sent as-is through the same content part
-  # as images, so it needs a backend that decodes video (Gemini's
-  # OpenAI-compatible endpoint does; a local llama.cpp vision model
-  # generally does not).  Adapters only download video attachments while
-  # this is on, so leaving it off costs nothing.
+  # Enable video attachments for a video-capable model. ffmpeg/ffprobe must be
+  # on PATH. Frames are sampled across the full accepted duration; audio is
+  # transcribed by the configured STT backend in timestamped chunks.
   video_enabled: false
+  video_content_part: "auto"  # auto | image_url | input_video
+  # How much of a video to show the model.  Frames are sampled across the
+  # whole clip -- opening and closing frames, then scene changes, then even
+  # spacing -- so this trades context cost against detail, not against length.
+  # A frame costs roughly 2000 prompt tokens, so these are sized to leave
+  # room for the conversation inside a 32k context.
+  #   conservative   6 frames @ 448px
+  #   balanced       8 frames @ 448px  (default)
+  #   detail        12 frames @ 448px
+  video_quality: "balanced"
+  # Set any of these to override the preset for that value.
+  # video_max_seconds: 8.0     # frame budget = video_max_seconds * video_fps
+  # video_fps: 1.0
+  # video_max_edge_px: 448
+  video_scene_threshold: 0.3   # how different a frame must be to count as a cut
+  video_max_input_bytes: 20971520   # 20 MiB; rejected before Core transfer
+  video_max_input_seconds: 600.0    # 10 minutes
+  video_transcribe_audio: true
+  video_audio_chunk_seconds: 60.0
 
   cache:
     enabled: false       # Cache identical LLM requests (deterministic-ish only)

@@ -10,6 +10,7 @@ import json
 import logging
 import re
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -229,20 +230,36 @@ def _downscale_image_b64(b64data: str) -> str:
         return b64data
 
 
-async def _downscale_images(images: list[str]) -> list[str]:
-    """Downscale off-loop: a 12MP decode+resize is tens of milliseconds.
+async def _downscale_images(
+    images: list[str],
+    video_limits: tuple[float, float, int] | None = None,
+) -> list[str]:
+    """Fit media to the model's budget, off-loop.
 
-    Non-image media passes through untouched: PIL cannot open a video, and
-    letting it try only costs a decode attempt and a misleading warning.
+    Images are resized (a 12MP decode+resize is tens of milliseconds) and
+    videos re-encoded shorter, slower and smaller. A video that cannot be
+    shrunk is dropped rather than sent whole, so one clip cannot crowd the
+    conversation out of the context window. Without ``video_limits`` videos
+    pass through untouched, which suits callers that already bounded them.
     """
     if not images:
         return images
-    return await asyncio.to_thread(
-        lambda: [
-            _downscale_image_b64(item) if _is_image_mime(item) else item
-            for item in images
-        ]
-    )
+
+    def prepare() -> list[str]:
+        out: list[str] = []
+        for item in images:
+            if _is_image_mime(item):
+                out.append(_downscale_image_b64(item))
+                continue
+            if video_limits is None:
+                out.append(item)
+                continue
+            shrunk = _shrink_video_b64(item, *video_limits)
+            if shrunk is not None:
+                out.append(shrunk)
+        return out
+
+    return await asyncio.to_thread(prepare)
 
 
 def _detect_media_mime(b64data: str) -> str:
@@ -273,6 +290,107 @@ def _detect_media_mime(b64data: str) -> str:
 
 def _is_image_mime(b64data: str) -> bool:
     return _detect_media_mime(b64data).startswith("image/")
+
+
+_MIME_TO_VIDEO_FORMAT = {
+    "video/mp4": "mp4",
+    "video/webm": "webm",
+    "video/quicktime": "mov",
+}
+
+
+def _media_content_part(b64data: str, video_shape: str) -> dict[str, Any]:
+    """Build the content part that carries one image or video.
+
+    Backends disagree about video and reject the shape they do not use, so
+    the caller has to say which one this server speaks.
+    """
+    mime = _detect_media_mime(b64data)
+    if mime.startswith("video/") and video_shape == "input_video":
+        return {
+            "type": "input_video",
+            "input_video": {
+                "data": b64data,
+                "format": _MIME_TO_VIDEO_FORMAT.get(mime, "mp4"),
+            },
+        }
+    return {
+        "type": "image_url",
+        "image_url": {"url": f"data:{mime};base64,{b64data}"},
+    }
+
+
+def _shrink_video_b64(
+    b64data: str,
+    max_seconds: float,
+    fps: float,
+    max_edge_px: int,
+) -> str | None:
+    """Re-encode a video down to something a context window can hold.
+
+    Returns None when the clip cannot be shrunk, which is deliberate: the
+    caller drops it. Sending the original instead would risk filling the
+    context and losing the conversation along with it.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        logger.warning("ffmpeg not found; dropping video attachment")
+        return None
+    try:
+        raw = base64.b64decode(b64data, validate=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in"
+            dst = Path(tmp) / "out.mp4"
+            src.write_bytes(raw)
+            # -an: audio is not read by the vision path and only adds bytes.
+            # Bound either orientation, preserve aspect ratio, do not upscale,
+            # and keep dimensions even for yuv420p/libx264.
+            scale = (
+                f"scale=min({max_edge_px}\\,iw):min({max_edge_px}\\,ih):"
+                "force_original_aspect_ratio=decrease:force_divisible_by=2"
+            )
+            subprocess.run(
+                [
+                    ffmpeg,
+                    "-nostdin",
+                    "-y",
+                    "-i",
+                    str(src),
+                    "-t",
+                    str(max_seconds),
+                    "-vf",
+                    f"fps={fps},{scale}",
+                    "-an",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    str(dst),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=120,
+            )
+            if not dst.exists() or dst.stat().st_size == 0:
+                logger.warning("Video shrink produced no output; dropping it")
+                return None
+            out = dst.read_bytes()
+    except Exception:
+        logger.warning("Could not shrink video; dropping it", exc_info=True)
+        return None
+    logger.info(
+        "Shrank video for the model: %d -> %d bytes (%.1fs, %.1ffps, %dpx)",
+        len(raw),
+        len(out),
+        max_seconds,
+        fps,
+        max_edge_px,
+    )
+    return base64.b64encode(out).decode("ascii")
 
 
 class AIBackend(ABC):
@@ -571,6 +689,14 @@ class OpenAICompatBackend(AIBackend):
         self._reasoning_effort = self._coerce_reasoning_effort(
             options.get("reasoning_effort")
         )
+        self._video_content_part = self._resolve_video_content_part(
+            config.video_content_part
+        )
+        self._video_limits = (
+            config.video_max_seconds,
+            config.video_fps,
+            config.video_max_edge_px,
+        )
         # Qwen3 / DeepSeek-R1 thinking models: set enable_thinking: false in
         # ai.options to skip the <think> phase for JSON-mode requests.
         # Defaults to None (not sent) to avoid breaking non-thinking models.
@@ -613,6 +739,27 @@ class OpenAICompatBackend(AIBackend):
             "openai_compat compatibility_mode=%s base_url=%s",
             self._compatibility_mode(),
             self._base_url,
+        )
+
+    def _resolve_video_content_part(self, configured: Any) -> str:
+        """Decide which content part carries a video on this server.
+
+        There is no shape both backends accept: llama.cpp answers 500 to a
+        video data URI and Gemini answers 400 to input_video, so guessing
+        wrong means every clip fails.
+        """
+        choice = str(configured or "auto").strip().lower()
+        if choice in ("image_url", "input_video"):
+            return choice
+        if choice != "auto":
+            logger.warning(
+                "Unknown ai_backend.video_content_part=%r; using auto",
+                configured,
+            )
+        return (
+            "input_video"
+            if self._compatibility_mode_value == _LLAMA_CPP_COMPAT
+            else "image_url"
         )
 
     def _resolve_compatibility_mode(self, raw_mode: Any) -> str:
@@ -1040,8 +1187,8 @@ class OpenAICompatBackend(AIBackend):
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> str:
-        """Generate using OpenAI vision API (content array with image_url blocks)."""
-        images = await _downscale_images(images)
+        """Generate using the OpenAI vision API (content array of media parts)."""
+        images = await _downscale_images(images, self._video_limits)
         max_tokens = self._effective_max_tokens(max_tokens)
         temperature = 0.7 if temperature is None else temperature
         messages: list[dict[str, Any]] = []
@@ -1056,13 +1203,7 @@ class OpenAICompatBackend(AIBackend):
 
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for b64img in images:
-            mime = _detect_media_mime(b64img)
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime};base64,{b64img}"},
-                }
-            )
+            content.append(_media_content_part(b64img, self._video_content_part))
         messages.append({"role": "user", "content": content})
         payload_thinking = (
             False if "/no_think" in effective_system.lower() else effective_thinking
@@ -1229,7 +1370,7 @@ class OpenAICompatBackend(AIBackend):
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> str:
-        images = await _downscale_images(images)
+        images = await _downscale_images(images, self._video_limits)
         enriched = [dict(message) for message in messages]
         for message in reversed(enriched):
             if message.get("role") != "user":
@@ -1240,13 +1381,7 @@ class OpenAICompatBackend(AIBackend):
             else:
                 content = [{"type": "text", "text": str(original)}]
             for b64img in images:
-                mime = _detect_media_mime(b64img)
-                content.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime};base64,{b64img}"},
-                    }
-                )
+                content.append(_media_content_part(b64img, self._video_content_part))
             message["content"] = content
             break
         return await self.generate_chat(enriched, temperature, max_tokens)

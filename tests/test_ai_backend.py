@@ -1468,7 +1468,10 @@ class TestVisionImageDownscale:
         ) as mock_downscale:
             await backend.generate_with_vision("describe", ["ORIGINALDATA"])
 
-        mock_downscale.assert_awaited_once_with(["ORIGINALDATA"])
+        mock_downscale.assert_awaited_once_with(
+            ["ORIGINALDATA"],
+            (8.0, 1.0, 448),  # the "balanced" preset defaults
+        )
         payload = jsonlib.dumps(backend._client.post.call_args.kwargs["json"])
         assert "SCALEDDATA" in payload
         assert "ORIGINALDATA" not in payload

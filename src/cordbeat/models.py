@@ -61,9 +61,9 @@ class GatewayMessage:
     metadata: dict[str, Any] = field(default_factory=dict)
     images: list[str] = field(default_factory=list)  # base64-encoded image data
     videos: list[str] = field(default_factory=list)  # base64-encoded video data
-    # Video is kept apart from images even though both reach the model through
-    # the same content part: only images are downscaled, only images get a
-    # stored media observation, and the two are gated by separate config flags.
+    # Video is kept apart from images even though both use the vision path:
+    # only videos are transcoded, only images get a stored media observation,
+    # and the two are gated by separate config flags.
     is_voice: bool = False  # True if the message originated from a voice
     # input (STT transcription).  Adapters set this when the underlying
     # source was speech (Discord VC, voice attachment, Telegram voice

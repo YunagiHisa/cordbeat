@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import logging
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,6 +12,7 @@ from cordbeat.ai.backend import (
     OllamaBackend,
     OpenAICompatBackend,
     _detect_media_mime,
+    _media_content_part,
 )
 from cordbeat.config import AIBackendConfig
 from cordbeat.core.engine import CoreEngine
@@ -80,6 +82,125 @@ class TestDownscaleSkipsVideo:
 
         downscale.assert_called_once_with(image)
         assert result == ["smaller"]
+
+    async def test_video_is_shrunk_when_limits_are_supplied(self) -> None:
+        from cordbeat.ai.backend import _downscale_images
+
+        video = _make_b64(b"\x00\x00\x00\x20ftypisom")
+        with patch(
+            "cordbeat.ai.backend._shrink_video_b64", return_value="smaller-video"
+        ) as shrink:
+            result = await _downscale_images([video], (8.0, 2.0, 256))
+
+        shrink.assert_called_once_with(video, 8.0, 2.0, 256)
+        assert result == ["smaller-video"]
+
+    async def test_failed_video_shrink_drops_only_the_video(self) -> None:
+        from cordbeat.ai.backend import _downscale_images
+
+        image = _make_b64(b"\x89PNG")
+        video = _make_b64(b"\x00\x00\x00\x20ftypisom")
+        with (
+            patch("cordbeat.ai.backend._downscale_image_b64", return_value="image"),
+            patch("cordbeat.ai.backend._shrink_video_b64", return_value=None),
+        ):
+            result = await _downscale_images([image, video], (8.0, 2.0, 256))
+
+        assert result == ["image"]
+
+
+class TestVideoContentParts:
+    def test_input_video_shape_contains_format_and_raw_data(self) -> None:
+        video = _make_b64(b"\x00\x00\x00\x20ftypisom")
+
+        assert _media_content_part(video, "input_video") == {
+            "type": "input_video",
+            "input_video": {"data": video, "format": "mp4"},
+        }
+
+    def test_image_url_shape_uses_video_data_uri(self) -> None:
+        video = _make_b64(b"\x1aE\xdf\xa3")
+
+        assert _media_content_part(video, "image_url") == {
+            "type": "image_url",
+            "image_url": {"url": f"data:video/webm;base64,{video}"},
+        }
+
+    def test_auto_selects_shape_from_compatibility_mode(self) -> None:
+        llama = OpenAICompatBackend(
+            AIBackendConfig(
+                provider="openai_compat",
+                options={"compatibility_mode": "llama_cpp"},
+            )
+        )
+        strict = OpenAICompatBackend(
+            AIBackendConfig(
+                provider="openai_compat",
+                options={"compatibility_mode": "strict_openai"},
+            )
+        )
+
+        assert llama._video_content_part == "input_video"
+        assert strict._video_content_part == "image_url"
+
+    async def test_generate_with_vision_sends_input_video_to_llama_cpp(self) -> None:
+        backend = OpenAICompatBackend(
+            AIBackendConfig(
+                provider="openai_compat",
+                model="vision",
+                options={"compatibility_mode": "llama_cpp"},
+            )
+        )
+        video = _make_b64(b"\x00\x00\x00\x20ftypisom")
+        response = MagicMock()
+        response.json.return_value = {"choices": [{"message": {"content": "seen"}}]}
+        with (
+            patch(
+                "cordbeat.ai.backend._downscale_images",
+                new=AsyncMock(return_value=[video]),
+            ),
+            patch.object(
+                backend._client,
+                "post",
+                new_callable=AsyncMock,
+                return_value=response,
+            ) as post,
+        ):
+            result = await backend.generate_with_vision("describe", [video])
+
+        assert result == "seen"
+        user = post.await_args.kwargs["json"]["messages"][-1]
+        assert user["content"][1]["type"] == "input_video"
+        assert user["content"][1]["input_video"]["format"] == "mp4"
+
+
+class TestVideoShrink:
+    def test_missing_ffmpeg_drops_video(self) -> None:
+        from cordbeat.ai.backend import _shrink_video_b64
+
+        with patch("shutil.which", return_value=None):
+            assert _shrink_video_b64("dm video", 10.0, 1.0, 336) is None
+
+    def test_ffmpeg_bounds_both_dimensions_and_returns_output(self) -> None:
+        from cordbeat.ai.backend import _shrink_video_b64
+
+        original = base64.b64encode(b"source video").decode("ascii")
+
+        def write_output(args: list[str], **_: Any) -> None:
+            Path(args[-1]).write_bytes(b"small mp4")
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/ffmpeg"),
+            patch("subprocess.run", side_effect=write_output) as run,
+        ):
+            result = _shrink_video_b64(original, 10.0, 1.0, 336)
+
+        assert base64.b64decode(result or "") == b"small mp4"
+        command = run.call_args.args[0]
+        video_filter = command[command.index("-vf") + 1]
+        assert "min(336\\,iw):min(336\\,ih)" in video_filter
+        assert "force_original_aspect_ratio=decrease" in video_filter
+        assert "force_divisible_by=2" in video_filter
 
 
 # ── GatewayMessage.images field ───────────────────────────────────────

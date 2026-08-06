@@ -27,8 +27,20 @@ from cordbeat.adapters._utils import (
 )
 from cordbeat.ai.prompt import format_skill_params_for_display
 from cordbeat.ai.speech import SpeechStyle
-from cordbeat.config import AdapterConfig, RVCConfig, STTConfig, TTSConfig
+from cordbeat.config import (
+    AdapterConfig,
+    AIBackendConfig,
+    RVCConfig,
+    STTConfig,
+    TTSConfig,
+)
 from cordbeat.core.gateway import RetryableConnection
+from cordbeat.media import (
+    VideoPreprocessError,
+    VideoTooLongError,
+    prepare_video,
+    split_wav_audio,
+)
 
 if TYPE_CHECKING:
     from cordbeat.ai.stt import STTBackend
@@ -45,10 +57,7 @@ _PENDING_SKILL_CONFIRM_MAX = 1_000
 _MAX_IMAGES_PER_MESSAGE = 4
 _IMAGE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024
 _AUDIO_SIZE_LIMIT_BYTES = 25 * 1024 * 1024
-# One video per message, and a limit well under the gateway's frame cap:
-# base64 inflates by 4/3, so 20 MiB of video is ~27 MiB on the wire.
 _MAX_VIDEOS_PER_MESSAGE = 1
-_VIDEO_SIZE_LIMIT_BYTES = 20 * 1024 * 1024
 _DISCORD_MESSAGE_LIMIT = 2000
 _VC_BUFFER_MAX_FRAGMENTS = 5
 _VC_CONTEXT_MAX_LINES_DEFAULT = 8
@@ -160,6 +169,7 @@ class DiscordAdapter(RetryableConnection):
         stt_config: STTConfig | None = None,
         tts_config: TTSConfig | None = None,
         rvc_config: RVCConfig | None = None,
+        ai_backend_config: AIBackendConfig | None = None,
         soul_name: str = "",
     ) -> None:
         self._config = config
@@ -174,6 +184,7 @@ class DiscordAdapter(RetryableConnection):
         self._pending_skill_confirms: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._skill_confirm_view_registered = False
         self._filter = AdapterFilter.from_options(config.options)
+        self._video_config = ai_backend_config or AIBackendConfig()
 
         # Typing indicator tasks: channel_id → asyncio.Task
         self._typing_tasks: dict[int, asyncio.Task[None]] = {}
@@ -888,6 +899,164 @@ class DiscordAdapter(RetryableConnection):
 
         return SkillConfirmView()
 
+    @staticmethod
+    def _format_media_timestamp(seconds: float) -> str:
+        total = max(0, round(seconds))
+        hours, remainder = divmod(total, 3600)
+        minutes, secs = divmod(remainder, 60)
+        if hours:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        return f"{minutes:02d}:{secs:02d}"
+
+    async def _notify_video_issue(self, message: Any, detail: str) -> None:
+        """Tell the sender why a video was only partially handled or rejected."""
+
+        send = getattr(getattr(message, "channel", None), "send", None)
+        if not callable(send):
+            return
+        try:
+            result = send(f"⚠️ {detail}")
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.warning("Could not send Discord video processing notice")
+
+    async def _transcribe_video_audio(self, audio_wav: bytes) -> str:
+        if self._stt is None:
+            return ""
+        chunks = split_wav_audio(
+            audio_wav,
+            self._video_config.video_audio_chunk_seconds,
+        )
+        lines: list[str] = []
+        for chunk in chunks:
+            text = await self._stt.transcribe(chunk.wav_bytes)
+            if not text or not text.strip():
+                continue
+            start = self._format_media_timestamp(chunk.start_seconds)
+            end = self._format_media_timestamp(chunk.end_seconds)
+            lines.append(f"[{start}-{end}] {text.strip()}")
+        return "\n".join(lines)
+
+    async def _prepare_video_attachment(
+        self,
+        message: Any,
+        attachment: Any,
+    ) -> tuple[str, str] | None:
+        """Download one bounded video and return visual data plus STT text."""
+
+        limit_bytes = self._video_config.video_max_input_bytes
+        size = getattr(attachment, "size", 0) or 0
+        if isinstance(size, int | float) and size > limit_bytes:
+            logger.warning(
+                "Skipping oversized Discord video attachment: %d bytes", size
+            )
+            await self._notify_video_issue(
+                message,
+                "Video not processed: the file exceeds "
+                f"{limit_bytes / (1024 * 1024):g} MiB.",
+            )
+            return None
+
+        duration_hint = getattr(attachment, "duration_secs", None)
+        if (
+            isinstance(duration_hint, int | float)
+            and not isinstance(duration_hint, bool)
+            and duration_hint > self._video_config.video_max_input_seconds
+        ):
+            logger.warning(
+                "Skipping overlong Discord video attachment: %.1f seconds",
+                duration_hint,
+            )
+            await self._notify_video_issue(
+                message,
+                "Video not processed: its duration exceeds "
+                f"{self._video_config.video_max_input_seconds:g} seconds.",
+            )
+            return None
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(str(attachment.url))
+                response.raise_for_status()
+                raw = response.content
+            if len(raw) > limit_bytes:
+                raise ValueError("downloaded video exceeds configured byte limit")
+            prepared = await prepare_video(
+                raw,
+                max_input_seconds=self._video_config.video_max_input_seconds,
+                max_output_seconds=self._video_config.video_max_seconds,
+                output_fps=self._video_config.video_fps,
+                max_edge_px=self._video_config.video_max_edge_px,
+                scene_threshold=self._video_config.video_scene_threshold,
+            )
+        except VideoTooLongError as exc:
+            logger.warning("Skipping overlong Discord video attachment: %s", exc)
+            await self._notify_video_issue(
+                message,
+                "Video not processed: its duration exceeds "
+                f"{exc.limit:g} seconds.",
+            )
+            return None
+        except (VideoPreprocessError, ValueError):
+            logger.warning(
+                "Failed to preprocess Discord video attachment: %s",
+                getattr(attachment, "url", ""),
+                exc_info=True,
+            )
+            await self._notify_video_issue(
+                message,
+                "Video not processed because its media conversion failed.",
+            )
+            return None
+        except Exception:
+            logger.warning(
+                "Failed to download Discord video attachment: %s",
+                getattr(attachment, "url", ""),
+                exc_info=True,
+            )
+            await self._notify_video_issue(
+                message,
+                "Video not processed because it could not be downloaded.",
+            )
+            return None
+
+        transcript = ""
+        if prepared.audio_wav is not None:
+            if not self._video_config.video_transcribe_audio:
+                await self._notify_video_issue(
+                    message,
+                    "The video's visuals will be analyzed, but audio "
+                    "transcription is disabled.",
+                )
+            elif self._stt is None:
+                await self._notify_video_issue(
+                    message,
+                    "The video's visuals will be analyzed, but its audio "
+                    "cannot be transcribed because STT is disabled.",
+                )
+            else:
+                try:
+                    transcript = await self._transcribe_video_audio(prepared.audio_wav)
+                except Exception:
+                    logger.warning("Video audio transcription failed", exc_info=True)
+                if not transcript:
+                    await self._notify_video_issue(
+                        message,
+                        "The video's visuals will be analyzed, but no intelligible "
+                        "audio transcript could be produced.",
+                    )
+
+        logger.debug(
+            "Prepared Discord video attachment: %s (%d sampled frames, %.1fs, "
+            "transcript=%d chars)",
+            getattr(attachment, "filename", attachment.url),
+            prepared.sampled_frames,
+            prepared.source_duration_seconds,
+            len(transcript),
+        )
+        return base64.b64encode(prepared.video_bytes).decode("ascii"), transcript
+
     async def _forward_to_core(self, message: Any) -> None:
         user_id = str(message.author.id)
         channel_id: int = message.channel.id
@@ -972,16 +1141,33 @@ class DiscordAdapter(RetryableConnection):
         images: list[str] = []
         await _fetch_attachment_images(message, images)
 
-        # Videos are large, so only collect them when Core said it will
-        # actually send them to the model.
+        video_attachments = [
+            attachment
+            for attachment in getattr(message, "attachments", [])
+            if str(getattr(attachment, "content_type", "") or "").startswith(
+                "video/"
+            )
+        ]
         videos: list[str] = []
+        video_transcripts: list[str] = []
         if self.core_supports("video_input"):
-            await _fetch_attachments(
+            for attachment in video_attachments[:_MAX_VIDEOS_PER_MESSAGE]:
+                prepared = await self._prepare_video_attachment(message, attachment)
+                if prepared is None:
+                    continue
+                video, transcript = prepared
+                videos.append(video)
+                if transcript:
+                    video_transcripts.append(transcript)
+            if len(video_attachments) > _MAX_VIDEOS_PER_MESSAGE:
+                await self._notify_video_issue(
+                    message,
+                    f"Only {_MAX_VIDEOS_PER_MESSAGE} video per message is processed.",
+                )
+        elif video_attachments:
+            await self._notify_video_issue(
                 message,
-                videos,
-                mime_prefix="video/",
-                max_items=_MAX_VIDEOS_PER_MESSAGE,
-                size_limit=_VIDEO_SIZE_LIMIT_BYTES,
+                "Video input is disabled for the configured AI backend.",
             )
 
         ref = getattr(message, "reference", None)
@@ -1108,6 +1294,11 @@ class DiscordAdapter(RetryableConnection):
                     "channel_is_public": channel_is_public,
                     "mutual_guild_ids": mutual_guild_ids,
                     "display_name": message.author.display_name,
+                    **(
+                        {"video_transcripts": video_transcripts}
+                        if video_transcripts
+                        else {}
+                    ),
                     **({"reply_context": reply_context} if reply_context else {}),
                 },
             }

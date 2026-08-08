@@ -478,6 +478,37 @@ class TestChannelWideHistory:
         leaked = await memory.get_recent_messages("u1", channel_wide=True)
         assert [m["content"] for m in leaked] == ["alice asks"]
 
+    async def test_channel_wide_ignored_without_an_explicit_non_dm(
+        self, memory: MemoryStore
+    ) -> None:
+        """Widening is refused unless the caller states the room is not a DM.
+        A caller that forgets would otherwise hand one user another's DM."""
+        await self._populate(memory)
+        await memory.add_message(
+            "u2", "user", "bob's private dm", "discord", channel_id="c1", is_dm=True
+        )
+
+        leaked = await memory.get_recent_messages(
+            "u1", channel_id="c1", channel_wide=True
+        )
+
+        assert [m["content"] for m in leaked] == ["alice asks"]
+
+    async def test_channel_wide_refused_for_a_dm(self, memory: MemoryStore) -> None:
+        await self._populate(memory)
+        await memory.add_message(
+            "u2", "user", "bob's private dm", "discord", channel_id="d1", is_dm=True
+        )
+        await memory.add_message(
+            "u1", "user", "alice's private dm", "discord", channel_id="d1", is_dm=True
+        )
+
+        leaked = await memory.get_recent_messages(
+            "u1", channel_id="d1", is_dm=True, channel_wide=True
+        )
+
+        assert [m["content"] for m in leaked] == ["alice's private dm"]
+
     async def test_dm_history_stays_per_user(self, memory: MemoryStore) -> None:
         """Group-DM style rooms must not expose one user's turns to another."""
         await memory.get_or_create_user("u1", "Alice")

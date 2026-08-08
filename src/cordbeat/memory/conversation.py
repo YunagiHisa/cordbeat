@@ -20,15 +20,22 @@ def _scope_conditions(
     """Build the WHERE fragments that scope a history query.
 
     ``channel_wide`` drops the ``user_id`` filter so the result covers every
-    participant of the channel rather than one user's slice of it.  It is
-    honoured only when a concrete ``channel_id`` is given: without one there
-    is no room to widen to, and dropping ``user_id`` would return the whole
-    database instead.
+    participant of the channel rather than one user's slice of it.  Two
+    conditions must hold, and both are enforced here rather than trusted to
+    the caller, because getting either wrong returns other people's private
+    messages:
+
+    * a concrete ``channel_id`` -- without one there is no room to widen to,
+      and dropping ``user_id`` would return the whole database instead;
+    * ``is_dm`` explicitly false -- a shared channel is the only place where
+      everyone can already read everything. Widening a DM, or widening
+      without saying which it is, would hand one user another's DM.
     """
     conditions: list[str] = []
     params: list[object] = []
     scoped_to_channel = channel_id is not None and channel_id != ""
-    if not (channel_wide and scoped_to_channel):
+    widen = channel_wide and scoped_to_channel and is_dm is False
+    if not widen:
         conditions.append(f"{prefix}user_id = ?")
         params.append(user_id)
     if scoped_to_channel:

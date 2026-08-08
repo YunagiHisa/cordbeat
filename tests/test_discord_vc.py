@@ -618,7 +618,7 @@ class TestDiscordAdapterVC:
         adapter._ws.send.assert_not_called()
 
     async def test_on_vc_speech_ignores_chat_without_wake_word(self) -> None:
-        adapter = self._make_adapter(options={"vc_wake_words": ["athena"]})
+        adapter = self._make_adapter(options={"vc_wake_words": ["nova"]})
         adapter._ws = AsyncMock()
         adapter._stt = AsyncMock()
         adapter._stt.transcribe = AsyncMock(return_value="The weather is nice today")
@@ -633,13 +633,13 @@ class TestDiscordAdapterVC:
         ]
 
     async def test_on_vc_speech_wake_word_includes_recent_room_context(self) -> None:
-        adapter = self._make_adapter(options={"vc_wake_words": ["athena"]})
+        adapter = self._make_adapter(options={"vc_wake_words": ["nova"]})
         adapter._ws = AsyncMock()
         adapter._stt = AsyncMock()
         adapter._vc_receivers[111] = MagicMock()
         adapter._vc_session_ids[111] = "session"
         adapter._stt.transcribe = AsyncMock(
-            side_effect=["Where should we travel?", "Athena, what do you think?"]
+            side_effect=["Where should we travel?", "Nova, what do you think?"]
         )
 
         await adapter._on_vc_speech(111, 222, b"wav1")
@@ -647,7 +647,7 @@ class TestDiscordAdapterVC:
 
         payload = json.loads(adapter._ws.send.call_args[0][0])
         assert "participant-222: Where should we travel?" in payload["content"]
-        assert "participant-333: Athena, what do you think?" in payload["content"]
+        assert "participant-333: Nova, what do you think?" in payload["content"]
 
     async def test_on_vc_speech_normalizes_kana_wake_word(self) -> None:
         adapter = self._make_adapter(options={"vc_wake_words": ["\u30a2\u30c6\u30ca"]})
@@ -862,11 +862,11 @@ class TestDiscordAdapterVC:
 
     async def test_vc_pending_timeout_accepts_new_wake_request(self) -> None:
         adapter = self._make_adapter(
-            options={"vc_wake_words": ["athena"], "vc_pending_timeout_seconds": 1}
+            options={"vc_wake_words": ["nova"], "vc_pending_timeout_seconds": 1}
         )
         adapter._ws = AsyncMock()
         adapter._stt = AsyncMock()
-        adapter._stt.transcribe = AsyncMock(return_value="Athena, can you hear me?")
+        adapter._stt.transcribe = AsyncMock(return_value="Nova, can you hear me?")
         adapter._vc_receivers[111] = MagicMock()
         adapter._vc_session_ids[111] = "session"
         adapter._vc_pending_guilds.add(111)
@@ -880,12 +880,12 @@ class TestDiscordAdapterVC:
         assert 111 in adapter._vc_pending_guilds
 
     async def test_vc_reply_keeps_buffered_chat_as_room_context(self) -> None:
-        adapter = self._make_adapter(options={"vc_wake_words": ["athena"]})
+        adapter = self._make_adapter(options={"vc_wake_words": ["nova"]})
         adapter._ws = AsyncMock()
         adapter._vc_receivers[999] = MagicMock()
         adapter._vc_session_ids[999] = "session"
         adapter._vc_pending_guilds.add(999)
-        adapter._vc_buffered_speech[999] = ["Athena: first", "Bob: second"]
+        adapter._vc_buffered_speech[999] = ["Nova: first", "Bob: second"]
         adapter._speak_in_vc = AsyncMock(return_value=True)  # type: ignore[method-assign]
 
         await adapter._dispatch_core_message(
@@ -900,20 +900,20 @@ class TestDiscordAdapterVC:
         )
 
         adapter._ws.send.assert_not_called()
-        assert list(adapter._vc_room_context[999]) == ["Athena: first", "Bob: second"]
+        assert list(adapter._vc_room_context[999]) == ["Nova: first", "Bob: second"]
         assert 999 not in adapter._vc_pending_guilds
 
     async def test_vc_reply_flushes_buffered_wake_request(self) -> None:
         import json
 
-        adapter = self._make_adapter(options={"vc_wake_words": ["athena"]})
+        adapter = self._make_adapter(options={"vc_wake_words": ["nova"]})
         adapter._ws = AsyncMock()
         adapter._vc_receivers[999] = MagicMock()
         adapter._vc_session_ids[999] = "session"
         adapter._vc_pending_guilds.add(999)
         adapter._vc_buffered_speech[999] = [
             "Alice: first",
-            "Bob: Athena, one more question",
+            "Bob: Nova, one more question",
         ]
         adapter._speak_in_vc = AsyncMock(return_value=True)  # type: ignore[method-assign]
 
@@ -929,13 +929,13 @@ class TestDiscordAdapterVC:
         )
 
         payload = json.loads(adapter._ws.send.call_args[0][0])
-        assert payload["content"] == "Alice: first\nBob: Athena, one more question"
+        assert payload["content"] == "Alice: first\nBob: Nova, one more question"
         assert payload["is_voice"] is True
         assert payload["platform_user_id"] == "vc:999"
         assert 999 in adapter._vc_pending_guilds
 
     async def test_vc_followup_does_not_require_wake_word(self) -> None:
-        adapter = self._make_adapter(options={"vc_wake_words": ["athena"]})
+        adapter = self._make_adapter(options={"vc_wake_words": ["nova"]})
         adapter._ws = AsyncMock()
         adapter._stt = AsyncMock()
         adapter._stt.transcribe = AsyncMock(return_value="Please do that")
@@ -955,7 +955,7 @@ class TestDiscordAdapterVC:
         adapter._ws.send.side_effect = RuntimeError("closed")
         adapter._vc_session_ids[111] = "session"
 
-        await adapter._forward_vc_transcript(111, "Athena, can you hear me?")
+        await adapter._forward_vc_transcript(111, "Nova, can you hear me?")
 
         assert 111 not in adapter._vc_pending_guilds
         assert 111 not in adapter._vc_pending_since
@@ -1207,13 +1207,13 @@ class TestDiscordAdapterVC:
         assert "cannot safely deliver VC replies" in message
 
     def test_voice_join_message_explains_wake_words(self) -> None:
-        adapter = self._make_adapter(options={"vc_wake_words": ["athena"]})
+        adapter = self._make_adapter(options={"vc_wake_words": ["nova"]})
         adapter._stt = MagicMock()
         adapter._tts = MagicMock()
 
         message = adapter._voice_join_message("Voice")
 
-        assert "athena" in message
+        assert "nova" in message
         assert "Recent room context is temporary" in message
 
 

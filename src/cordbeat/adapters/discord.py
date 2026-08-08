@@ -287,8 +287,17 @@ class DiscordAdapter(RetryableConnection):
         self._stt_preload_task: asyncio.Future[None] | None = None
 
         if stt_config is not None and stt_config.enabled:
+            import dataclasses
+
             from cordbeat.ai.stt import create_stt_backend
 
+            # The assistant's own name is the one word transcription must not
+            # lose: a mangled wake phrase cannot be recovered afterwards.
+            if soul_name.strip() and soul_name.strip() not in stt_config.hotwords:
+                stt_config = dataclasses.replace(
+                    stt_config,
+                    hotwords=[*stt_config.hotwords, soul_name.strip()],
+                )
             self._stt = create_stt_backend(stt_config)
 
         if tts_config is not None and tts_config.enabled:
@@ -1751,10 +1760,15 @@ class DiscordAdapter(RetryableConnection):
             context = "\n".join(list(room_context)[-5:-1])
             phrases = ", ".join(self._vc_wake_words)
             prompt = (
-                "Decide whether the latest line clearly invites the voice AI to join. "
-                "Say yes only for a direct question/request to the AI or an explicit "
-                "invitation for its opinion. Say no for human-to-human chatter, even "
-                "when it contains a question.\n"
+                "Decide whether the latest line invites the voice AI to join. "
+                "Say yes for a direct question/request to the AI, an explicit "
+                "invitation for its opinion, or the AI being called by name. "
+                "Say no for human-to-human chatter, even when it contains a "
+                "question.\n"
+                # Telling the judge to sound out a mangled name does not
+                # work: measured against a local judge, it still read a
+                # misrecognised name as the ordinary words it had been
+                # spelled as. Bias the recogniser instead (stt.hotwords).
                 f"AI names: {phrases}\n"
                 f"Recent room transcript:\n{context}\n"
                 f"Latest line: {speech_line}\n"

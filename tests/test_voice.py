@@ -88,6 +88,39 @@ def test_whisper_local_model_kwargs_include_compute_type_and_index() -> None:
     assert captured["compute_type"] == "int8_float16"
 
 
+def test_whisper_local_biases_recognition_towards_hotwords() -> None:
+    """A misheard wake word cannot be recovered downstream: neither string
+    matching nor the LLM judge can turn it back into the assistant's name."""
+    backend = WhisperLocalSTT(
+        STTConfig(backend="whisper_local", hotwords=["Wakeword", "Nickname"])
+    )
+
+    assert backend._hotwords == "Wakeword Nickname"
+
+
+def test_whisper_local_passes_configured_initial_prompt() -> None:
+    backend = WhisperLocalSTT(
+        STTConfig(
+            backend="whisper_local",
+            hotwords=["Wakeword"],
+            initial_prompt="Casual chat during a game stream.",
+        )
+    )
+
+    assert backend._initial_prompt == "Casual chat during a game stream."
+
+
+def test_whisper_local_sends_no_bias_when_unconfigured() -> None:
+    """Whisper continues whatever initial_prompt it is given, so inventing
+    one here would steer transcription -- and in a fixed language, which
+    CordBeat does not assume."""
+    backend = WhisperLocalSTT(
+        STTConfig(backend="whisper_local", hotwords=["Wakeword"])
+    )
+
+    assert backend._initial_prompt == ""
+
+
 def test_whisper_local_uses_configured_batch_size() -> None:
     backend = WhisperLocalSTT(
         STTConfig(backend="whisper_local", batch_size=1)
@@ -575,7 +608,7 @@ async def test_voice_design_tts_chunks_and_uses_prompt_extension() -> None:
         tts = VoiceDesignTTS(config)
         chunks = [
             chunk
-            async for chunk in tts.synthesize_chunks("こんにちは。次です。")
+            async for chunk in tts.synthesize_chunks("Hello! Next!")
         ]
         await tts.aclose()
 
@@ -606,7 +639,7 @@ async def test_voice_design_tts_merges_wav_for_non_streaming_consumers() -> None
 
     with patch("cordbeat.ai.tts.httpx.AsyncClient", return_value=mock_client):
         tts = VoiceDesignTTS(config)
-        audio = await tts.synthesize("一つです。二つです。")
+        audio = await tts.synthesize("One! Two!")
         await tts.aclose()
 
     with wave.open(io.BytesIO(audio), "rb") as reader:

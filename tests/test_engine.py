@@ -861,7 +861,7 @@ class TestCoreEngine:
             type=MessageType.MESSAGE,
             adapter_id="discord",
             platform_user_id="vc:123",
-            content="Alice: Athena, what do you think?",
+            content="Alice: Nova, what do you think?",
             is_voice=True,
             metadata={
                 "guild_id": "123",
@@ -3124,13 +3124,13 @@ class TestSoulCommands:
             type=MessageType.MESSAGE,
             adapter_id="test",
             platform_user_id="user1",
-            content="/name Athena",
+            content="/name Nova",
         )
         await engine.handle_message(msg)
 
-        assert soul.name == "Athena"
+        assert soul.name == "Nova"
         reply = mock_gateway.send_to_adapter.call_args[0][1]
-        assert "athena" in reply.content.lower()
+        assert "nova" in reply.content.lower()
 
     async def test_name_command_truncates_long_name(
         self,
@@ -3191,11 +3191,11 @@ class TestSoulCommands:
             type=MessageType.MESSAGE,
             adapter_id="test",
             platform_user_id="user1",
-            content="/name Athena",
+            content="/name Nova",
         )
         await engine.handle_message(msg)
 
-        assert soul.name != "Athena"
+        assert soul.name != "Nova"
         reply = mock_gateway.send_to_adapter.call_args[0][1]
         assert "administrators" in reply.content.lower()
 

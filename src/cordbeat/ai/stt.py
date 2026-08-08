@@ -99,6 +99,15 @@ class WhisperLocalSTT(STTBackend):
         # the config forgiving while ensuring the runtime always has a valid
         # batch size.
         self._batch_size = max(1, int(config.batch_size))
+        self._hotwords = " ".join(
+            word.strip() for word in (config.hotwords or []) if str(word).strip()
+        )
+        # Sent only when configured. Whisper treats initial_prompt as text to
+        # continue, so any wording it is given steers the transcription -- and
+        # a sentence generated here would have to be written in some fixed
+        # language, which CordBeat does not assume. hotwords does the biasing
+        # on its own; initial_prompt is left to the operator.
+        self._initial_prompt = config.initial_prompt.strip()
         self._model: Any = None  # faster_whisper.WhisperModel, loaded lazily
         self._transcribe_lock = asyncio.Lock()
         self._load_lock = asyncio.Lock()
@@ -229,6 +238,10 @@ class WhisperLocalSTT(STTBackend):
                 tmp_path = f.name
             try:
                 transcribe_kwargs: dict[str, Any] = {"language": lang}
+                if self._hotwords:
+                    transcribe_kwargs["hotwords"] = self._hotwords
+                if self._initial_prompt:
+                    transcribe_kwargs["initial_prompt"] = self._initial_prompt
                 if self._batch_size > 1:
                     # batch_size is accepted by BatchedInferencePipeline,
                     # which is returned from _load_model_sync above.

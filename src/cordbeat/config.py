@@ -286,6 +286,17 @@ class STTConfig:
     # batched inference pipeline. 1 keeps voice transcription serial and uses
     # the regular WhisperModel path, which is the lowest-memory option.
     batch_size: int = 1
+    # Words the recogniser should expect, most importantly the assistant's
+    # own name. Without them a called name is transcribed as whatever
+    # ordinary words happen to sound like it, and the wake phrase is then
+    # unrecoverable: neither string matching nor the LLM judge can sound it
+    # out again. The Soul name is added automatically; list nicknames and
+    # recurring jargon here. whisper_local only.
+    hotwords: list[str] = field(default_factory=list)
+    # Optional context sentence passed to faster-whisper as initial_prompt.
+    # Whisper continues whatever text it is given, so this steers style and
+    # spelling as well as vocabulary. Empty sends none.
+    initial_prompt: str = ""
 
 
 @dataclass

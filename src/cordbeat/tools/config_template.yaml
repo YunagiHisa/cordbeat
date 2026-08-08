@@ -368,6 +368,12 @@ stt:
 # --- TTS: Text-to-speech ---
 # edge_tts requires `uv sync --extra tts-edge`.
 # voice_design uses a prompt-capable OpenAI-compatible speech endpoint.
+  # Words the recogniser should expect. The Soul name is added
+  # automatically; a misheard wake word cannot be recovered later,
+  # so list nicknames and recurring jargon here. whisper_local only.
+  # hotwords: ["nickname", "project name"]
+  # initial_prompt: ""   # optional context sentence; empty sends none
+
 tts:
   enabled: false
   backend: "edge_tts"         # edge_tts | openai | openai_compat | voice_design

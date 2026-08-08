@@ -376,8 +376,8 @@ class TestPermissionMatrix:
 
     def test_user_can_update_name(self, tmp_path: Path) -> None:
         soul = Soul(tmp_path / "soul")
-        soul.update_name("Athena", caller=SoulCaller.USER)
-        assert soul.name == "Athena"
+        soul.update_name("Nova", caller=SoulCaller.USER)
+        assert soul.name == "Nova"
 
     def test_ai_cannot_update_name(self, tmp_path: Path) -> None:
         soul = Soul(tmp_path / "soul")

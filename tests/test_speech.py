@@ -33,16 +33,15 @@ def test_normalize_for_speech_removes_chat_markup() -> None:
 
 
 def test_chunk_speech_text_uses_sentence_boundaries_and_maximum() -> None:
-    text = (
-        "これは最初の文章です。"
-        "次の文章には、もう少し詳しい説明があります。最後です。"
-    )
+    text = "First one here! Second is longer? Last!"
 
     chunks = chunk_speech_text(text, min_chars=8, max_chars=22)
 
-    assert "".join(chunks) == text
+    # Sentences are stripped before being regrouped, so the spaces that
+    # separated them do not survive the round trip.
+    assert "".join(chunks) == text.replace("! ", "!").replace("? ", "?")
     assert all(len(chunk) <= 22 for chunk in chunks)
-    assert chunks[0].endswith("。")
+    assert chunks[0].endswith("!")
 
 
 def test_chunk_speech_text_preserves_decimal_and_shortens_url() -> None:

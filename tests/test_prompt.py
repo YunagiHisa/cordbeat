@@ -496,54 +496,54 @@ class TestBuildContext:
         greeting it had posted to another member, because the history gave it
         no way to see or attribute that message."""
         result = build_context(
-            user_display_name="Bernolight",
-            soul_name="Athena",
+            user_display_name="Alice",
+            soul_name="Nova",
             conversation_is_dm=False,
-            conversation_channel_name="athena",
+            conversation_channel_name="nova",
             history_is_channel_wide=True,
             history=[
                 {
                     "role": "user",
                     "content": "what can you see",
-                    "speaker": "Bernolight",
+                    "speaker": "Alice",
                 },
                 {
                     "role": "assistant",
                     "content": "good to see you again",
-                    "speaker": "Emuhana",
+                    "speaker": "Bob",
                 },
             ],
         )
 
-        assert "Bernolight: what can you see" in result
-        assert "Athena -> Emuhana: good to see you again" in result
+        assert "Alice: what can you see" in result
+        assert "Nova -> Bob: good to see you again" in result
         assert "each line is labelled with who said it" in result
 
     def test_channel_wide_history_does_not_mark_replies_to_current_user(
         self,
     ) -> None:
         result = build_context(
-            user_display_name="Bernolight",
-            soul_name="Athena",
+            user_display_name="Alice",
+            soul_name="Nova",
             conversation_is_dm=False,
             history_is_channel_wide=True,
             history=[
                 {
                     "role": "assistant",
                     "content": "sure thing",
-                    "speaker": "Bernolight",
+                    "speaker": "Alice",
                 },
             ],
         )
 
-        assert "Athena: sure thing" in result
+        assert "Nova: sure thing" in result
         assert "->" not in result.split("[BEGIN CONVERSATION HISTORY]")[1]
 
     def test_per_user_history_keeps_plain_user_label(self) -> None:
         """DMs are single-speaker, so the old rendering must be untouched."""
         result = build_context(
             user_display_name="Alice",
-            soul_name="Athena",
+            soul_name="Nova",
             conversation_is_dm=True,
             history=[
                 {"role": "user", "content": "hello", "speaker": "Alice"},
@@ -552,7 +552,7 @@ class TestBuildContext:
         )
 
         assert "User: hello" in result
-        assert "Athena: hi" in result
+        assert "Nova: hi" in result
         assert "Alice: hello" not in result
 
     def test_public_channel_without_channel_wide_history_warns_of_gaps(

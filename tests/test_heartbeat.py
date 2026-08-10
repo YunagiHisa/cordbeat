@@ -1324,6 +1324,69 @@ class TestDiscoverySharing:
         assert share_metadata["skill_name"] == "discover"
         assert share_metadata["source_record"] == skill_results[0]["id"]
 
+    async def test_share_goes_to_the_routed_channel_not_the_last_seen_one(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """The Layer-2 routing must survive into the share.
+
+        Rebuilding the share without it fell back to last-seen, which posted
+        research about one topic into whichever room the user spoke in last.
+        """
+        await memory.link_platform("u1", "discord", "snowflake-1")
+        await memory.record_last_seen_channel("u1", "discord", "chan-last", False)
+        self._register_skill(skills, {"finding": "a cool cafe"})
+        mock_ai.generate.return_value = "Found a nice place."
+
+        decision = self._decision()
+        decision.history_channel_id = "chan-routed"
+        decision.history_is_dm = False
+
+        await heartbeat._execute_skill(decision)
+
+        mock_gateway.send_to_adapter.assert_awaited_once()
+        _, sent = mock_gateway.send_to_adapter.await_args.args
+        assert sent.metadata["channel_id"] == "chan-routed"
+
+    async def test_share_prompt_shows_the_destination_conversation(
+        self,
+        heartbeat: HeartbeatLoop,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+        mock_ai: AsyncMock,
+        mock_gateway: AsyncMock,
+    ) -> None:
+        """The writer cannot judge fit without seeing the room it posts into."""
+        await memory.link_platform("u1", "discord", "snowflake-1")
+        await memory.add_message(
+            "u1",
+            "user",
+            "How is my portfolio doing today?",
+            "discord",
+            channel_id="chan-invest",
+            is_dm=False,
+        )
+        self._register_skill(skills, {"finding": "an unrelated cafe"})
+        mock_ai.generate.return_value = "SKIP"
+
+        decision = self._decision()
+        decision.history_channel_id = "chan-invest"
+        decision.history_is_dm = False
+
+        await heartbeat._execute_skill(decision)
+
+        prompt = mock_ai.generate.await_args.kwargs["prompt"]
+        assert "[BEGIN DESTINATION" in prompt
+        assert "public channel that other people also read" in prompt
+        assert "How is my portfolio doing today?" in prompt
+        system = mock_ai.generate.await_args.kwargs["system"]
+        assert "does not belong in the destination" in system
+        mock_gateway.send_to_adapter.assert_not_awaited()
+
     async def test_share_prompt_carries_persona_language(
         self,
         heartbeat: HeartbeatLoop,
@@ -1998,7 +2061,10 @@ class TestLayer2Evaluate:
         assert "claim that you just performed an action" not in system
         assert "You may share a discovery with the user" in system
         assert "Never add details that are not in the recorded result" in system
-        assert "results worth sharing may be" in system
+        assert "a result worth sharing is" in system
+        # action=skill must know where a share would land, or the share falls
+        # back to wherever the user last spoke.
+        assert "set it for action=skill too" in system
 
     async def test_evaluate_routes_message_to_chosen_candidate_channel(
         self,

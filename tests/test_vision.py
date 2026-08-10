@@ -400,6 +400,101 @@ class TestOpenAIVision:
         assert "enable_thinking" not in body
         assert "chat_template_kwargs" not in body
 
+    def _thinking_backend(self) -> OpenAICompatBackend:
+        return OpenAICompatBackend(
+            AIBackendConfig(
+                provider="openai_compat",
+                model="qwen",
+                options={"compatibility_mode": "llama_cpp", "enable_thinking": True},
+            )
+        )
+
+    async def test_vision_retries_when_thinking_consumed_the_budget(self) -> None:
+        """A thinking phase that eats the budget must not lose the image.
+
+        Production returned content=null here, the caller saw an empty vision
+        reply, and the engine answered text-only as if nothing was attached.
+        """
+        backend = self._thinking_backend()
+
+        exhausted = MagicMock()
+        exhausted.raise_for_status = MagicMock()
+        exhausted.json.return_value = {
+            "choices": [{"message": {"content": None, "reasoning_content": "x" * 3000}}]
+        }
+        answered = MagicMock()
+        answered.raise_for_status = MagicMock()
+        answered.json.return_value = {"choices": [{"message": {"content": "A dog"}}]}
+
+        with patch.object(
+            backend._client,
+            "post",
+            new_callable=AsyncMock,
+            side_effect=[exhausted, answered],
+        ) as mock_post:
+            result = await backend.generate_with_vision(
+                prompt="Describe this",
+                images=[_make_b64(b"\xff\xd8\xff")],
+                max_tokens=1024,
+            )
+
+        assert result == "A dog"
+        retry_body = mock_post.await_args_list[1].kwargs["json"]
+        assert retry_body["max_tokens"] >= 8192
+        assert retry_body["enable_thinking"] is False
+        # The image must survive into the retry, otherwise the retry answers
+        # blind and we are back to ignoring the attachment.
+        retry_user_msg = next(m for m in retry_body["messages"] if m["role"] == "user")
+        assert any(part["type"] == "image_url" for part in retry_user_msg["content"])
+
+    async def test_vision_retries_when_content_is_only_a_think_block(self) -> None:
+        """The same failure arrives inline on llama.cpp: content is all <think>."""
+        backend = self._thinking_backend()
+
+        all_thinking = MagicMock()
+        all_thinking.raise_for_status = MagicMock()
+        all_thinking.json.return_value = {
+            "choices": [{"message": {"content": "<think>weighing it up</think>"}}]
+        }
+        answered = MagicMock()
+        answered.raise_for_status = MagicMock()
+        answered.json.return_value = {"choices": [{"message": {"content": "A cat"}}]}
+
+        with patch.object(
+            backend._client,
+            "post",
+            new_callable=AsyncMock,
+            side_effect=[all_thinking, answered],
+        ):
+            result = await backend.generate_with_vision(
+                prompt="Describe this",
+                images=[_make_b64(b"\xff\xd8\xff")],
+            )
+
+        assert result == "A cat"
+
+    async def test_vision_never_returns_reasoning_content(self) -> None:
+        """Chain-of-thought is internal: an unrecoverable call returns empty."""
+        backend = self._thinking_backend()
+
+        exhausted = MagicMock()
+        exhausted.raise_for_status = MagicMock()
+        exhausted.json.return_value = {
+            "choices": [
+                {"message": {"content": None, "reasoning_content": "step 1: ..."}}
+            ]
+        }
+
+        with patch.object(
+            backend._client, "post", new_callable=AsyncMock, return_value=exhausted
+        ):
+            result = await backend.generate_with_vision(
+                prompt="Describe this",
+                images=[_make_b64(b"\xff\xd8\xff")],
+            )
+
+        assert result == ""
+
 
 # ── CoreEngine vision routing ─────────────────────────────────────────
 
@@ -501,6 +596,100 @@ class TestCoreEngineVision:
         ai.generate_with_vision.assert_not_called()
         assert "ai_backend.vision_enabled is false" in caplog.text
 
+    async def test_text_fallback_describes_the_image_it_could_not_read(self) -> None:
+        """A failed vision call must not produce a reply that ignores the image.
+
+        The short summary call succeeds where the full reply prompt exhausts
+        the token budget, so its description is carried into the text-only
+        prompt instead of dropping the attachment.
+        """
+        engine, ai = self._make_engine(vision_enabled=True)
+
+        async def _vision(**kwargs: Any) -> str:
+            # Only the history-summary call passes an explicit small budget.
+            if kwargs.get("max_tokens") == 160:
+                return "A Japanese stock portfolio table."
+            return ""
+
+        ai.generate_with_vision = AsyncMock(side_effect=_vision)
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="u1",
+            content="What do you think?",
+            images=["imgdata"],
+        )
+
+        await engine.handle_message(msg)
+
+        ai.generate.assert_called_once()
+        assert (
+            "A Japanese stock portfolio table."
+            in ai.generate.call_args.kwargs["prompt"]
+        )
+
+    async def test_text_fallback_describes_the_video_it_could_not_read(self) -> None:
+        """A clip's transcript covers its audio; the visuals need this path."""
+        engine, ai = self._make_engine(vision_enabled=True, video_enabled=True)
+
+        async def _vision(**kwargs: Any) -> str:
+            if kwargs.get("max_tokens") == 160:
+                assert kwargs["images"] == ["viddata"]
+                return "Someone jumps into a canal."
+            return ""
+
+        ai.generate_with_vision = AsyncMock(side_effect=_vision)
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="u1",
+            content="What do you think?",
+            videos=["viddata"],
+        )
+
+        await engine.handle_message(msg)
+
+        ai.generate.assert_called_once()
+        assert "Someone jumps into a canal." in ai.generate.call_args.kwargs["prompt"]
+
+    async def test_text_fallback_skips_video_when_video_disabled(self) -> None:
+        """Video the backend cannot decode must not be sent again to describe it."""
+        engine, ai = self._make_engine(vision_enabled=True, video_enabled=False)
+        ai.generate_with_vision = AsyncMock(return_value="")
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="u1",
+            content="What do you think?",
+            images=["imgdata"],
+            videos=["viddata"],
+        )
+
+        await engine.handle_message(msg)
+
+        described = [
+            call.kwargs["images"]
+            for call in ai.generate_with_vision.await_args_list
+            if call.kwargs.get("max_tokens") == 160
+        ]
+        assert described == [["imgdata"]]
+
+    async def test_text_fallback_survives_an_unusable_description(self) -> None:
+        engine, ai = self._make_engine(vision_enabled=True)
+        ai.generate_with_vision = AsyncMock(return_value="")
+        msg = GatewayMessage(
+            type=MessageType.MESSAGE,
+            adapter_id="discord",
+            platform_user_id="u1",
+            content="What do you think?",
+            images=["imgdata"],
+        )
+
+        await engine.handle_message(msg)
+
+        ai.generate.assert_called_once()
+        assert "could not be viewed" not in ai.generate.call_args.kwargs["prompt"]
+
     async def test_uses_generate_when_no_images(self) -> None:
         engine, ai = self._make_engine(vision_enabled=True)
         msg = GatewayMessage(
@@ -575,7 +764,9 @@ class TestCoreEngineVision:
             images=["imgdata"],
         )
         await engine.handle_message(msg)
-        ai.generate_with_vision.assert_called_once()
+        # Two vision calls: the failed reply, then the description attempt that
+        # keeps the text-only fallback from answering blind.
+        assert ai.generate_with_vision.await_count == 2
         ai.generate.assert_called_once()
 
     async def test_falls_back_to_text_when_vision_returns_empty(self) -> None:
@@ -589,5 +780,5 @@ class TestCoreEngineVision:
             images=["imgdata"],
         )
         await engine.handle_message(msg)
-        ai.generate_with_vision.assert_called_once()
+        assert ai.generate_with_vision.await_count == 2
         ai.generate.assert_called_once()

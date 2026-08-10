@@ -190,11 +190,12 @@ class AIBackendConfig:
     # in their chain-of-thought phase before producing a response.
     timeout: float = 300.0
     # Max tokens per generation request.
-    # None (default) = let the server decide (uses the server's --n-predict / default).
-    # Set explicitly (e.g. 4096) to override the server default.
-    # ⚠ For thinking models (Qwen3/DeepSeek-R1): if your server's default is low
-    #   (< 2048), set max_tokens: 4096 or higher so the thinking phase doesn't
-    #   consume all tokens before the model generates a response.
+    # None (default) does NOT defer to the server: the backend sends its own
+    # fallback of 1024, which is small enough to be a trap on thinking models.
+    # ⚠ For thinking models (Qwen3/DeepSeek-R1): set 4096 or higher so the
+    #   thinking phase does not consume the whole budget before the model
+    #   writes anything. Leaving this unset has produced empty replies to
+    #   attached images, which then read as the assistant ignoring them.
     max_tokens: int | None = None
     options: dict[str, Any] = field(default_factory=dict)
     cache: LLMCacheConfig = field(default_factory=LLMCacheConfig)

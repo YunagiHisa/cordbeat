@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_REASONING_CONTENT_KEYS = ("reasoning_content",)
 _API_DEFAULT_MAX_TOKENS = 1024
+# Floor for the no-think retry budget. Doubling the original budget is not
+# enough when that budget was small, and a thinking model needs room to write
+# the answer once the reasoning phase is off.
+_THINKING_RETRY_FLOOR_TOKENS = 8192
 _STRICT_OPENAI_COMPAT = "strict_openai"
 _LLAMA_CPP_COMPAT = "llama_cpp"
 _VLLM_COMPAT = "vllm"
@@ -908,8 +912,10 @@ class OpenAICompatBackend(AIBackend):
 
     @staticmethod
     def _messages_with_no_think(
-        messages: list[dict[str, str]],
-    ) -> list[dict[str, str]]:
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        # Only the system message is rewritten, so a vision user message whose
+        # content is a media part array passes through untouched.
         retry_messages = [dict(message) for message in messages]
         no_think_instruction = (
             "/no_think\n"
@@ -930,7 +936,7 @@ class OpenAICompatBackend(AIBackend):
     async def _retry_without_thinking(
         self,
         *,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         temperature: float,
         max_tokens: int,
         labels: dict[str, str],
@@ -993,6 +999,71 @@ class OpenAICompatBackend(AIBackend):
             )
             return ""
         return result
+
+    async def _recover_empty_content(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        reasoning_content: str,
+        temperature: float,
+        max_tokens: int,
+        labels: dict[str, str],
+        call_kind: str = "",
+    ) -> str:
+        """Salvage a response whose ``content`` came back empty.
+
+        Thinking-model backends (llama.cpp + Qwen3/DeepSeek) can spend the
+        whole token budget on reasoning and answer with ``content=null``.
+        ``reasoning_content`` is internal chain-of-thought and is never
+        returned to the caller, so retry once with thinking disabled and a
+        larger budget. Every generation entry point routes empty content
+        through here: while only ``generate`` had this recovery, an empty
+        vision response silently degraded into an image-blind text reply.
+        """
+        if not reasoning_content:
+            logger.warning(
+                "OpenAI-compat backend%s returned empty content and no "
+                "reasoning_content; model may have emitted nothing",
+                call_kind,
+            )
+            return ""
+        if not self._supports_no_think_retry():
+            logger.warning(
+                "openai_compat%s: content=null but reasoning_content=%d "
+                "chars; compatibility_mode=%s does not support "
+                "no-think retry",
+                call_kind,
+                len(reasoning_content),
+                self._compatibility_mode(),
+            )
+            return ""
+        # Doubling a small budget is not enough on its own: at max_tokens=1024
+        # the retry would get 2048, which production has already seen a
+        # thinking phase exhaust.
+        retry_max_tokens = max(max_tokens * 2, _THINKING_RETRY_FLOOR_TOKENS)
+        retry_result = await self._retry_without_thinking(
+            messages=messages,
+            temperature=temperature,
+            max_tokens=retry_max_tokens,
+            labels=labels,
+            reason=(
+                f"openai_compat{call_kind}: content=null but "
+                f"reasoning_content={len(reasoning_content)} chars. "
+                "Model spent the whole token budget on thinking. "
+                "Set ai_backend.options.enable_thinking: false in "
+                "config.yaml to avoid these retries."
+            ),
+        )
+        if retry_result:
+            logger.debug(
+                "openai_compat%s retry response: %d chars: %.300s",
+                call_kind,
+                len(retry_result),
+                retry_result,
+            )
+            return retry_result
+        logger.warning("openai_compat%s retry also returned empty content.", call_kind)
+        return ""
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -1071,54 +1142,17 @@ class OpenAICompatBackend(AIBackend):
                 )
 
             if not content:
-                # Some thinking-model backends (llama.cpp + Qwen3/DeepSeek) return
-                # reasoning_content with content=null or content="".
-                # reasoning_content is internal chain-of-thought, NOT user-facing
-                # output — using it as the response would leak raw thinking text.
-                # Return empty string; callers (engine, generate_json) handle empty.
-                if reasoning_content:
-                    # Model exhausted max_tokens during thinking phase. Retry
-                    # once with thinking disabled and a larger budget (at
-                    # least 8192 tokens) so the model produces a direct reply.
-                    if self._supports_no_think_retry():
-                        _thinking_retry_floor = 8192
-                        retry_mt = max(max_tokens * 2, _thinking_retry_floor)
-                        retry_result = await self._retry_without_thinking(
-                            messages=messages,
-                            temperature=temperature,
-                            max_tokens=retry_mt,
-                            labels=labels,
-                            reason=(
-                                "openai_compat: content=null but "
-                                f"reasoning_content={len(reasoning_content)} chars. "
-                                "Model spent the whole token budget on thinking. "
-                                "Set ai_backend.options.enable_thinking: false in "
-                                "config.yaml to avoid these retries."
-                            ),
-                        )
-                        if retry_result:
-                            logger.debug(
-                                "openai_compat retry response: %d chars: %.300s",
-                                len(retry_result),
-                                retry_result,
-                            )
-                            return retry_result
-                        logger.warning(
-                            "openai_compat retry also returned empty content."
-                        )
-                    else:
-                        logger.warning(
-                            "openai_compat: content=null but reasoning_content=%d "
-                            "chars; compatibility_mode=%s does not support "
-                            "no-think retry",
-                            len(reasoning_content),
-                            self._compatibility_mode(),
-                        )
-                else:
-                    logger.warning(
-                        "OpenAI-compat backend returned empty content and no "
-                        "reasoning_content; model may have emitted nothing"
-                    )
+                # Callers (engine, generate_json) handle an empty result; the
+                # recovery below never leaks reasoning_content back to them.
+                recovered = await self._recover_empty_content(
+                    messages=messages,
+                    reasoning_content=reasoning_content,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    labels=labels,
+                )
+                if recovered:
+                    return recovered
                 result = ""
             else:
                 raw_content = str(content)
@@ -1213,11 +1247,13 @@ class OpenAICompatBackend(AIBackend):
         try:
             logger.debug(
                 "openai_compat vision request: model=%s system=%d chars "
-                "prompt=%d chars images=%d",
+                "prompt=%d chars images=%d max_tokens=%d thinking=%s",
                 self._model,
                 len(effective_system),
                 len(prompt),
                 len(images),
+                max_tokens,
+                payload_thinking,
             )
             payload: dict[str, Any] = {
                 "model": self._model,
@@ -1242,18 +1278,40 @@ class OpenAICompatBackend(AIBackend):
             raise
         inc_counter(LLM_GENERATE_TOTAL, {"backend": "openai_compat", "outcome": "ok"})
         try:
-            result = self._strip_reasoning_text(
-                str(data["choices"][0]["message"]["content"])
-            )
-            logger.debug(
-                "openai_compat vision response: %d chars: %.300s",
-                len(result),
-                result,
-            )
-            return result
+            response_message = data["choices"][0]["message"]
         except (KeyError, IndexError) as exc:
             msg = f"Unexpected vision response format from {self._base_url}"
             raise AIBackendError(msg) from exc
+
+        content = response_message.get("content")
+        reasoning_content = self._extract_reasoning_content(response_message)
+        if reasoning_content and self._log_reasoning_content:
+            logger.debug(
+                "openai_compat vision thinking (%d chars):\n%.2000s",
+                len(reasoning_content),
+                reasoning_content,
+            )
+
+        result = self._strip_reasoning_text(str(content)) if content else ""
+        if not result:
+            # Two shapes of the same failure: the budget went to a separate
+            # reasoning_content field, or to an inline <think> block that
+            # stripping just removed. Either way the caller would otherwise
+            # see an empty vision reply and drop the media entirely.
+            result = await self._recover_empty_content(
+                messages=messages,
+                reasoning_content=reasoning_content or str(content or ""),
+                temperature=temperature,
+                max_tokens=max_tokens,
+                labels=labels,
+                call_kind=" vision",
+            )
+        logger.debug(
+            "openai_compat vision response: %d chars: %.300s",
+            len(result),
+            result,
+        )
+        return result
 
     async def generate_chat(
         self,
